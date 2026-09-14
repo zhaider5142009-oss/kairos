@@ -80,6 +80,35 @@ class JarvisConfig:
 
     # --- helpers --------------------------------------------------------------
 
+    def validate(self) -> list[str]:
+        """Check required sections exist with sane types. Returns a list of
+        warning strings (empty = everything OK). Does not raise — callers
+        can log warnings and continue, or raise for strict mode."""
+        warnings: list[str] = []
+        for section in ("mt5", "strategy", "ensemble", "timesfm",
+                        "listener", "logging", "paths"):
+            if not isinstance(self.raw.get(section), dict):
+                warnings.append(f"Missing config section: {section}")
+        mt5 = self.raw.get("mt5", {})
+        order = mt5.get("order", {})
+        if not isinstance(order.get("max_open_positions"), int) or order["max_open_positions"] < 1:
+            warnings.append("mt5.order.max_open_positions must be int >= 1; defaulting to 3")
+            self.raw.setdefault("mt5", {}).setdefault("order", {})["max_open_positions"] = 3
+        if not isinstance(order.get("max_daily_loss"), (int, float)):
+            warnings.append("mt5.order.max_daily_loss missing; defaulting to 50.0")
+            self.raw.setdefault("mt5", {}).setdefault("order", {})["max_daily_loss"] = 50.0
+        strat = self.raw.get("strategy", {})
+        for key, default, lo in [("max_positions", 5, 1), ("max_drawdown_pct", 10.0, 1.0)]:
+            val = strat.get(key)
+            if not isinstance(val, (int, float)) or val < lo:
+                warnings.append(f"strategy.{key} invalid; defaulting to {default}")
+                strat[key] = default
+        paths = self.raw.get("paths", {})
+        for key in ("root", "logs_dir", "cache_dir"):
+            if not paths.get(key):
+                warnings.append(f"paths.{key} missing")
+        return warnings
+
     def ensure_dirs(self) -> None:
         """Create on-disk directories that the config references. Idempotent."""
         for key in ("logs_dir", "cache_dir"):

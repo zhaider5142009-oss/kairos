@@ -62,6 +62,7 @@ class TradeExecutor:
         confirm_timeout: float = 60.0,
         max_open_positions: int = 3,
         max_daily_loss: float = 50.0,
+        max_per_symbol: int = 1,
         on_stage: Callable[[StagedOrder], None] | None = None,
         on_result: Callable[[StagedOrder, SendResult], None] | None = None,
     ) -> None:
@@ -69,6 +70,7 @@ class TradeExecutor:
         self.confirm_timeout = float(confirm_timeout)
         self.max_open_positions = int(max_open_positions)
         self.max_daily_loss = float(max_daily_loss)
+        self.max_per_symbol = max(1, int(max_per_symbol))
         self.on_stage = on_stage
         self.on_result = on_result
 
@@ -100,6 +102,7 @@ class TradeExecutor:
             confirm_timeout=config.section("mt5").get("confirm_timeout", 60.0),
             max_open_positions=s["max_open_positions"],
             max_daily_loss=s["max_daily_loss"],
+            max_per_symbol=int(s.get("max_per_symbol", 1)),
             on_stage=on_stage,
             on_result=on_result,
         )
@@ -231,12 +234,22 @@ class TradeExecutor:
 
     def _risk_blocked(self) -> bool:
         try:
-            open_count = len(self.bridge.open_positions())
+            open_positions = self.bridge.open_positions()
         except JarvisMT5Error:
-            open_count = 0
-        if open_count >= self.max_open_positions:
-            LOGGER.warning("Max open positions reached (%d/%d)", open_count, self.max_open_positions)
+            open_positions = []
+        if len(open_positions) >= self.max_open_positions:
+            LOGGER.warning("Max open positions reached (%d/%d)",
+                           len(open_positions), self.max_open_positions)
             return True
+        if self.max_per_symbol > 0:
+            counts: dict[str, int] = {}
+            for p in open_positions:
+                sym = getattr(p, "symbol", "?")
+                counts[sym] = counts.get(sym, 0) + 1
+                if counts[sym] > self.max_per_symbol:
+                    LOGGER.warning("Max positions per symbol reached for %s (%d)",
+                                   sym, self.max_per_symbol)
+                    return True
         try:
             pnl = self.bridge.daily_pnl()
         except JarvisMT5Error:

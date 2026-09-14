@@ -290,6 +290,7 @@ mt5:
     sl_atr_multiple: 1.5
     tp_atr_multiple: 2.5
     max_open_positions: 3
+    max_per_symbol: 1
     max_daily_loss: 50.0
   confirm_timeout: 60
 

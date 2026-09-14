@@ -104,7 +104,15 @@ class JarvisRuntime:
         self.calendar = EconomicCalendar.from_config(config)
 
         # --- MT5 sync + async wrappers --------------------------------------
-        self.bridge = MT5Bridge.from_config(config)
+        # paper_mode (default on) swaps order-execution for the crash-safe,
+        # journaled simulated broker — live market data still comes from MT5.
+        if bool(config.section("mt5").get("paper_mode", True)):
+            from .paper import PaperBridge
+            self.bridge = PaperBridge.from_config(config)
+            LOGGER.info("Bridge: PAPER MODE (simulated execution, journaled)")
+        else:
+            self.bridge = MT5Bridge.from_config(config)
+            LOGGER.warning("Bridge: LIVE MODE (real orders sent to MT5)")
         self.async_bridge = AsyncMT5Bridge(self.bridge)
 
         # --- OpenRouter client (LLM reasoning over the model fleet) ---------
@@ -189,6 +197,13 @@ class JarvisRuntime:
             on_stage=self._on_stage,
             on_result=self._on_result,
         )
+        # Let the paper broker mirror the hedge policy (same symbol+direction
+        # duplication rules) so hedging positions can exist side by side.
+        try:
+            self.bridge.set_hedge_policy(  # type: ignore[attr-defined]
+                bool(config.section("strategy").get("hedge_enabled", True)))
+        except Exception:
+            pass
         self.dispatcher.executor = self.executor
         self.dispatcher.bridge = self.bridge
         self.dispatcher.runtime = self
@@ -354,6 +369,10 @@ class JarvisRuntime:
         LOGGER.info("Jarvis starting up — async + parallel + 12-model fleet")
         LOGGER.info("=" * 70)
         self._install_signal_handlers()
+        # Fail-fast configuration sanity check (investment-bank guardrail).
+        for warning in self.config.validate():
+            LOGGER.warning("[config] %s", warning)
+        self._open_crash_journal()
         # Eager-load every model so first cycle is fast.
         for m in self.fleet.models:
             try:
@@ -473,6 +492,13 @@ class JarvisRuntime:
             await self.async_bridge.prewarm()
         except Exception:
             LOGGER.debug("MT5 cache prewarm skipped at boot", exc_info=True)
+        # Drawdown kill-switch state (investment-bank guardrail): once equity
+        # falls `max_drawdown_pct` below the process-high peak, trading pauses
+        # automatically and resumes only after a safe margin of recovery.
+        strat_cfg = self.config.section("strategy")
+        max_dd_pct = float(strat_cfg.get("max_drawdown_pct", 10.0))
+        self._peak_equity = 0.0
+        self._drawdown_paused = False
         cycle = 0
         while not self._stop.is_set():
             cycle += 1
@@ -481,6 +507,42 @@ class JarvisRuntime:
                     self.executor.expire_old()
                 except Exception:
                     LOGGER.exception("expire_old error")
+            # Drawdown guard: pause trading below the max-drawdown threshold.
+            try:
+                eq = float(self.bridge.equity())
+                if eq > 0:
+                    self._peak_equity = max(self._peak_equity, eq)
+                    dd_pct = ((self._peak_equity - eq) / self._peak_equity * 100.0) \
+                        if self._peak_equity else 0.0
+                    if self._drawdown_paused:
+                        if dd_pct <= max_dd_pct * 0.5:
+                            self._drawdown_paused = False
+                            self.executor.set_risk_pause(False)
+                            LOGGER.warning("Drawdown recovered (%.2f%%) — trading resumed",
+                                           dd_pct)
+                    elif max_dd_pct > 0 and dd_pct >= max_dd_pct:
+                        self._drawdown_paused = True
+                        self.executor.set_risk_pause(True)
+                        self.dispatcher.cancel_all(source="risk",
+                                                   reason=f"drawdown {dd_pct:.2f}%")
+                        LOGGER.warning(
+                            "DRAWDOWN KILL-SWITCH — equity %.2f vs peak %.2f (%.2f%%), trading paused",
+                            eq, self._peak_equity, dd_pct)
+            except Exception:
+                LOGGER.debug("drawdown guard skipped", exc_info=True)
+            # Paper money: mark-to-market, auto SL/TP, equity journal.
+            if getattr(self.bridge, "mode", None) == "paper":
+                try:
+                    nclosed = self.bridge.poll_paper_state()
+                    if nclosed:
+                        LOGGER.info("Paper auto-close: %d position(s)", nclosed)
+                    verify = getattr(self.bridge, "verify_state", None)
+                    if verify:
+                        ok, err = verify()
+                        if not ok:
+                            LOGGER.error("PAPER RECONCILIATION FAILED: %s", err or "journal mismatch")
+                except Exception:
+                    LOGGER.exception("poll_paper_state error")
             # Keep the local hub visible on the LAN registry (heartbeat TTL).
             if cycle % 5 == 0:
                 try:
@@ -715,8 +777,19 @@ class JarvisRuntime:
 
     def _on_stage(self, staged) -> None:
         LOGGER.info("Stage ready for confirmation: id=%s", staged.signal_id)
+        sig = staged.signal
+        self._journal_write("stage", {
+            "signal_id": staged.signal_id, "symbol": sig.symbol,
+            "direction": sig.direction, "confidence": sig.confidence,
+            "entry": sig.entry_price, "sl": sig.stop_loss, "tp": sig.take_profit,
+        })
 
     def _on_result(self, staged, result) -> None:
+        self._journal_write("result", {
+            "signal_id": staged.signal_id, "symbol": getattr(staged.signal, "symbol", "?"),
+            "success": result.success, "order_id": result.order_id,
+            "retcode": result.retcode, "comment": result.comment,
+        })
         if result.success:
             self.dispatcher.publish(
                 EventType.EXECUTED,
@@ -845,8 +918,11 @@ class JarvisRuntime:
                 risk = {
                     "paused": bool(self.executor.risk_paused()),
                     "max_open_positions": self.executor.max_open_positions,
+                    "max_per_symbol": getattr(self.executor, "max_per_symbol", 1),
                     "max_daily_loss": self.executor.max_daily_loss,
                     "confirm_timeout": self.executor.confirm_timeout,
+                    "peak_equity": round(getattr(self, "_peak_equity", 0.0), 2),
+                    "drawdown_paused": bool(getattr(self, "_drawdown_paused", False)),
                 }
             try:
                 account.update({k: float(account[k] or 0.0) for k in ("balance", "equity") if k in account})
@@ -856,6 +932,7 @@ class JarvisRuntime:
                 "connected": connected,
                 "terminal": terminal,
                 "account": account,
+                "paper": self.bridge.paper_snapshot() if getattr(self.bridge, "mode", None) == "paper" else None,
                 "risk": risk,
                 "symbols": list(self.bridge.symbols) if self.bridge is not None else [],
                 "timeframe": self.bridge.timeframe_str if self.bridge is not None else "",
@@ -1131,6 +1208,37 @@ class JarvisRuntime:
             posix_signal.signal(posix_signal.SIGINT, _handler)
             posix_signal.signal(posix_signal.SIGTERM, _handler)
         except ValueError:
+            pass
+
+    # ------------------------------------------------------------- trade journal
+
+    def _open_crash_journal(self) -> None:
+        """Append-only audit trail of every decision + order (crash recovery)."""
+        try:
+            path = self.config.logs_dir / "trades.jsonl"
+            self._journal = None
+            if hasattr(self, "_journal") and self._journal is not None:
+                return
+            fh = path.open("a", encoding="utf-8")
+            self._journal = (path, fh)
+            LOGGER.info("Trade journal: %s", path)
+        except Exception:
+            LOGGER.exception("Cannot open trade journal")
+
+    def _journal_write(self, kind: str, data: dict) -> None:
+        """Write one journal line (thread-safe via GIL on list append)."""
+        try:
+            if not hasattr(self, "_journal") or self._journal is None:
+                return
+            _, fh = self._journal
+            try:
+                import json
+                row = {"ts": time.time(), "kind": kind, **data}
+                fh.write(json.dumps(row, default=str) + "\n")
+                fh.flush()
+            except Exception:
+                pass
+        except Exception:
             pass
 
 

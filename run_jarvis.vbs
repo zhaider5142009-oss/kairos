@@ -1,5 +1,5 @@
 ' =============================================================================
-' Jarvis — hidden launcher (no console window)
+' Jarvis - hidden launcher (no console window)
 ' =============================================================================
 ' Runs run_jarvis.bat with intWindowStyle=0 (hidden) and bWaitOnReturn=False
 ' so this script returns immediately and the batch runs detached.
@@ -23,7 +23,7 @@ If Not fso.FileExists(batPath) Then
     WScript.Quit 1
 End If
 
-' intWindowStyle=0 → hide window. bWaitOnReturn=False → return immediately.
-shell.Run "cmd.exe /c """ & batPath & """", 0, False
+' intWindowStyle=0 -> hide window. bWaitOnReturn=False -> return immediately.
+shell.Run "cmd.exe /c " & """" & batPath & """", 0, False
 
 WScript.Quit 0

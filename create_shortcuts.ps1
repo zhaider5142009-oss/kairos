@@ -2,7 +2,8 @@
 # Jarvis - desktop & start-menu shortcut installer
 # =============================================================================
 # Creates:
-#   Desktop\Jarvis Reborn.lnk        -> hidden launch (wscript run_jarvis.vbs)
+#   Desktop\Jarvis Reborn.lnk        -> visible console + auto-open dashboard
+#                                      (wscript run_jarvis_visible.vbs)
 #   Desktop\Jarvis Reborn UI.lnk     -> opens the web dashboard in your browser
 #   Start Menu\Jarvis Reborn\...     -> same two shortcuts (optional)
 #
@@ -14,7 +15,7 @@
 $ErrorActionPreference = "Stop"
 
 $scriptDir = $PSScriptRoot
-$vbsLauncher  = Join-Path $scriptDir "run_jarvis.vbs"
+$vbsLauncher  = Join-Path $scriptDir "run_jarvis_visible.vbs"
 $iconFile     = Join-Path $scriptDir "jarvis.ico"
 $uiUrl        = "http://127.0.0.1:8765"
 
@@ -77,5 +78,5 @@ New-JarvisShortcut `
 Write-Host "[OK] Start-menu shortcuts created." -ForegroundColor Green
 
 Write-Host ""
-Write-Host "Done. Double-click 'Jarvis Reborn' on your desktop to start Jarvis hidden."
-Write-Host "Open 'Jarvis Reborn UI' to reach the dashboard. Happy trading."
+Write-Host "Done. Double-click 'Jarvis Reborn' on your desktop to start Jarvis in a visible console."
+Write-Host "The dashboard opens automatically once Jarvis is healthy. Open 'Jarvis Reborn UI' manually anytime."
