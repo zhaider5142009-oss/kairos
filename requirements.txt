@@ -1,0 +1,57 @@
+# Jarvis — Predictive Trading System
+# Install with: pip install -r requirements.txt
+#
+# timesfm is installed in editable mode from your local clone so you get
+# the v3.0 code without waiting on PyPI. Install it separately:
+#   pip install -e "C:/Users/Haider/timesfm[torch]"
+
+# --- Core ML ---
+numpy>=1.26.4
+pandas>=2.0
+torch>=2.0
+huggingface_hub>=0.28.0
+safetensors>=0.5.3
+
+# --- MT5 ---
+MetaTrader5>=5.0.45
+
+# --- Voice (Whisper STT) ---
+faster-whisper>=1.0.0
+sounddevice>=0.4.6
+
+# --- HTTP listener ---
+fastapi>=0.110
+uvicorn[standard]>=0.27
+
+# --- System tray UI ---
+pystray>=0.19.5
+Pillow>=10.0
+
+# --- Config & utilities ---
+PyYAML>=6.0
+requests>=2.31
+
+# --- Large-data pipeline (parquet) ---
+pyarrow>=12.0
+
+# --- News / sentiment ---
+feedparser>=6.0
+vaderSentiment>=3.3.2
+
+# --- Intermarket data (yfinance — free, 15-min delayed) ---
+yfinance>=0.2.30
+
+# --- Pydantic (FastAPI dependency, listed explicitly for safety) ---
+pydantic>=2.0
+
+# --- 12-model predictive fleet (foundation + classical + LLM) ---
+chronos-forecasting>=1.5     # Amazon Chronos foundation model
+pyqlib>=0.9.5                # Microsoft qlib (LSTM/GRU/Transformer/GBDT zoo)
+
+# --- Optional LLM backends (only needed for FinGPT/FinRobot LLM paths) ---
+# transformers>=4.40          # required for FinGPT/FinRobot with real LLM
+# peft>=0.10                  # LoRA adapters for FinGPT
+# openai>=1.30                # FinRobot OpenAI backend
+
+# --- Optional but recommended for production logs ---
+# (rotating file handler is built-in to stdlib logging; no extra dep)

@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<title>Jarvis Reborn — MT5 Algo Trader</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%2310a37f'/><text x='50' y='70' font-size='58' text-anchor='middle' fill='%230e1117' font-family='monospace' font-weight='700'>J</text></svg>" />
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+  <!-- ============ SIDEBAR — every control lives here ============ -->
+  <aside id="sidebar" class="sidebar">
+    <header class="brand">
+      <div class="logo">J</div>
+      <div class="brand-text">
+        <h1>Jarvis Reborn</h1>
+        <p>Ultimate Algo Trader</p>
+      </div>
+      <button id="collapse-toggle" class="icon-btn ghost collapse-btn" title="Collapse sidebar ([" aria-label="Collapse sidebar">&lsaquo;</button>
+    </header>
+
+    <div class="search-box">
+      <span class="kbd-hint">/</span>
+      <input id="quick-search" type="text" placeholder="Jump to a view or symbol…" autocomplete="off" spellcheck="false" />
+    </div>
+
+    <nav class="nav" id="nav">
+      <div class="nav-group">Cockpit</div>
+      <button data-view="chat"      class="nav-item active" data-kbd="1">💬 <span>Chat</span><i>1</i></button>
+      <button data-view="dashboard" class="nav-item"         data-kbd="2">📊 <span>Dashboard</span><i>2</i></button>
+      <button data-view="positions" class="nav-item"         data-kbd="3">💰 <span>Positions</span><i>3</i></button>
+      <button data-view="signals"   class="nav-item"         data-kbd="4">🎯 <span>Signals</span><i>4</i></button>
+      <div class="nav-group">Intelligence</div>
+      <button data-view="agents"    class="nav-item"         data-kbd="5">🛰 <span>Agents</span><i>5</i></button>
+      <button data-view="models"    class="nav-item"         data-kbd="6">🧠 <span>Models</span><i>6</i></button>
+      <button data-view="connectors" class="nav-item"        data-kbd="7">🔌 <span>Connectors</span><i>7</i></button>
+      <button data-view="patterns"  class="nav-item"         data-kbd="8">📐 <span>Patterns</span><i>8</i></button>
+      <button data-view="quantum"   class="nav-item"         data-kbd="9">⚛ <span>Quantum</span><i>9</i></button>
+      <button data-view="strategy"  class="nav-item"         data-kbd="s">🧭 <span>Strategy</span><i>S</i></button>
+      <button data-view="repos"     class="nav-item"         data-kbd="r">📦 <span>Repos</span><i>R</i></button>
+      <div class="nav-group">Market</div>
+      <button data-view="symbols"   class="nav-item"         data-kbd="0">💱 <span>Symbols</span><i>0</i></button>
+      <button data-view="news"      class="nav-item"         data-kbd="n">📰 <span>News</span><i>N</i></button>
+      <button data-view="forces"    class="nav-item"         data-kbd="f">🌐 <span>Forces</span><i>F</i></button>
+      <button data-view="calendar"  class="nav-item"         data-kbd="c">📅 <span>Calendar</span><i>C</i></button>
+      <div class="nav-group">System</div>
+      <button data-view="devices"   class="nav-item"         data-kbd="d">📡 <span>Devices</span><i>D</i></button>
+      <button data-view="settings"  class="nav-item"         data-kbd="g">⚙ <span>Settings</span><i>G</i></button>
+    </nav>
+
+    <footer class="status-bar" id="status-bar">
+      <div class="status-grid">
+        <div class="status-row">
+          <span class="dot" id="dot-mt5">●</span>
+          <span id="status-mt5">MT5 connecting…</span>
+        </div>
+        <div class="status-row">
+          <span class="dot" id="dot-ws">●</span>
+          <span id="status-ws">WS connecting…</span>
+        </div>
+        <div class="status-row">
+          <span class="dot" id="dot-broker">●</span>
+          <span id="status-broker">—</span>
+        </div>
+      </div>
+      <canvas id="equity-spark" width="240" height="44" class="equity-spark"></canvas>
+      <div class="status-metrics">
+        <span title="Equity">Eq <b id="status-equity">—</b></span>
+        <span title="Daily PnL">PnL <b id="status-pnl">—</b></span>
+        <span title="Open positions">Open <b id="status-open">—</b></span>
+        <span title="Pending signals">Pend <b id="status-pending">—</b></span>
+        <span title="Macro regime">Regime <b id="status-regime">—</b></span>
+        <span title="Uptime">Up <b id="status-uptime">—</b></span>
+      </div>
+      <div class="acct-line" id="acct-line" title="Real-time broker account">No account connected</div>
+    </footer>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <main id="main">
+
+    <!-- LIVE TICKER — every watched symbol at a glance -->
+    <div class="ticker-bar">
+      <div class="ticker-label" title="Watched symbols · real-time MT5 feed">TICKER</div>
+      <div id="ticker" class="ticker">
+        <span class="ticker-item muted">Loading live quotes…</span>
+      </div>
+      <div class="ticker-clock" id="ticker-clock">--:--:--</div>
+    </div>
+
+    <!-- ----- CHAT ----- -->
+    <section class="view view-chat active" data-view="chat">
+      <div id="chat-log" class="chat-log"><div class="chat-fade"></div>
+        <div class="msg jarvis">
+          <div class="avatar">J</div>
+          <div class="bubble">
+            <p>Hello Haider. <span class="accent">Jarvis Reborn is online.</span></p>
+            <p class="hint">Type <code>/forecast EURUSD</code>, ask <code>models</code>, <code>news</code>, <code>connectors</code>, <code>confirm</code> — or press <b>Ctrl&#8202;K</b> for commands.</p>
+          </div>
+        </div>
+      </div>
+      <div class="composer">
+        <div id="slash-menu" class="slash-menu" hidden></div>
+        <div class="composer-box">
+          <textarea id="chat-input" rows="1" placeholder="Message Jarvis…  (Enter to send, Shift+Enter for newline, Ctrl+K for commands)"
+                    autocomplete="off" spellcheck="false"></textarea>
+          <div class="composer-tools">
+            <button id="btn-voice" class="icon-btn" title="Push to talk (Ctrl+Alt+J)" aria-label="Talk to Jarvis">🎙</button>
+            <button id="chat-send" class="send-btn" title="Send (Enter)" aria-label="Send message">➤</button>
+          </div>
+        </div>
+        <div class="composer-hint">Enter to send · Shift+Enter newline · Ctrl+K commands · <b>Jarvis may place real MT5 orders</b> — confirm each signal.</div>
+      </div>
+    </section>
+
+    <!-- ----- DASHBOARD (trading cockpit) ----- -->
+    <section class="view" data-view="dashboard">
+      <div class="view-head"><h2>Dashboard</h2><span class="view-sub">MT5 algo cockpit — account, risk, execution, pipeline</span></div>
+      <div class="metric-strip" id="d-metrics"></div>
+      <div class="grid-2">
+        <div class="card"><h3>MT5 Terminal</h3><div id="d-mt5"><p class="hint">Connecting…</p></div></div>
+        <div class="card"><h3>Risk Shield</h3><div id="d-risk"><p class="hint">…</p></div></div>
+        <div class="card"><h3>Open Positions</h3><div id="d-positions"><p class="hint">…</p></div></div>
+        <div class="card"><h3>Macro Regime</h3><div id="d-regime"><p class="hint">…</p></div></div>
+        <div class="card wide"><h3>Active Signals</h3><div id="d-signals"><p class="hint">…</p></div></div>
+        <div class="card"><h3>Connector Layer</h3><div id="d-connectors"><p class="hint">…</p></div></div>
+        <div class="card"><h3>Pipeline</h3><pre id="d-pipeline">…</pre></div>
+        <div class="card wide"><h3>Last 60 Log Lines</h3><pre id="d-log">…</pre></div>
+      </div>
+    </section>
+
+    <!-- ----- POSITIONS ----- -->
+    <section class="view" data-view="positions">
+      <div class="view-head"><h2>Positions</h2><span class="view-sub">live MT5 exposure + every staged signal, one place</span></div>
+      <div class="card wide"><h3>Open Positions</h3><div id="p-live"><p class="hint">No open positions.</p></div></div>
+      <div class="card wide"><h3>Pending Signals</h3><div id="p-pending"><p class="hint">No pending signals.</p></div></div>
+      <div class="card wide"><h3>Recent Executions</h3><div id="p-log"><p class="hint">Executions will stream here.</p></div></div>
+    </section>
+
+    <!-- ----- SIGNALS ----- -->
+    <section class="view" data-view="signals">
+      <div class="view-head"><h2>Active Signals</h2><span class="view-sub">one-click confirm / cancel with full provenance</span></div>
+      <div id="d-signals-list"><p class="hint">…</p></div>
+    </section>
+
+    <!-- ----- AGENTS ----- -->
+    <section class="view" data-view="agents">
+      <div class="view-head"><h2>Agent Swarm</h2><span class="view-sub">dozens of specialists coordinating on every decision</span></div>
+      <div id="d-agents-summary" class="agents-summary"></div>
+      <div class="grid-agents" id="d-agents"></div>
+      <div class="card wide agent-stream" id="d-agent-stream"></div>
+    </section>
+
+    <!-- ----- MODELS ----- -->
+    <section class="view" data-view="models">
+      <div class="view-head"><h2>Predictive Fleet</h2><span class="view-sub">every forecaster, its status and live track record</span></div>
+      <div class="grid-models" id="d-models">…</div>
+    </section>
+
+    <!-- ----- CONNECTORS ----- -->
+    <section class="view" data-view="connectors">
+      <div class="view-head"><h2>Connector Layer</h2><span class="view-sub">every market, feed, broker and notification integration — 120 across 12 categories</span></div>
+      <div id="c-summary" class="agents-summary"></div>
+      <div id="c-filter" class="filter-row"></div>
+      <div id="c-list"><p class="hint">Loading connectors…</p></div>
+    </section>
+
+    <!-- ----- SYMBOLS ----- -->
+    <section class="view" data-view="symbols">
+      <div class="view-head"><h2>Instrument Universe</h2><span class="view-sub">33-instrument cross-asset registry</span></div>
+      <div id="d-universe">…</div>
+    </section>
+
+    <!-- ----- NEWS ----- -->
+    <section class="view" data-view="news">
+      <div class="view-head"><h2>News Feed</h2><span class="view-sub">live RSS with VADER sentiment + symbol relevance</span></div>
+      <div id="d-news">…</div>
+    </section>
+
+    <!-- ----- FORCES ----- -->
+    <section class="view" data-view="forces">
+      <div class="view-head"><h2>Macro Forces</h2><span class="view-sub">intermarket regime scan (15-min delayed)</span></div>
+      <div id="d-forces">…</div>
+    </section>
+
+    <!-- ----- CALENDAR ----- -->
+    <section class="view" data-view="calendar">
+      <div class="view-head"><h2>Economic Calendar</h2><span class="view-sub">blackout-aware event scheduling</span></div>
+      <div id="d-calendar">…</div>
+    </section>
+
+    <!-- ----- PATTERNS ----- -->
+    <section class="view" data-view="patterns">
+      <div class="view-head"><h2>Patterns</h2><span class="view-sub">candlestick + chart recognition (streams per symbol)</span></div>
+      <div class="card"><p class="hint">Try <code>/patterns EURUSD</code> or <code>/quantum EURUSD</code> in the chat to inspect a symbol's full feature stack.</p></div>
+      <div id="d-patterns"></div>
+    </section>
+
+    <!-- ----- QUANTUM ----- -->
+    <section class="view" data-view="quantum">
+      <div class="view-head"><h2>Quantum-Inspired Layer</h2><span class="view-sub">amplitude encoding + QAOA + entanglement coupling</span></div>
+      <div class="card"><p class="hint">Quantum decisions stream into every signal's provenance — see the <b>Signals</b> and <b>Agents</b> views.</p></div>
+      <div id="d-quantum"></div>
+    </section>
+
+    <!-- ----- STRATEGY (ultra-sophisticated trading engine) ----- -->
+    <section class="view" data-view="strategy">
+      <div class="view-head"><h2>Strategy Engine</h2><span class="view-sub">pattern recognition, MTF confluence, hedging & risk management</span></div>
+      <div class="grid-2">
+        <div class="card"><h3>Market Assessment</h3><div id="st-assessment"><p class="hint">Run analysis from chat: <code>/strategy EURUSD</code></p></div></div>
+        <div class="card"><h3>MTF Confluence</h3><div id="st-confluence"><p class="hint">Multi-timeframe alignment</p></div></div>
+        <div class="card"><h3>Pattern Recognition</h3><div id="st-patterns"><p class="hint">Candlestick, chart & indicator patterns</p></div></div>
+        <div class="card"><h3>Risk & Hedging</h3><div id="st-hedge"><p class="hint">Portfolio risk metrics & hedge status</p></div></div>
+        <div class="card wide"><h3>Portfolio Positions</h3><div id="st-positions"><p class="hint">Position sizing, trailing stops, exits</p></div></div>
+        <div class="card"><h3>Strategy Config</h3>
+          <div class="grid-2">
+            <label><input type="checkbox" id="st-hedge-enable" checked> Hedge Enabled</label>
+            <label><input type="checkbox" id="st-mtf-enable" checked> MTF Analysis</label>
+            <label>Hedge Threshold % <input type="number" id="st-hedge-thresh" value="5" min="1" max="20" step="0.5" style="width:60px"></label>
+            <label>Risk/Trade % <input type="number" id="st-risk-trade" value="1" min="0.1" max="5" step="0.1" style="width:60px"></label>
+            <label>Max Positions <input type="number" id="st-max-pos" value="5" min="1" max="20" step="1" style="width:60px"></label>
+            <label>Confidence Weight <input type="number" id="st-conf-weight" value="0.6" min="0" max="1" step="0.1" style="width:60px"></label>
+            <label>Max Daily Loss $ <input type="number" id="st-max-loss" value="50" min="1" step="5" style="width:60px"></label>
+            <label>Max Drawdown % <input type="number" id="st-max-dd" value="10" min="1" max="50" step="1" style="width:60px"></label>
+          </div>
+          <button class="action" id="st-save-config">Save Config</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ----- REPOS ----- -->
+    <section class="view" data-view="repos">
+      <div class="view-head"><h2>Repo Integrations</h2><span class="view-sub">local quant & trading repos discovered on this machine</span></div>
+      <div id="rp-list"><p class="hint">Probing repos…</p></div>
+      <div class="card wide"><h3>LEAN Backtests</h3>
+        <div class="row">
+          <button class="action" id="rp-lean-refresh">⟳ Scan LEAN</button>
+        </div>
+        <div id="rp-lean"><p class="hint">LEAN engine status</p></div>
+      </div>
+    </section>
+
+    <!-- ----- DEVICES ----- -->
+    <section class="view" data-view="devices">
+      <div class="view-head"><h2>Devices</h2><span class="view-sub">connect Jarvis across your phone, tablet & PCs</span></div>
+      <div class="grid-2">
+        <div class="card"><h3>This Hub</h3><div id="dv-local"><p class="hint">Loading…</p></div></div>
+        <div class="card"><h3>Online Devices</h3><div id="dv-devices"><p class="hint">Loading…</p></div></div>
+      </div>
+      <div class="card wide"><h3>Connect from another device</h3>
+        <p class="hint">Open <code id="dv-url">http://&lt;this-pc-ip&gt;:8765</code> on the other device, or register it below.</p>
+        <div class="row">
+          <input id="dv-id" placeholder="device_id" style="flex:1" />
+          <input id="dv-name" placeholder="device name" style="flex:1" />
+          <button class="action" id="dv-add">Register</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ----- SETTINGS ----- -->
+    <section class="view" data-view="settings">
+      <div class="view-head"><h2>Settings</h2><span class="view-sub">auth, quick actions and shortcuts</span></div>
+      <div class="grid-2">
+        <div class="card"><h3>HTTP Auth Token</h3>
+          <p class="hint">From <code>config.yaml → listener.http.auth_token</code></p>
+          <div class="token-row">
+            <input id="set-token" type="password" placeholder="X-Jarvis-Token" autocomplete="off" />
+            <button id="toggle-token" class="action" title="Show/token">👁</button>
+          </div>
+        </div>
+        <div class="card"><h3>Quick Actions</h3>
+          <button class="action" data-action="cancel-all">🚫 Cancel all pending</button>
+          <button class="action danger" data-action="kill" id="btn-kill">⛔ Kill switch: OFF</button>
+          <button class="action" data-action="shutdown">⏻ Shutdown Jarvis</button>
+          <button class="action" data-action="usage">📦 Token usage</button>
+        </div>
+        <div class="card wide"><h3>Keyboard Shortcuts</h3>
+          <table class="shortcut-table">
+            <tr><td><kbd>Ctrl</kbd>+<kbd>K</kbd></td><td>Focus chat / command slash menu</td></tr>
+            <tr><td><kbd>1</kbd>…<kbd>9</kbd>, <kbd>0</kbd>, <kbd>N</kbd>, <kbd>F</kbd>, <kbd>C</kbd>, <kbd>G</kbd></td><td>Jump to a view</td></tr>
+            <tr><td><kbd>/</kbd></td><td>Focus chat with slash commands</td></tr>
+            <tr><td><kbd>↑</kbd> / <kbd>↓</kbd></td><td>Recall previous chat commands</td></tr>
+            <tr><td><kbd>Esc</kbd></td><td>Clear composer / close menus</td></tr>
+            <tr><td><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>J</kbd></td><td>Push to talk (voice)</td></tr>
+            <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd></td><td>Cancel all pending signals</td></tr>
+            <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Enter</kbd></td><td>Confirm all pending signals</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Sticky Action Bar — the trading workflow control -->
+  <div id="action-bar" class="action-bar" hidden>
+    <div class="ab-left">
+      <span class="ab-count" id="ab-count">0 pending</span>
+      <div class="chips" id="ab-chips"></div>
+    </div>
+    <div class="ab-right">
+      <button id="ab-confirm-all" class="action primary">✓ Confirm all</button>
+      <button id="ab-cancel-all" class="action danger">✗ Cancel all</button>
+    </div>
+  </div>
+
+  <!-- Toast container -->
+  <div id="toasts" class="toasts"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
