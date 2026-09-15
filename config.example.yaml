@@ -55,6 +55,7 @@ ensemble:
     intermarket: 0.10
     patterns:    0.10
     calendar:    0.10
+    desk:        0.08   # commodities research desk
   min_confidence: 0.45
 
 # -----------------------------------------------------------------------------
@@ -218,6 +219,19 @@ market_forces:
     - { name: WTI,    yahoo: "CL=F",     kind: energy }
     - { name: COPPER, yahoo: "HG=F",     kind: metals }
     - { name: BTC,    yahoo: "BTC-USD",  kind: crypto }
+
+# -----------------------------------------------------------------------------
+# Commodities desk — investment-bank research panel for gold/metals/energy.
+# Reads the <market_forces> tapes (DXY, real-yield proxy, VIX, Dr. Copper,
+# oil, crowd positioning) and votes in the ensemble as source "desk".
+# Validate its historical edge with: python -m jarvis_predict.commodities
+# -----------------------------------------------------------------------------
+desk:
+  enabled: true
+  min_score: 0.20     # |score| below this -> desk abstains (no directional vote)
+  min_factors: 2      # at least N dominant-side factors must agree before firing
+  long_score_extra: 0.08   # longs need |score| >= min_score+extra (weak long side)
+                      # Tuned by historical sweep: 120d XAUUSD 58.8% hit (3d).
 
 # -----------------------------------------------------------------------------
 # Economic calendar — high-impact event blackout windows

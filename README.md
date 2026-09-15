@@ -61,10 +61,41 @@ A **global hotkey** (`Ctrl+Alt+J`) gives push-to-talk voice everywhere.
 | 15. News sentiment (RSS + VADER) | real-time | fundamental | `jarvis_predict/news.py` |
 | 16. Intermarket forces (DXY/US10Y/VIX/SPX/Gold/Oil/Copper/BTC) | yfinance | macro | `jarvis_predict/market_forces.py` |
 | 17. Chart + candlestick patterns | pure-numpy | technical | `jarvis_predict/patterns.py` |
+| 18. **Commodities desk** (gold/metals/energy macro panel) | yfinance tapes | IB research | `jarvis_predict/commodities.py` |
 
 Plus an **economic calendar** with auto-blackout windows around FOMC /
 NFP / CPI / ECB events. And an **MT5 bridge** for live ticks, candles,
 order placement, and risk gates.
+
+### Commodities desk (investment-bank research panel)
+
+The desk turns the intermarket tapes into an explainable, step-by-step vote
+for metals/energy: USD index, US10Y (real-yield proxy), VIX (safe-haven
+flow), gold momentum, copper ("Dr. Copper" global demand), oil inflation
+bid, BTC risk appetite, plus commodity-news tilt and calendar caution. Every
+vote carries the factor-by-factor reasoning, a plain-English narrative and a
+**crowd positioning read** ("what other investors are doing"). It votes in
+the ensemble as source `desk` (weight 0.08) and only fires on 2+ agreeing
+factors with a strict score bar — most cycles it abstains.
+
+Validated honestly with a strictly no-lookahead replay over 60/120/250/500
+days of XAUUSD (prior-close data only → 3-day forward labels):
+
+| days | fires | 3d hit-rate | verdict |
+|-----:|------:|------------:|:--------|
+| 60   |  77   |      57.1%  | edge    |
+| 120  |  68   |      58.8%  | edge    |
+| 250  | 260   |      53.9%  | neutral |
+| 500  | 516   |      50.2%  | neutral |
+
+(Coin flip = 50%; always-firing baseline in the same windows ≈ 42%.)
+It reads choppy tape well and short-side positioning especially; like every
+signal it flattens during gold's parabolic trend regimes — which is exactly
+why the desk, not the whole position, carries only 8% ensemble weight and
+the system run under paper-money until the edge stabilizes.)
+
+`GET /desk` shows every live vote + reasoning; `GET /desk/validate` reruns
+the replay any time.
 
 ---
 

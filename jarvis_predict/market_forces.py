@@ -230,17 +230,24 @@ class MarketForcesService:
     def _poll_once(self) -> None:
         if not self._ensure_yfinance():
             return
-        for f in self.forces:
-            try:
-                snap = self._fetch_one(f["name"], f["yahoo"], f["kind"])
-            except Exception as e:
-                LOGGER.debug("Force %s fetch failed: %s", f["name"], e)
-                continue
-            if snap is None:
-                continue
+        import concurrent.futures
+        results: dict[str, ForceSnapshot] = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+            futs = {ex.submit(self._fetch_one, f["name"], f["yahoo"], f["kind"]): f["name"]
+                    for f in self.forces}
+            for fut in concurrent.futures.as_completed(futs, timeout=45):
+                try:
+                    snap = fut.result()
+                except Exception as e:
+                    LOGGER.debug("Force fetch failed: %s", e)
+                    continue
+                if snap is not None:
+                    results[snap.name] = snap
+        if results:
             with self._lock:
-                self._snapshots[snap.name] = snap
+                self._snapshots.update(results)
         self._last_poll = time.time()
+        LOGGER.debug("forces poll complete: %d/%d tickers", len(results), len(self.forces))
 
     def _ensure_yfinance(self) -> bool:
         if self._yf is not None:

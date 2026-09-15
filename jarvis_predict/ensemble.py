@@ -9,8 +9,9 @@ Sources combined (each contributes a [-1, +1] signed vote + [0,1] confidence):
     3. Quantum    — amplitude-encoded + QAOA-optimised + entangled vote
     4. News       — VADER sentiment across relevant recent articles
     5. Intermarket— DXY, US10Y, VIX, SPX regime hints
-    6. Patterns   — chart + candlestick pattern composite bias
-    7. Calendar   — blackout + impact-aware volatility expectation
+6. Patterns   — chart + candlestick pattern composite bias
+     7. Calendar   — blackout + impact-aware volatility expectation
+     8. Desk       — commodity research desk (gold/metals/energy macro panel)
 
 Final vote:
     vote     = Σ (weight_i × source_i_signed × source_i_confidence)
@@ -54,6 +55,7 @@ class MarketContext:
     calendar_impact: int = 0           # 0..3
     in_blackout: bool = False
     model_forecasts: list[ModelForecast] = field(default_factory=list)
+    desk_hint: Any = None              # DeskVote | None — commodity desk read
 
 
 @dataclass
@@ -78,13 +80,14 @@ class FusionResult:
 
 # Default weights (must sum to 1.0 in the neutral regime).
 DEFAULT_WEIGHTS = {
-    "models":     0.30,
-    "ta":         0.15,
-    "quantum":    0.15,
-    "news":       0.10,
-    "intermarket":0.10,
-    "patterns":   0.10,
+    "models":     0.28,
+    "ta":         0.14,
+    "quantum":    0.14,
+    "news":       0.08,
+    "intermarket":0.09,
+    "patterns":   0.09,
     "calendar":   0.10,
+    "desk":       0.08,
 }
 
 # Regime-adaptive weight modifiers.
@@ -215,6 +218,20 @@ class EnsembleFusion:
             "in_blackout": ctx.in_blackout,
             "impact": ctx.calendar_impact,
         }
+
+        # 8. Commodities desk — gold/metals/energy macro panel.
+        if ctx.desk_hint is not None and not ctx.desk_hint.stale:
+            d_signed = float(ctx.desk_hint.direction) * ctx.desk_hint.confidence
+            per_source["desk"] = {
+                "signed": d_signed,
+                "raw_direction": ctx.desk_hint.direction,
+                "score": ctx.desk_hint.score,
+                "confidence": ctx.desk_hint.confidence,
+                "hedge_hint": ctx.desk_hint.hedge_hint,
+                "narrative": ctx.desk_hint.narrative,
+            }
+        else:
+            per_source["desk"] = {"signed": 0.0, "confidence": 0.0, "skipped": True}
 
         # --- Regime-adaptive weighting ---------------------------------------
         weights = self._adapt_weights(ctx, model_meta)

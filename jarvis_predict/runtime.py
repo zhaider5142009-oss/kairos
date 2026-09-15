@@ -28,6 +28,7 @@ import numpy as np
 from .agents import AgentSwarm, ComputeRouter, ModelLearner, SwarmContext, scan
 from .async_mt5 import AsyncMT5Bridge
 from .calendar import EconomicCalendar
+from .commodities import CommodityDesk
 from .config import JarvisConfig, setup_logging
 from .connectors import ConnectorRegistry
 from .core import TimesFMEngine
@@ -102,6 +103,9 @@ class JarvisRuntime:
         self.news = NewsService.from_config(config)
         self.forces = MarketForcesService.from_config(config)
         self.calendar = EconomicCalendar.from_config(config)
+        self.desk = CommodityDesk.from_config(
+            config, forces_service=self.forces, news_service=self.news,
+        )
 
         # --- MT5 sync + async wrappers --------------------------------------
         # paper_mode (default on) swaps order-execution for the crash-safe,
@@ -240,6 +244,7 @@ class JarvisRuntime:
             news=self.news,
             forces=self.forces,
             calendar=self.calendar,
+            desk=self.desk,
             executor=self.executor,
             data=self.data,
             timeframes=mtf_cfg.get("timeframes", DEFAULT_TIMEFRAMES),
@@ -715,6 +720,21 @@ class JarvisRuntime:
         i_hint = self.forces.force_direction_for(symbol) if self.forces.enabled else 0
         in_blackout, blackout_event = self.calendar.is_blackout_now()
         cal_impact = self.calendar.impact_for_symbol(symbol)
+        desk_hint = None
+        if self.desk.enabled and self.forces.enabled:
+            try:
+                desk_hint = self.desk.compute(
+                    symbol,
+                    ta_bias=indicators_snap.composite_bias,
+                    ts_direction=forecast.direction,
+                    ts_confidence=float(forecast.confidence) * abs(forecast.direction),
+                    news_sentiment=news_sent,
+                    news_relevance=news_rel,
+                    calendar_impact=cal_impact,
+                    in_blackout=in_blackout,
+                )
+            except Exception as e:
+                LOGGER.debug("desk compute failed for %s: %s", symbol, e)
 
         # 5. Ensemble + signal.
         ctx = MarketContext(
@@ -723,6 +743,7 @@ class JarvisRuntime:
             news_sentiment=news_sent, news_relevance=news_rel,
             intermarket_hint=i_hint, calendar_impact=cal_impact,
             in_blackout=in_blackout, model_forecasts=model_forecasts,
+            desk_hint=desk_hint,
         )
         fusion = self.fusion.fuse(ctx)
         current_price = float(close[-1])
@@ -1094,6 +1115,36 @@ class JarvisRuntime:
         except Exception:
             pass
         return fleet_state
+
+    def desk_report(self) -> dict:
+        """GET /desk payload — the commodities research desk, live + explained."""
+        forces_state: dict = {"enabled": False}
+        news_state: dict = {"enabled": False}
+        if self.forces:
+            snaps = self.forces.snapshot()
+            forces_state = {
+                "enabled": bool(self.forces.enabled),
+                "poll_seconds": self.forces.poll_seconds,
+                "last_poll": self.forces._last_poll,
+                "stale_seconds": round(time.time() - self.forces._last_poll, 1)
+                if self.forces._last_poll else None,
+                "aggregate_count": len(snaps),
+                "available": sorted(snaps.keys()),
+            }
+        if self.news:
+            news_state = {"enabled": bool(self.news.enabled)}
+        if self.desk.enabled:
+            self.desk.compute_all()
+        return {
+            "enabled": bool(self.desk.enabled),
+            "min_score": self.desk.min_score,
+            "forces": forces_state,
+            "news": news_state,
+            "votes": self.desk.snapshot(),
+            "symbols": [s for s in self.bridge.symbols
+                        if self.desk._instrument_sector(s) is not None]
+            if hasattr(self.bridge, "symbols") else [],
+        }
 
     def repo_snapshot(self) -> dict:
         """GET /repos payload — local quant repo integration status.

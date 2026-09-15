@@ -303,6 +303,33 @@ class HttpListener:
                 return {"models": [], "llm_default_cadence": 6}
             return self.runtime.fleet_snapshot()
 
+        @app.get("/desk")
+        def desk() -> dict[str, Any]:
+            """Commodities research desk — live votes + step-by-step factors +
+            crowd positioning read for each commodity."""
+            if self.runtime is None or not hasattr(self.runtime, "desk_report"):
+                return {"enabled": False}
+            return self.runtime.desk_report()
+
+        @app.get("/desk/validate")
+        def desk_validate(days: int = 60, symbol: str = "XAUUSD") -> dict[str, Any]:
+            """Historical, strictly no-lookahead edge check of the desk on the
+            last N days (yfinance; pulls metal + force bars directly)."""
+            if self.runtime is None or not hasattr(self.runtime, "desk"):
+                raise HTTPException(503, "runtime not ready")
+            try:
+                import concurrent.futures
+                def _run() -> dict:
+                    return self.runtime.desk.desk_hit_rate(
+                        days=max(30, min(int(days), 730)),
+                        symbol=str(symbol).upper(),
+                    )
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                    return ex.submit(_run).result(timeout=600)
+            except Exception as e:
+                LOGGER.exception("desk validation failed")
+                raise HTTPException(500, f"desk validation failed: {e}")
+
         @app.get("/repos/lean")
         def repos_lean() -> dict[str, Any]:
             if self.runtime is None or not hasattr(self.runtime, "lean_snapshot"):

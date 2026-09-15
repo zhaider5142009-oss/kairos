@@ -125,6 +125,7 @@ class MultiTimeframePredictor:
         news: NewsService,
         forces: MarketForcesService,
         calendar: EconomicCalendar,
+        desk=None,
         executor: TradeExecutor,
         data: DataPipeline,
         timeframes: Sequence[str] = DEFAULT_TIMEFRAMES,
@@ -138,6 +139,7 @@ class MultiTimeframePredictor:
         self.news = news
         self.forces = forces
         self.calendar = calendar
+        self.desk = desk
         self.executor = executor
         self.data = data
         self.timeframes = list(timeframes)
@@ -204,6 +206,23 @@ class MultiTimeframePredictor:
         in_blackout, _ = self.calendar.is_blackout_now()
         cal_impact = self.calendar.impact_for_symbol(symbol)
 
+        # Commodities desk (same force tape shared across TFs — cheap read).
+        desk_hint = None
+        if self.desk is not None and self.desk.enabled and self.forces.enabled:
+            try:
+                desk_hint = self.desk.compute(
+                    symbol,
+                    ta_bias=indicators_snap.composite_bias,
+                    ts_direction=forecast.direction,
+                    ts_confidence=float(forecast.confidence) * abs(forecast.direction),
+                    news_sentiment=news_sent,
+                    news_relevance=news_rel,
+                    calendar_impact=cal_impact,
+                    in_blackout=in_blackout,
+                )
+            except Exception as e:
+                LOGGER.debug("desk compute failed for %s@%s: %s", symbol, timeframe, e)
+
         # Quantum decision (compact).
         q = self.quantum.decide(
             per_asset_signal=[
@@ -221,6 +240,7 @@ class MultiTimeframePredictor:
             news_sentiment=news_sent, news_relevance=news_rel,
             intermarket_hint=i_hint, calendar_impact=cal_impact,
             in_blackout=in_blackout, model_forecasts=model_forecasts,
+            desk_hint=desk_hint,
         )
         fusion = self.fusion.fuse(ctx)
 
