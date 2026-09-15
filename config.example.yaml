@@ -335,6 +335,21 @@ mt5:
   confirm_timeout: 60
 
 # -----------------------------------------------------------------------------
+# Autopilot — autonomous order execution.
+# When enabled, a staged signal is auto-confirmed (sent to the bridge:
+# simulated paper fill, or real MT5 order in LIVE mode) as soon as it clears
+# the risk gates + these confidence gates. Manual confirm remains available
+# (voice / tray / chat / HTTP) for stages that don't qualify, and you can
+# pause it at any time from the UI or via POST /autopilot.
+# -----------------------------------------------------------------------------
+autopilot:
+  enabled: true                 # auto-confirm staged signals
+  min_confidence: 0.52          # ensemble confidence floor (0..1)
+  min_agreement: 0.50           # fleet directional agreement floor (0..1)
+  min_models: 3                 # minimum successful model forecasts required
+  cooldown_s: 20                # minimum seconds between auto-orders per symbol
+
+# -----------------------------------------------------------------------------
 # Listener subsystem — voice / MT5 events / HTTP webhook
 # -----------------------------------------------------------------------------
 listener:

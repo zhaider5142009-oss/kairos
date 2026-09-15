@@ -154,6 +154,24 @@ class JarvisConfig:
                 pass
             raise
 
+    def autopilot_settings(self) -> dict[str, Any]:
+        """Autonomous execution gate thresholds (safe defaults; runtime can
+        override live via POST /autopilot).
+            enabled          — auto-confirm staged signals
+            min_confidence   — ensemble confidence floor (0..1)
+            min_agreement    — fleet agreement floor (0..1)
+            min_models       — minimum number of successful model forecasts
+            cooldown_s       — minimum seconds between auto-orders per symbol
+        """
+        ap = dict(self.raw.get("autopilot", {}) or {})
+        return {
+            "enabled": bool(ap.get("enabled", True)),
+            "min_confidence": float(ap.get("min_confidence", 0.52)),
+            "min_agreement": float(ap.get("min_agreement", 0.50)),
+            "min_models": int(ap.get("min_models", 3)),
+            "cooldown_s": float(ap.get("cooldown_s", 20.0)),
+        }
+
     def ensure_dirs(self) -> None:
         """Create on-disk directories that the config references. Idempotent."""
         for key in ("logs_dir", "cache_dir"):

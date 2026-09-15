@@ -122,6 +122,23 @@ class JarvisRuntime:
             LOGGER.warning("Bridge: LIVE MODE (real orders sent to MT5)")
         self.async_bridge = AsyncMT5Bridge(self.bridge)
 
+        # --- autopilot (autonomous order execution) ------------------------
+        # A staged signal is auto-confirmed the moment it clears the risk
+        # gates (executor.stage) + the confidence gates below.  Live-mutable
+        # via POST /autopilot so the operator can relax/raise thresholds
+        # without a restart.
+        _ap = config.autopilot_settings()
+        self.autopilot: dict[str, Any] = {
+            "enabled": bool(_ap["enabled"]),
+            "min_confidence": float(_ap["min_confidence"]),
+            "min_agreement": float(_ap["min_agreement"]),
+            "min_models": int(_ap["min_models"]),
+            "cooldown_s": float(_ap["cooldown_s"]),
+        }
+        self._ap_count = 0
+        self._ap_last_symbol_ts: dict[str, float] = {}
+        self._ap_last: list[dict] = []
+
         # --- OpenRouter client (LLM reasoning over the model fleet) ---------
         or_cfg = config.section("openrouter")
         api_keys = list(or_cfg.get("api_keys", []))
@@ -833,6 +850,15 @@ class JarvisRuntime:
                         {"signal_id": staged.signal_id, "signal": signal.to_dict()},
                         source="runtime",
                     )
+                    # Autopilot: auto-confirm the stage the moment it clears
+                    # the confidence gates (risk gates already passed).
+                    try:
+                        auto_ok, _reason = self._autopilot_gate(
+                            symbol, signal, model_forecasts)
+                        if auto_ok:
+                            self._auto_confirm(staged, signal)
+                    except Exception:
+                        LOGGER.exception("autopilot gate failed for %s", symbol)
         elif in_blackout:
             self.dispatcher.publish(EventType.CALENDAR, {"symbol": symbol, "event": blackout_event}, source="runtime")
 
@@ -958,6 +984,10 @@ class JarvisRuntime:
                 snapshot["connector_summary"] = self.connectors.summary()
             except Exception:
                 pass
+            try:
+                snapshot["autopilot"] = self.autopilot_snapshot()
+            except Exception:
+                pass
             return snapshot
 
         return self._cached_snapshot("status", _build)
@@ -1011,6 +1041,7 @@ class JarvisRuntime:
                 "risk": risk,
                 "execution_mode": getattr(self, "execution_mode", "paper"),
                 "restarting": getattr(self, "_restarting", False),
+                "autopilot": self.autopilot_snapshot(),
                 "symbols": list(self.bridge.symbols) if self.bridge is not None else [],
                 "timeframe": self.bridge.timeframe_str if self.bridge is not None else "",
             }
@@ -1256,6 +1287,87 @@ class JarvisRuntime:
         }
         self.dispatcher.publish(EventType.RISK, state, source="runtime")
         return state
+
+    # ----------------------------------------------------------- autopilot
+
+    def _autopilot_gate(self, symbol: str, signal, model_forecasts) -> tuple[bool, str]:
+        """Return (should_auto_confirm, reason).  All risk gates already ran
+        inside executor.stage(); this adds the confidence/agreement floor."""
+        ap = self.autopilot
+        if not ap.get("enabled"):
+            return False, "autopilot disabled"
+        conf = float(signal.confidence)
+        if conf < ap["min_confidence"]:
+            return False, f"confidence {conf:.3f} < {ap['min_confidence']}"
+        cons = _fleet_consensus(model_forecasts)
+        if cons.get("ok", 0) < ap["min_models"]:
+            return False, f"only {cons.get('ok', 0)} models ok < {ap['min_models']}"
+        if cons.get("agreement", 0.0) < ap["min_agreement"]:
+            return False, f"agreement {cons.get('agreement', 0.0):.2f} < {ap['min_agreement']}"
+        last = self._ap_last_symbol_ts.get(symbol, 0.0)
+        if ap["cooldown_s"] > 0 and (time.time() - last) < ap["cooldown_s"]:
+            left_s = max(0, ap["cooldown_s"] - (time.time() - last))
+            return False, f"cooldown {left_s:.0f}s left"
+        return True, "all gates passed"
+
+    def _auto_confirm(self, staged, signal) -> None:
+        """Send a staged order to the bridge without human confirmation."""
+        t0 = time.time()
+        # Cooldown is claimed *before* the send so a duplicate signal on the
+        # same symbol can't double-fire inside one cycle.
+        self._ap_last_symbol_ts[signal.symbol] = t0
+        try:
+            result = self.dispatcher.confirm(staged.signal_id, source="autopilot")
+        except Exception as e:
+            LOGGER.exception("autopilot confirm crashed for %s", signal.symbol)
+            result = None
+        ok = bool(result is not None and getattr(result, "success", False))
+        if ok:
+            self._ap_count += 1
+        record = {
+            "signal_id": staged.signal_id,
+            "symbol": signal.symbol,
+            "direction": signal.direction,
+            "confidence": round(float(signal.confidence), 3),
+            "order_id": (getattr(result, "order_id", None) or None) if result else None,
+            "ok": ok,
+            "ts": t0,
+            "comment": (getattr(result, "comment", "") or "")[:60] if result else "confirm error",
+        }
+        self._ap_last.insert(0, record)
+        self._ap_last = self._ap_last[:20]
+        LOGGER.info(
+            "AUTOPILOT %s %s conf=%.3f -> %s (id=%s)",
+            signal.symbol, "BUY" if signal.direction == 1 else "SELL",
+            float(signal.confidence),
+            "EXECUTED" if ok else f"FAILED {record['comment']}",
+            staged.signal_id[:8],
+        )
+        self._invalidate_snapshot("status")
+        self._invalidate_snapshot("mt5")
+
+    def autopilot_snapshot(self) -> dict:
+        """GET /autopilot payload — settings + live counters."""
+        ap = dict(self.autopilot)
+        ap.update({
+            "auto_confirmed_total": self._ap_count,
+            "last": list(self._ap_last),
+            "manual_confirm_available": True,
+        })
+        return ap
+
+    def update_autopilot(self, patch: dict) -> dict:
+        """Apply a live patch to the autopilot settings (POST /autopilot)."""
+        ap = self.autopilot
+        if "enabled" in patch:
+            ap["enabled"] = bool(patch["enabled"])
+        for key in ("min_confidence", "min_agreement", "cooldown_s"):
+            if key in patch and isinstance(patch[key], (int, float)):
+                ap[key] = max(0.0, float(patch[key]))
+        if "min_models" in patch and isinstance(patch["min_models"], (int, float)):
+            ap["min_models"] = max(1, int(patch["min_models"]))
+        LOGGER.info("Autopilot settings updated: %s", {k: ap[k] for k in sorted(ap)})
+        return self.autopilot_snapshot()
 
     def patterns_for(self, symbol: str) -> dict | None:
         """Real pattern snapshot for a symbol (chat/patterns view)."""

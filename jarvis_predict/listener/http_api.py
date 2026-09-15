@@ -76,6 +76,14 @@ class ExecutionModeBody(BaseModel):
     confirm: bool = False
 
 
+class AutopilotBody(BaseModel):
+    enabled: bool | None = None
+    min_confidence: float | None = None
+    min_agreement: float | None = None
+    min_models: int | None = None
+    cooldown_s: float | None = None
+
+
 class HttpListener:
     """Runs FastAPI on a background thread + WebSocket fan-out."""
 
@@ -486,6 +494,26 @@ class HttpListener:
                 raise HTTPException(500, f"failed to schedule restart: {e}") from e
             LOGGER.warning("EXECUTION MODE -> %s (restart scheduled)", mode)
             return {"ok": True, "mode": mode, "restarting": True, "changed": True}
+
+        @app.get("/autopilot")
+        def autopilot_get(x_jarvis_token: str | None = Header(default=None),
+                           authorization: str | None = Header(default=None)) -> dict[str, Any]:
+            _check(authorization, x_jarvis_token)
+            if self.runtime is None or not hasattr(self.runtime, "autopilot_snapshot"):
+                raise HTTPException(503, "runtime not ready")
+            return self.runtime.autopilot_snapshot()
+
+        @app.post("/autopilot")
+        def autopilot_post(body: AutopilotBody,
+                           x_jarvis_token: str | None = Header(default=None),
+                           authorization: str | None = Header(default=None)) -> dict[str, Any]:
+            _check(authorization, x_jarvis_token)
+            if self.runtime is None or not hasattr(self.runtime, "update_autopilot"):
+                raise HTTPException(503, "runtime not ready")
+            patch = {k: v for k, v in body.dict().items() if v is not None}
+            if not patch:
+                raise HTTPException(400, "send at least one setting (enabled, min_confidence, ...)")
+            return self.runtime.update_autopilot(patch)
 
         @app.get("/pending")
         def pending() -> dict[str, Any]:

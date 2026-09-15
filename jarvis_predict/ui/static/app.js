@@ -1352,6 +1352,19 @@ function pollAfterRestart() {
   }, 3000);
 }
 
+window.toggleAutopilot = async () => {
+  try {
+    const cur = (state.autopilot || {}).enabled;
+    const want = !cur;
+    const j = await api("/autopilot", { method: "POST", body: JSON.stringify({ enabled: want }) });
+    state.autopilot = j;
+    toast(want ? "Autopilot ON — auto-confirming staged signals" : "Autopilot OFF — manual confirm required");
+    if (state.view === "dashboard") refreshDashboard();
+  } catch (e) {
+    toast("Failed to toggle autopilot: " + String(e).slice(0, 60), "error");
+  }
+};
+
 async function refreshMT5() {
   try {
     const j = await api("/mt5");
@@ -1359,6 +1372,7 @@ async function refreshMT5() {
     state.mt5 = j;
     if (j.execution_mode && !j.restarting) state.mode = j.execution_mode;
     if (typeof j.restarting === "boolean") state.restarting = j.restarting;
+    state.autopilot = j.autopilot || {};
     renderExecutionMode();
     const acc = j.account || {};
     const term = j.terminal || {};
@@ -1430,6 +1444,12 @@ function riskCardHTML() {
         <button type="button" id="btn-mode-paper"  data-mode-btn onclick="switchExecutionMode('paper')">Paper Money</button>
         <button type="button" id="btn-mode-live"   data-mode-btn onclick="switchExecutionMode('live')">Live</button>
       </div>
+    </div>
+    <div class="row" style="margin-top:12px"><span>Autopilot</span><b class="${(state.autopilot || {}).enabled ? "pos" : "neg"}">${(state.autopilot || {}).enabled ? "ON" : "OFF"}</b></div>
+    <div class="row"><span>Auto-confirm threshold</span><b>${((state.autopilot || {}).min_confidence ?? 0.52).toFixed(2)} conf / ${((state.autopilot || {}).min_agreement ?? 0.50).toFixed(2)} agree / ${(state.autopilot || {}).min_models ?? 3} models</b></div>
+    <div class="row"><span>Auto-orders executed</span><b>${(state.autopilot || {}).auto_confirmed_total ?? 0}</b></div>
+    <div class="row" style="margin-top:6px">
+      <button type="button" class="action ${(state.autopilot || {}).enabled ? "danger" : ""}" onclick="toggleAutopilot()" style="width:100%">${(state.autopilot || {}).enabled ? "Pause Autopilot" : "Enable Autopilot"}</button>
     </div>
     <p class="hint" style="margin-top:8px">Switching mode applies after a short restart. Live sends real orders — verify the broker account in MT5.</p>`;
 }

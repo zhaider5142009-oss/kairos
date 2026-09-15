@@ -113,8 +113,52 @@ class DeepSeekV41Adapter(PredictiveModel):
             direction = 0
         return direction, ret, conf
 
+    def _deterministic_fallback(self, values: np.ndarray, horizon: int, **kwargs) -> ModelForecast:
+        """No-API-key fallback — plain multi-factor directional vote, labelled
+        honestly in extras.mode so the ensemble provenance stays transparent."""
+        arr = values.astype(np.float64)
+        n = arr.size
+        if n < 32:
+            point = np.zeros(horizon, dtype=np.float32)
+            return ModelForecast(
+                model_name=self.name, family=self.family,
+                point=point, quantiles=None, horizon=horizon,
+                direction=0, expected_return_pct=0.0, confidence=0.0,
+                inference_ms=1.0, status="ok",
+                extras={"mode": "no_api_fallback", "reason": "insufficient bars"},
+            )
+        ma_s = arr[-min(16, n):].mean()
+        ma_l = arr[-min(64, n):].mean()
+        momentum = (ma_s - ma_l) / max(abs(ma_l), 1e-9)
+        rets = np.diff(arr[-min(32, n):]) / arr[-min(32, n):-1]
+        vol = float(np.std(rets))
+        persistence = float(np.mean(np.sign(np.diff(arr[-min(11, n):]))))
+        composite = float(np.clip(
+            0.5 * momentum * 100 + 0.3 * persistence + 0.2 * np.tanh(1.0 / max(vol, 1e-6) * momentum),
+            -1.0, 1.0,
+        ))
+        last = float(arr[-1])
+        target = last * (1.0 + composite * 0.01)
+        point = np.linspace(last, target, horizon, dtype=np.float32)
+        direction = 1 if composite > 0.1 else (-1 if composite < -0.1 else 0)
+        confidence = float(np.clip(abs(composite) * 0.8 + 0.1, 0.0, 0.9))
+        expected_return_pct = float((point[-1] - last) / last * 100.0)
+        return ModelForecast(
+            model_name=self.name, family=self.family,
+            point=point, quantiles=None, horizon=horizon,
+            direction=direction, expected_return_pct=expected_return_pct,
+            confidence=confidence, inference_ms=1.0, status="ok",
+            extras={
+                "mode": "no_api_fallback",
+                "composite": round(composite, 4),
+                "volatility": round(vol, 6),
+            },
+        )
+
     def _forecast_impl(self, values: np.ndarray, horizon: int, **kwargs) -> ModelForecast:
         assert self._client is not None, "client not bound"
+        if not (self._client.api_keys or []):
+            return self._deterministic_fallback(values, horizon, **kwargs)
         prompt = self._build_prompt(values)
         req = ChatRequest(
             model=self.model,
