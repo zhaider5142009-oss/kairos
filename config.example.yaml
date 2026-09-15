@@ -173,6 +173,53 @@ models:
       context_bars: 256
       cadence: 6
 
+  # --- Statistical + gradient-boosted forecasters (optional, installable) ---
+  # Each family ships with a graceful degradation contract: if the library is
+  # missing the model still votes via a labelled momentum backfill (status
+  # "mock").  Install:  pip install statsmodels scikit-learn xgboost
+  #   lightgbm catboost pmdarima
+  # Diverse personalities (window / mode / algo) produce independent votes.
+  arima:
+    family: arima
+    enabled: true
+    weight: 1.0
+    kwargs: { lookback: 200, cadence: 3 }
+  ets_damped:
+    family: ets
+    enabled: true
+    weight: 0.9
+    kwargs: { lookback: 200, cadence: 3 }
+  auto_arima:
+    family: auto_arima
+    enabled: true
+    weight: 1.0
+    kwargs: { lookback: 150, cadence: 3 }
+  svr_momentum:
+    family: svr
+    enabled: true
+    weight: 0.8
+    kwargs: { window: 24, mode: momentum, cadence: 2 }
+  forest_extra:
+    family: forest
+    enabled: true
+    weight: 0.9
+    kwargs: { algo: extra, window: 32, n_estimators: 120, max_depth: 6, cadence: 2 }
+  xgboost_slow:
+    family: boost
+    enabled: true
+    weight: 1.0
+    kwargs: { algo: xgboost, window: 32, n_estimators: 90, max_depth: 4, cadence: 3 }
+  lightgbm_fast:
+    family: boost
+    enabled: true
+    weight: 0.9
+    kwargs: { algo: lightgbm, window: 48, n_estimators: 120, max_depth: 5, cadence: 2 }
+  catboost_smooth:
+    family: boost
+    enabled: true
+    weight: 0.9
+    kwargs: { algo: catboost, window: 64, n_estimators: 80, max_depth: 6, cadence: 3 }
+
 # -----------------------------------------------------------------------------
 # Pattern recognition — candle + chart patterns
 # -----------------------------------------------------------------------------

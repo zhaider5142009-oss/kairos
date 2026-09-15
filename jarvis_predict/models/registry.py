@@ -62,7 +62,18 @@ class ModelFleet:
         results: list[ModelForecast] = []
         for m in self.models:
             try:
-                results.append(m.forecast(values, horizon, symbol=symbol))
+                res = m.forecast(values, horizon, symbol=symbol)
+                # Config weight participates in the ensemble via extras.weight
+                # (read by EnsembleFusion._aggregate_models).  Defaults stay
+                # backward compatible: weight absent -> confidence-driven.
+                spec = self.specs.get(m.name)
+                if spec is not None:
+                    weight = float(getattr(spec, "weight", 1.0))
+                    if res.extras is None:
+                        object.__setattr__(res, "extras", {"weight": weight})
+                    else:
+                        res.extras.setdefault("weight", weight)
+                results.append(res)
             except Exception as e:  # pragma: no cover
                 LOGGER.exception("Model %s crashed", m.name)
                 if fail_fast:
@@ -95,43 +106,65 @@ def _build_one(spec: ModelSpec, client: Any = None) -> PredictiveModel:
     family = spec.family.lower()
     # `cadence` is a fleet-scheduler hint, not an adapter kwarg.
     spec.kwargs = {k: v for k, v in spec.kwargs.items() if k != "cadence"}
+    _model: PredictiveModel | None = None
     try:
         if family == "timesfm":
             from .timesfm_adapter import TimesFMAdapter
-            return TimesFMAdapter(**spec.kwargs)
-        if family == "chronos":
+            _model = TimesFMAdapter(**spec.kwargs)
+        elif family == "chronos":
             from .chronos_adapter import ChronosAdapter
-            return ChronosAdapter(**spec.kwargs)
-        if family == "qlib":
+            _model = ChronosAdapter(**spec.kwargs)
+        elif family == "qlib":
             from .qlib_adapter import QlibAdapter
             algo = spec.kwargs.pop("algo", spec.name.removeprefix("qlib_"))
-            return QlibAdapter(algo=algo, **spec.kwargs)
-        if family == "fingpt":
+            _model = QlibAdapter(algo=algo, **spec.kwargs)
+        elif family == "fingpt":
             from .fingpt_adapter import (
                 FinGPTForecasterAdapter, FinGPTSentimentAdapter,
             )
             kind = spec.kwargs.pop("kind", spec.name.removeprefix("fingpt_"))
-            if kind == "sentiment":
-                return FinGPTSentimentAdapter(**spec.kwargs)
-            return FinGPTForecasterAdapter(**spec.kwargs)
-        if family == "finrobot":
+            _model = FinGPTSentimentAdapter(**spec.kwargs) if kind == "sentiment" else FinGPTForecasterAdapter(**spec.kwargs)
+        elif family == "finrobot":
             from .finrobot_adapter import FinRobotAnalystAdapter
-            return FinRobotAnalystAdapter(**spec.kwargs)
-        if family == "deepseek":
+            _model = FinRobotAnalystAdapter(**spec.kwargs)
+        elif family == "deepseek":
             from .deepseek_v41_adapter import DeepSeekV41Adapter
             if client is not None:
                 spec.kwargs = dict(spec.kwargs)
                 spec.kwargs.setdefault("client", client)
-            return DeepSeekV41Adapter(**spec.kwargs)
-        if family == "mock":
+            _model = DeepSeekV41Adapter(**spec.kwargs)
+        elif family in ("arima", "ets", "auto_arima", "svr", "forest", "boost"):
+            from .stats_adapters import (
+                ArimaAdapter, EtsAdapter, AutoArimaAdapter,
+                SvrAdapter, ForestAdapter, BoostAdapter,
+            )
+            kind = spec.kwargs.pop("algo", None)
+            if family == "arima":
+                _model = ArimaAdapter(**spec.kwargs)
+            elif family == "ets":
+                _model = EtsAdapter(**spec.kwargs)
+            elif family == "auto_arima":
+                _model = AutoArimaAdapter(**spec.kwargs)
+            elif family == "svr":
+                _model = SvrAdapter(**spec.kwargs)
+            elif family == "forest":
+                _model = ForestAdapter(algo=kind or "extra", **spec.kwargs)
+            else:
+                _model = BoostAdapter(algo=kind or "xgboost", **spec.kwargs)
+        elif family == "mock":
             from .mock import MockModel
-            return MockModel(**spec.kwargs)
-        raise ValueError(f"unknown model family: {spec.family}")
+            _model = MockModel(**spec.kwargs)
+        else:
+            raise ValueError(f"unknown model family: {spec.family}")
     except Exception as e:
         LOGGER.warning("Failed to build model %s (%s): %s — falling back to MockModel",
                        spec.name, spec.family, e)
         from .mock import MockModel
-        return MockModel(seed=hash(spec.name) & 0xFFFFFFFF)
+        _model = MockModel(seed=hash(spec.name) & 0xFFFFFFFF)
+    # Instance identity = config identity (distinct per variant for the
+    # ModelLearner per-model multiplier and ensemble weight stamping).
+    _model.name = spec.name
+    return _model
 
 
 def build_fleet(specs: list[ModelSpec], client: Any = None) -> ModelFleet:

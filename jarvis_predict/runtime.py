@@ -183,6 +183,17 @@ class JarvisRuntime:
             cadence=cadence_map,
             llm_default_cadence=int(fleet_cfg.get("llm_cadence", os.environ.get("JARVIS_LLM_CADENCE", "6"))),
         )
+        # Auto-discovery: log which installed statistical / ML predictor
+        # families are wired into the fleet right now (top-20 forecasters).
+        try:
+            from .models.stats_adapters import discover
+            _landscape = discover()
+            LOGGER.info(
+                "Predictor landscape: %s",
+                ", ".join(f"{k}={v}" for k, v in sorted(_landscape.items())),
+            )
+        except Exception:
+            pass
         # MTF strategy-analysis TTL cache — rebuild the 4-timeframe confluence
         # view at most every `analysis_ttl_seconds` (avoids duplicate MT5 IPC +
         # indicator math on every poll cycle).

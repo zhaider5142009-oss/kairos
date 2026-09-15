@@ -26,3 +26,13 @@ onnxruntime-directml==1.24.4
 
 # --- Voice push-to-talk hotkey ---
 #   keyboard>=0.13.5
+
+# --- Statistical + gradient-boosted forecasters (10 fleet models) ---
+# Python 3.13 wheels are published for all of these.  The fleet degrades
+# gracefully (labelled momentum backfill, status "mock") if they are absent.
+statsmodels>=0.14
+scikit-learn>=1.5
+xgboost>=2.0
+lightgbm>=4.0
+catboost>=1.2
+pmdarima>=2.0

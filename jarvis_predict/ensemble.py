@@ -319,8 +319,14 @@ class EnsembleFusion:
         for f in forecasts:
             if f.status != "ok":
                 continue
-            # Skip "uncertain" forecasts (direction == 0 and conf near 0).
-            base_w = max(0.0, f.confidence) + 0.05   # 0.05 floor so a vote always counts
+            # Config-driven spec weight via extras.weight (stamped by
+            # ModelFleet.forecast_all).  Falls back to the classic
+            # confidence-based weighting for legacy models.
+            spec_w = float((f.extras or {}).get("weight", 0) or 0)
+            if spec_w > 0:
+                base_w = spec_w
+            else:
+                base_w = max(0.0, f.confidence) + 0.05   # 0.05 floor
             # Adaptive multiplier from ModelLearner (recent track record).
             mult = self.model_multipliers.get(f.model_name, 1.0)
             signed += float(f.direction) * f.confidence * base_w * mult

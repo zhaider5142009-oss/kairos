@@ -27,6 +27,14 @@ from .qlib_adapter import (
 from .fingpt_adapter import FinGPTForecasterAdapter, FinGPTSentimentAdapter
 from .finrobot_adapter import FinRobotAnalystAdapter
 from .deepseek_v41_adapter import DeepSeekV41Adapter
+from .stats_adapters import (
+    ArimaAdapter,
+    EtsAdapter,
+    AutoArimaAdapter,
+    SvrAdapter,
+    ForestAdapter,
+    BoostAdapter,
+)
 
 __all__ = [
     "PredictiveModel",
@@ -45,4 +53,10 @@ __all__ = [
     "FinGPTSentimentAdapter",
     "FinRobotAnalystAdapter",
     "DeepSeekV41Adapter",
+    "ArimaAdapter",
+    "EtsAdapter",
+    "AutoArimaAdapter",
+    "SvrAdapter",
+    "ForestAdapter",
+    "BoostAdapter",
 ]
