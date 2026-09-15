@@ -330,6 +330,26 @@ class HttpListener:
                 LOGGER.exception("desk validation failed")
                 raise HTTPException(500, f"desk validation failed: {e}")
 
+        @app.get("/desk/factors")
+        def desk_factors(days: int = 250, symbol: str = "XAUUSD") -> dict[str, Any]:
+            """Factor report card — per-research-factor 3d hit-rate over the
+            last N days (strictly no-lookahead). Flags factors that are noise
+            for this market so they can be disabled."""
+            if self.runtime is None or not hasattr(self.runtime, "desk"):
+                raise HTTPException(503, "runtime not ready")
+            try:
+                import concurrent.futures
+                def _run() -> dict:
+                    return self.runtime.desk.factor_attribution(
+                        days=max(60, min(int(days), 730)),
+                        symbol=str(symbol).upper(),
+                    )
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                    return ex.submit(_run).result(timeout=600)
+            except Exception as e:
+                LOGGER.exception("desk factor attribution failed")
+                raise HTTPException(500, f"desk factor attribution failed: {e}")
+
         @app.get("/repos/lean")
         def repos_lean() -> dict[str, Any]:
             if self.runtime is None or not hasattr(self.runtime, "lean_snapshot"):

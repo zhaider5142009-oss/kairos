@@ -59,6 +59,31 @@ _DEFAULT_MIN_SCORE = 0.20
 _DEFAULT_MIN_FACTORS = 2
 _DEFAULT_LONG_EXTRA = 0.08   # longs need |score| >= min_score+extra (long side is weaker)
 
+# yfinance tickers used by the no-lookahead replay / attribution validators.
+METAL_TICKER = {"XAUUSD": "GC=F", "XAGUSD": "SI=F"}
+FORCE_TICKERS = {
+    "DXY": "DX-Y.NYB", "US10Y": "^TNX", "VIX": "^VIX", "GOLD": "GC=F",
+    "WTI": "CL=F", "COPPER": "HG=F", "SPX": "^GSPC", "BTC": "BTC-USD",
+    "TIP": "TIP", "GDX": "GDX", "SLV": "SLV", "USO": "USO", "DBC": "DBC",
+}
+
+# Fundamental-news event taxonomy (headline keywords -> category). The desk
+# treats these as "big-picture" catalysts, not flicker signals.
+FUND_EVENTS: dict[str, tuple[str, ...]] = {
+    "supply":  ("opec", "embargo", "strait", "supply", "strike", "export ban",
+                "production cut", "disruption", "shutdown"),
+    "cbank_buy": ("central bank", "reserve", "hoard", "purchase", "pboc",
+                  "india", "gold buying", "bahrain", "poland"),
+    "inflation": ("cpi", "inflation", "fed", "rate cut", "tariff",
+                  "print", "fiscal", "stimulus"),
+    "demand":  ("china demand", "importer", "industrial demand",
+                "semiconductor", "reflation", "stimulus"),
+    "inventory": ("inventory", "stockpile", "warehouse", "eia", "api",
+                  "commercial stocks", "cushing"),
+    "geo":     ("war", "invasion", "sanction", "missile", "conflict",
+                "red sea", "pipeline"),
+}
+
 
 @dataclass
 class DeskFactor:
@@ -119,12 +144,13 @@ class CommodityDesk:
         self,
         *,
         config: JarvisConfig,
-        forces_service: MarketForcesService,
+forces_service: MarketForcesService,
         news_service: Optional[NewsService] = None,
         enabled: bool = True,
         min_score: float = _DEFAULT_MIN_SCORE,
         min_factors: int = _DEFAULT_MIN_FACTORS,
         long_score_extra: float = _DEFAULT_LONG_EXTRA,
+        disabled_factors: Optional[set[str]] = None,
     ) -> None:
         self.config = config
         self.forces = forces_service
@@ -133,6 +159,7 @@ class CommodityDesk:
         self.min_score = float(min_score)
         self.min_factors = max(1, int(min_factors))
         self.long_score_extra = float(long_score_extra)
+        self.disabled_factors = set(disabled_factors or ())
         self._votes: dict[str, DeskVote] = {}
         self._lock = threading.Lock()
         self._validate_lock = threading.Lock()
@@ -149,11 +176,16 @@ class CommodityDesk:
             config=config,
             forces_service=forces_service,
             news_service=news_service,
-enabled=bool(section.get("enabled", True)),
+            enabled=bool(section.get("enabled", True)),
             min_score=float(section.get("min_score", _DEFAULT_MIN_SCORE)),
             min_factors=int(section.get("min_factors", _DEFAULT_MIN_FACTORS)),
             long_score_extra=float(section.get("long_score_extra", _DEFAULT_LONG_EXTRA)),
+            disabled_factors=set(section.get("disabled_factors", [])),
         )
+
+    def set_disabled_factors(self, names: list[str]) -> None:
+        """Data-driven factor pruning (from `GET /desk/factors` attribution)."""
+        self.disabled_factors = set(names)
 
     # ------------------------------------------------------------------ public
 
@@ -178,24 +210,18 @@ enabled=bool(section.get("enabled", True)),
             return None
 
         snaps = self.forces.snapshot()
-        dxy = snaps.get("DXY")
-        us10y = snaps.get("US10Y")
-        vix = snaps.get("VIX")
-        gold = snaps.get("GOLD")
-        wti = snaps.get("WTI")
-        copper = snaps.get("COPPER")
-        spx = snaps.get("SPX")
-        btc = snaps.get("BTC")
+        fund_events = self._news_events() if (self.news and self.news.enabled) else None
 
         if ins == "metals":
             return self._compute_metals(
-                symbol, dxy, us10y, vix, gold, wti, copper, spx, btc,
+                symbol, snaps,
                 ta_bias=ta_bias, ts_direction=ts_direction,
                 ts_confidence=ts_confidence, news_sentiment=news_sentiment,
                 news_relevance=news_relevance, calendar_impact=calendar_impact,
-                in_blackout=in_blackout)
+                in_blackout=in_blackout, fund_events=fund_events)
         return self._compute_energy(
-            symbol, dxy, wti, vix, btc,
+            symbol, snaps.get("DXY"), snaps.get("WTI") or snaps.get("USO"),
+            snaps.get("VIX"), snaps.get("BTC"),
             ta_bias=ta_bias, news_sentiment=news_sentiment,
             news_relevance=news_relevance, calendar_impact=calendar_impact,
             in_blackout=in_blackout)
@@ -233,24 +259,27 @@ enabled=bool(section.get("enabled", True)),
         with self._validate_lock:  # never pile up concurrent yfinance replays
             return self._desk_hit_rate_impl(days, symbol)
 
-    def _desk_hit_rate_impl(self, days: int, symbol: str) -> dict:
+    def _load_replay_rows(self, days: int, symbol: str):
+        """Fetch metal + all force tickers and build strictly no-lookahead rows.
+
+        Row dated at day i contains only force data from bars strictly BEFORE
+        that day's close plus realized forward labels. Returns `(rows, horizons)`
+        or `({"error": ...}, None)`.
+        """
         import yfinance as yf  # lazy, validation-only
         horizons = (1, 3, 5)
         max_h = max(horizons)
-        tk_metal = {"XAUUSD": "GC=F", "XAGUSD": "SI=F"}.get(symbol, "GC=F")
-        force_tk = {"DXY": "DX-Y.NYB", "US10Y": "^TNX", "VIX": "^VIX",
-                    "GOLD": "GC=F", "WTI": "CL=F", "COPPER": "HG=F",
-                    "SPX": "^GSPC", "BTC": "BTC-USD"}
+        tk_metal = METAL_TICKER.get(symbol, "GC=F")
         try:
             metal = yf.Ticker(tk_metal).history(period=f"{int(days*1.9)+60}d",
                                                 interval="1d", auto_adjust=True)
             if metal is None or len(metal) < max_h + 15:
-                return {"error": "insufficient metal history"}
+                return {"error": "insufficient metal history"}, None
             mclose = metal["Close"].astype(float)
             midx = list(mclose.index)
             frames = {n: yf.Ticker(t).history(period=f"{int(days*1.9)+60}d",
                                               interval="1d", auto_adjust=True)["Close"]
-                      for n, t in force_tk.items()}
+                      for n, t in FORCE_TICKERS.items()}
             rows: list[dict] = []
             for i in range(max_h, len(midx) - max_h):
                 t = midx[i]
@@ -273,21 +302,29 @@ enabled=bool(section.get("enabled", True)),
                     }
                 rows.append({"fwd": fwd, "forces": force_row})
             if len(rows) < 15:
-                return {"error": "too few samples", "n": len(rows)}
+                return {"error": "too few samples", "n": len(rows)}, None
+            return rows, horizons
         except Exception as e:  # pragma: no cover
-            return {"error": str(e)}
+            return {"error": str(e)}, None
+
+    def _score_replay_row(self, symbol: str, forces: dict):
+        snaps = _assemble_prior_snapshots(forces)
+        return self._compute_metals(
+            symbol, snaps, news_sentiment=0.0, news_relevance=0.0,
+            in_blackout=False)
+
+    def _desk_hit_rate_impl(self, days: int, symbol: str) -> dict:
+        rows, horizons = self._load_replay_rows(days, symbol)
+        if rows is None:
+            return dict(horizons or {"error": "replay failed"})
+        horizons = horizons or (1, 3, 5)
 
         # Score every row (prior-close data only) and bucket by direction.
         buckets: dict[int, dict] = {}
         for h in horizons:
             buckets[h] = {"long": [], "short": [], "flat": []}
         for r in rows:
-            snaps = _assemble_prior_snapshots(r["forces"])
-            v = self._compute_metals(
-                symbol, snaps.get("DXY"), snaps.get("US10Y"), snaps.get("VIX"),
-                snaps.get("GOLD"), snaps.get("WTI"), snaps.get("COPPER"),
-                snaps.get("SPX"), snaps.get("BTC"),
-                news_sentiment=0.0, news_relevance=0.0, in_blackout=False)
+            v = self._score_replay_row(symbol, r["forces"])
             if v is None:
                 for h in horizons:
                     buckets[h]["flat"].append(r["fwd"][h])
@@ -331,64 +368,72 @@ enabled=bool(section.get("enabled", True)),
             report["verdict"] = "insufficient_samples"
         return report
 
+    def factor_attribution(self, days: int = 250, symbol: str = "XAUUSD") -> dict:
+        """Data-driven factor report card (strictly no-lookahead, 3d horizon).
+
+        For every research factor, measure how often its *own* sign agreed
+        with the realized forward move. Factors scoring below ~50% are noise
+        for this market — candidates for `desk.disabled_factors`.
+        """
+        with self._validate_lock:
+            return self._factor_attribution_impl(days, symbol)
+
+    def _factor_attribution_impl(self, days: int, symbol: str) -> dict:
+        rows, horizons = self._load_replay_rows(days, symbol)
+        if rows is None:
+            return dict(horizons or {"error": "replay failed"})
+        stats: dict[str, dict] = {}
+        for r in rows:
+            snaps = _assemble_prior_snapshots(r["forces"])
+            factors = self._metal_factors(
+                symbol, snaps, news_sentiment=0.0, news_relevance=0.0)
+            label = r["fwd"][3]
+            for f in factors:
+                if f.contribution == 0:
+                    continue
+                d = 1 if f.contribution > 0 else -1
+                s = stats.setdefault(f.name, {"fires": 0, "hits": 0, "long": 0, "short": 0})
+                s["fires"] += 1
+                if d == label:
+                    s["hits"] += 1
+                if d == 1:
+                    s["long"] += 1
+                else:
+                    s["short"] += 1
+        for s in stats.values():
+            s["hit_rate"] = round(s["hits"] / max(1, s["fires"]), 4)
+            n_short = s["short"]
+            n_long = s["long"]
+            s["long_share"] = round(n_long / max(1, n_long + n_short), 3)
+            s["suggest_disable"] = s["fires"] >= 20 and s["hit_rate"] < 0.5
+        ordered = sorted(stats.items(), key=lambda kv: kv[1]["hit_rate"], reverse=True)
+        return {
+            "symbol": symbol,
+            "days": days,
+            "horizon": 3,
+            "factors": ordered,
+            "best": [n for n, s in ordered[:5]],
+            "worst": [n for n, s in ordered[-5:]],
+            "disable_candidates": [n for n, s in ordered if s["suggest_disable"]],
+            "note": "hit_rate = agreement of the factor's own direction with the 3d forward move "
+                    "(coin flip = 0.50).",
+        }
+
     # -------------------------------------------------------------- metals ---
 
-    def _compute_metals(self, symbol, dxy, us10y, vix, gold, wti, copper, spx, btc,
+    def _compute_metals(self, symbol, snaps: dict,
                         *, ta_bias=0.0, ts_direction=0, ts_confidence=0.0,
                         news_sentiment=0.0, news_relevance=0.0,
-                        calendar_impact=0, in_blackout=False) -> Optional[DeskVote]:
-        factors: list[DeskFactor] = []
+                        calendar_impact=0, in_blackout=False,
+                        fund_events=None) -> Optional[DeskVote]:
+        factors = self._metal_factors(
+            symbol, snaps, ta_bias=ta_bias, ts_direction=ts_direction,
+            ts_confidence=ts_confidence, news_sentiment=news_sentiment,
+            news_relevance=news_relevance, fund_events=fund_events,
+        )
+        dxy, us10y, vix, gold = (snaps.get("DXY"), snaps.get("US10Y"),
+                                 snaps.get("VIX"), snaps.get("GOLD"))
         essential = bool(dxy and us10y and vix and gold)
-
-        def add(name: str, data: float, sign: float, weight: float, reason: str) -> None:
-            contribution = float(sign) * weight
-            factors.append(DeskFactor(
-                name=name, sign=int(np.sign(sign)) if sign else 0,
-                contribution=contribution, weight=round(weight, 3),
-                reason=reason, data=data))
-
-        if dxy:
-            d = -np.sign(dxy.change_pct_20d) if abs(dxy.change_pct_20d) > 1.0 else 0.0
-            add("DXY", dxy.change_pct_20d, d, 0.20,
-                f"USD index {dxy.change_pct_20d:+.1f}% 20d — {'soft dollar bids gold' if d > 0 else 'firm dollar drags gold' if d < 0 else 'dollar range-bound'} (inverse)")
-        if us10y:
-            y = -np.sign(us10y.change_pct_20d) if abs(us10y.change_pct_20d) > 3.0 else 0.0
-            add("US10Y", us10y.change_pct_20d, y, 0.18,
-                f"US10Y {us10y.change_pct_20d:+.1f}% 20d — {'falling real-yield proxy lifts gold' if y > 0 else 'rising yields pressure gold' if y < 0 else 'yields flat'}")
-        if vix:
-            v = 1.0 if vix.last > 22 else (0.0 if vix.last > 16 else -0.3)
-            add("VIX", vix.last, v, 0.14,
-                f"VIX {vix.last:.1f} — {'risk-off, gold as safe haven' if v > 0 else 'calm tape, less fear-bid for gold' if v < 0 else 'mild risk tone'}")
-        if gold:
-            g = np.sign(gold.change_pct_20d) if abs(gold.change_pct_20d) > 1.5 else 0.0
-            add("GOLD_trend", gold.change_pct_20d, g, 0.16,
-                f"gold futures {gold.change_pct_20d:+.1f}% 20d — {'momentum buyers in the tape' if g > 0 else 'downtrend flows' if g < 0 else 'consolidation'}",)
-        if copper:
-            c = np.sign(copper.change_pct_20d) if abs(copper.change_pct_20d) > 2.0 else 0.0
-            add("COPPER", copper.change_pct_20d, c, 0.08,
-                f"Copper {copper.change_pct_20d:+.1f}% 20d — Dr. Copper {'signals global reflation (gold bid)' if c > 0 else 'warns of demand softness' if c < 0 else 'flat'}")
-        if spx and spx.regime == "risk_off":
-            add("SPX", 0.0, 0.5, 0.08, "equities in risk-off — flight to gold")
-        if wti:
-            # Oil shock = inflation bid; collapse = deflation/recession tone.
-            w = np.sign(wti.change_pct_5d) if abs(wti.change_pct_5d) > 4.0 else 0.0
-            s = 0.5 if w > 0 else (-0.5 if w < 0 else 0.0)
-            add("WTI", wti.change_pct_5d, s, 0.06,
-                f"WTI {wti.change_pct_5d:+.1f}% 5d — {'inflation-hedge bid' if s > 0 else 'deflationary tone' if s < 0 else 'oil quiet'}")
-        if btc:
-            b = np.sign(btc.change_pct_20d) if abs(btc.change_pct_20d) > 3.0 else 0.0
-            s = -0.3 if b > 0 else (0.3 if b < 0 else 0.0)
-            add("BTC", btc.change_pct_20d, s, 0.04,
-                f"BTC {btc.change_pct_20d:+.1f}% 20d — {'risk-appetite high, gold bid eases' if s < 0 else 'risk-off flows into metals' if s > 0 else 'neutral'}")
-        add("TA", ta_bias, np.clip(float(ta_bias) / 3.0, -0.3, 0.3), 0.02,
-            f"local technicals {ta_bias:+.2f} — short-term confirmation")
-        if ts_direction != 0 and abs(ts_confidence) > 0.4:
-            add("TimesFM", float(ts_direction), float(ts_direction) * 0.5, 0.04,
-                f"foundation-model forecast {ts_direction:+d} (conf {ts_confidence:.2f})")
-
-        if news_relevance >= 0.5 and abs(news_sentiment) > 0.05:
-            add("News", news_sentiment, np.clip(news_sentiment * 0.5, -0.4, 0.4), 0.04,
-                f"commodity news tone {news_sentiment:+.2f}")
 
         score, confidence, pos_n, neg_n = self._aggregate(factors)
         stale = not essential
@@ -411,7 +456,7 @@ enabled=bool(section.get("enabled", True)),
             return None  # nothing actionable, stay out — honest abstention
 
         narrative = self._narrative(direction, score, factors, stale, calendar_impact, in_blackout)
-        crowd = self._crowd_read(vix, dxy, gold, btc, direction)
+        crowd = self._crowd_read(vix, dxy, gold, snaps.get("BTC"), direction)
         vote = DeskVote(
             symbol=symbol, score=score, direction=direction,
             confidence=round(confidence, 3), factors=factors,
@@ -421,6 +466,130 @@ enabled=bool(section.get("enabled", True)),
         with self._lock:
             self._votes[symbol] = vote
         return vote
+
+    def _metal_factors(self, symbol, snaps: dict,
+                       *, ta_bias=0.0, ts_direction=0, ts_confidence=0.0,
+                       news_sentiment=0.0, news_relevance=0.0,
+                       fund_events=None) -> list[DeskFactor]:
+        """Build the research-factor stack for a metal. Pure + deterministic —
+        shared by live compute, the no-lookahead replay and factor attribution."""
+        dxy, us10y, vix, gold = (snaps.get("DXY"), snaps.get("US10Y"),
+                                 snaps.get("VIX"), snaps.get("GOLD"))
+        wti = snaps.get("WTI") or snaps.get("USO")
+        copper, spx, btc, tip = (snaps.get("COPPER"), snaps.get("SPX"),
+                                 snaps.get("BTC"), snaps.get("TIP"))
+        gdx, slv, dbc = snaps.get("GDX"), snaps.get("SLV"), snaps.get("DBC")
+        factors: list[DeskFactor] = []
+
+        def add(name: str, data: float, sign: float, weight: float, reason: str) -> None:
+            if name in self.disabled_factors:
+                return
+            contribution = float(sign) * weight
+            factors.append(DeskFactor(
+                name=name, sign=int(np.sign(sign)) if sign else 0,
+                contribution=contribution, weight=round(weight, 3),
+                reason=reason, data=data))
+
+        if dxy:
+            d = -np.sign(dxy.change_pct_20d) if abs(dxy.change_pct_20d) > 1.0 else 0.0
+            add("DXY", dxy.change_pct_20d, d, 0.18,
+                f"USD index {dxy.change_pct_20d:+.1f}% 20d — {'soft dollar bids gold' if d > 0 else 'firm dollar drags gold' if d < 0 else 'dollar range-bound'} (inverse)")
+        if us10y:
+            y = -np.sign(us10y.change_pct_20d) if abs(us10y.change_pct_20d) > 3.0 else 0.0
+            add("US10Y", us10y.change_pct_20d, y, 0.16,
+                f"US10Y {us10y.change_pct_20d:+.1f}% 20d — {'falling real-yield proxy lifts gold' if y > 0 else 'rising yields pressure gold' if y < 0 else 'yields flat'}")
+        if tip:
+            r = np.sign(tip.change_pct_20d) if abs(tip.change_pct_20d) > 0.8 else 0.0
+            add("TIP_real", tip.change_pct_20d, r, 0.10,
+                f"TIPS {tip.change_pct_20d:+.1f}% 20d — {'real yields falling, gold bid' if r > 0 else 'real yields rising, gold pressured' if r < 0 else 'real rates flat'}")
+        if vix:
+            v = 1.0 if vix.last > 22 else (0.0 if vix.last > 16 else -0.3)
+            add("VIX", vix.last, v, 0.12,
+                f"VIX {vix.last:.1f} — {'risk-off, gold as safe haven' if v > 0 else 'calm tape, less fear-bid for gold' if v < 0 else 'mild risk tone'}")
+        if gold:
+            g = np.sign(gold.change_pct_20d) if abs(gold.change_pct_20d) > 1.5 else 0.0
+            add("GOLD_trend", gold.change_pct_20d, g, 0.14,
+                f"gold futures {gold.change_pct_20d:+.1f}% 20d — {'momentum buyers in the tape' if g > 0 else 'downtrend flows' if g < 0 else 'consolidation'}")
+        if gdx:
+            m = np.sign(gdx.change_pct_20d) if abs(gdx.change_pct_20d) > 2.0 else 0.0
+            add("GDX_flow", gdx.change_pct_20d, m, 0.08,
+                f"miners {gdx.change_pct_20d:+.1f}% 20d — {'miners leading gold higher' if m > 0 else 'miners confirming weakness' if m < 0 else 'miners flat'}")
+        if slv and gold and slv.last > 0 and slv.last is not None:
+            ratio = float(gold.last) / float(slv.last)
+            s = (-0.25 if ratio > 80 else (0.2 if ratio < 60 else 0.0))
+            add("XAU_SLV", ratio, s, 0.04,
+                f"gold/silver {ratio:.1f} — {'gold stretched vs silver (mean-reversion caution)' if s < 0 else 'ratio cheap, reflation bid' if s > 0 else 'ratio mid-range'}")
+        if copper:
+            c = np.sign(copper.change_pct_20d) if abs(copper.change_pct_20d) > 2.0 else 0.0
+            add("COPPER", copper.change_pct_20d, c, 0.07,
+                f"Copper {copper.change_pct_20d:+.1f}% 20d — Dr. Copper {'signals global reflation (gold bid)' if c > 0 else 'warns of demand softness' if c < 0 else 'flat'}")
+        if dbc:
+            b = np.sign(dbc.change_pct_20d) if abs(dbc.change_pct_20d) > 2.0 else 0.0
+            add("DBC", dbc.change_pct_20d, b, 0.05,
+                f"commodity basket {dbc.change_pct_20d:+.1f}% 20d — {'broad commodity bid lifts metals' if b > 0 else 'broad commodity weakness' if b < 0 else 'basket flat'}")
+        if spx and spx.regime == "risk_off":
+            add("SPX", 0.0, 0.5, 0.07, "equities in risk-off — flight to gold")
+        if gold and spx:
+            rel = gold.change_pct_20d - spx.change_pct_20d
+            if abs(rel) > 4.0:
+                s = 0.5 if rel > 0 else -0.5
+                add("gold_vs_spx", rel, s, 0.04,
+                    f"gold {rel:+.1f}% vs SPX over 20d — {'safe-haven crowding, momentum' if s > 0 else 'gold lagging, risk appetite elsewhere' if s < 0 else 'neutral'}")
+        if wti:
+            w = np.sign(wti.change_pct_5d) if abs(wti.change_pct_5d) > 4.0 else 0.0
+            s = 0.5 if w > 0 else (-0.5 if w < 0 else 0.0)
+            add("WTI", wti.change_pct_5d, s, 0.05,
+                f"oil {wti.change_pct_5d:+.1f}% 5d — {'inflation-hedge bid' if s > 0 else 'deflationary tone' if s < 0 else 'oil quiet'}")
+        if btc:
+            b = np.sign(btc.change_pct_20d) if abs(btc.change_pct_20d) > 3.0 else 0.0
+            s = -0.3 if b > 0 else (0.3 if b < 0 else 0.0)
+            add("BTC", btc.change_pct_20d, s, 0.03,
+                f"BTC {btc.change_pct_20d:+.1f}% 20d — {'risk-appetite high, gold bid eases' if s < 0 else 'risk-off flows into metals' if s > 0 else 'neutral'}")
+        add("TA", ta_bias, np.clip(float(ta_bias) / 3.0, -0.3, 0.3), 0.02,
+            f"local technicals {ta_bias:+.2f} — short-term confirmation")
+        if ts_direction != 0 and abs(ts_confidence) > 0.4:
+            add("TimesFM", float(ts_direction), float(ts_direction) * 0.5, 0.04,
+                f"foundation-model forecast {ts_direction:+d} (conf {ts_confidence:.2f})")
+
+        if news_relevance >= 0.5 and abs(news_sentiment) > 0.05:
+            add("News", news_sentiment, np.clip(news_sentiment * 0.5, -0.4, 0.4), 0.04,
+                f"commodity news tone {news_sentiment:+.2f}")
+
+        if fund_events:
+            bubble = float(np.clip(np.mean([e.get("sentiment", 0.0) for e in fund_events]) * 1.5,
+                                   -1.0, 1.0))
+            head = (fund_events[0].get("title", "") or "")[:72]
+            add("FUND", bubble, bubble, 0.06,
+                f"{len(fund_events)} fundamental catalyst(s) — e.g. “{head}”")
+
+        return factors
+
+    def _news_events(self, limit: int = 6) -> list[dict]:
+        """Scan the recent tape for *fundamental* commodity catalysts and tag
+        them by category. Same cached RSS items the rest of the system uses."""
+        if self.news is None or not self.news.enabled:
+            return []
+        out: list[dict] = []
+        for item in self.news.items_for_symbol("XAUUSD", max_age_seconds=5400):
+            blob = (item.title + " " + item.summary).lower()
+            cat = None
+            for category, keys in FUND_EVENTS.items():
+                if any(k in blob for k in keys):
+                    cat = category
+                    break
+            if cat is not None:
+                out.append({"category": cat, "title": item.title,
+                            "sentiment": round(float(item.sentiment), 3),
+                            "source": item.source})
+            if len(out) >= limit:
+                break
+        return out
+
+    def news_events(self) -> list[dict]:
+        with self._lock:
+            if self.news is None or not self.news.enabled:
+                return []
+        return self._news_events()
 
     def _compute_energy(self, symbol, dxy, wti, vix, btc,
                         *, ta_bias=0.0, news_sentiment=0.0, news_relevance=0.0,
@@ -437,6 +606,10 @@ enabled=bool(section.get("enabled", True)),
         if vix and vix.last > 28:
             factors.append(DeskFactor("risk", -1, -0.15, 0.15,
                                       "stress tape caps energy rallies"))
+        if news_relevance >= 0.5 and abs(news_sentiment) > 0.1:
+            factors.append(DeskFactor("News", int(np.sign(news_sentiment)),
+                                      news_sentiment * 0.15, 0.10,
+                                      f"energy news tone {news_sentiment:+.2f}"))
         score, confidence = self._aggregate(factors)[:2]
         if calendar_impact >= 3 or in_blackout:
             if in_blackout:

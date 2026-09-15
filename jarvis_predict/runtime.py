@@ -1141,6 +1141,8 @@ class JarvisRuntime:
             "forces": forces_state,
             "news": news_state,
             "votes": self.desk.snapshot(),
+            "events": self.desk.news_events() if self.desk.enabled else [],
+            "disabled_factors": sorted(self.desk.disabled_factors),
             "symbols": [s for s in self.bridge.symbols
                         if self.desk._instrument_sector(s) is not None]
             if hasattr(self.bridge, "symbols") else [],

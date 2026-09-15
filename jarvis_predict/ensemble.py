@@ -257,6 +257,28 @@ class EnsembleFusion:
         else:
             direction = 1 if weighted > 0 else -1
 
+        # --- Desk veto ---------------------------------------------------------
+        # A *high-conviction* commodities-desk macro read can suppress a
+        # contrarian, under-supported ensemble call. Macro says "the flow is
+        # going the other way" — local-ta/latest-momentum votes at low model
+        # agreement shouldn't fight the tape. Requires >=3 aligned ML models to
+        # override the desk; otherwise stand aside (HOLD) rather than trade it.
+        desk_info = per_source.get("desk", {})
+        if (direction != 0 and not desk_info.get("skipped", False)
+                and desk_info.get("confidence", 0.0) >= 0.85):
+            desk_dir = int(desk_info.get("raw_direction", 0))
+            aligned_models = sum(
+                1 for f in ctx.model_forecasts
+                if f.status == "ok" and f.direction == direction)
+            if desk_dir != 0 and desk_dir != direction and aligned_models < 3:
+                per_source["desk"]["veto"] = True
+                per_source["desk"]["veto_reason"] = (
+                    f"macro desk {desk_dir:+d} (conf {desk_info.get('confidence', 0.0):.2f}) "
+                    f"opposes ensemble {direction:+d}; only {aligned_models} model(s) aligned"
+                )
+                direction = 0
+                confidence = min(confidence, 0.4)
+
         regime = self.forces_service.regime() if self.forces_service else "neutral"
 
         return FusionResult(

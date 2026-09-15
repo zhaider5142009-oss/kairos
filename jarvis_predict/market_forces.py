@@ -41,6 +41,12 @@ DEFAULT_FORCES: list[dict] = [
     {"name": "WTI",        "yahoo": "CL=F",      "kind": "energy"},
     {"name": "COPPER",     "yahoo": "HG=F",      "kind": "metals"},
     {"name": "BTC",        "yahoo": "BTC-USD",   "kind": "crypto"},
+    # --- institutional depth (free, same 15-min-delayed tape) ---------------
+    {"name": "TIP",        "yahoo": "TIP",       "kind": "reals"},   # TIPS ETF → real-rates direction
+    {"name": "GDX",        "yahoo": "GDX",       "kind": "miners"},  # gold miners lead the metal
+    {"name": "SLV",        "yahoo": "SLV",       "kind": "metals"},  # silver ETF (gold/silver ratio)
+    {"name": "USO",        "yahoo": "USO",       "kind": "energy"},  # crude ETF
+    {"name": "DBC",        "yahoo": "DBC",       "kind": "comm"},    # broad commodity basket
 ]
 
 
@@ -311,7 +317,20 @@ def _classify_regime(kind: str, chg5: float, chg20: float, last: float) -> tuple
         if chg5 < -2:
             return ("bear", -1)
         return ("neutral", 0)
-    # Metals / energy / crypto — generic trend.
+    if kind == "reals":
+        # TIPS ETF price: UP = real yields FALLING = dovish for gold.
+        if chg20 > 3:
+            return ("real_yields_falling", 1)
+        if chg20 < -3:
+            return ("real_yields_rising", -1)
+        return ("neutral", 0)
+    if kind == "miners":
+        if chg20 > 4:
+            return ("miners_outperform", 1)
+        if chg20 < -4:
+            return ("miners_underperform", -1)
+        return ("neutral", 0)
+    # Metals / energy / crypto / commodity basket — generic trend.
     if chg20 > 5:
         return ("uptrend", 1)
     if chg20 < -5:

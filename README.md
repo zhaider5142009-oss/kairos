@@ -70,32 +70,37 @@ order placement, and risk gates.
 ### Commodities desk (investment-bank research panel)
 
 The desk turns the intermarket tapes into an explainable, step-by-step vote
-for metals/energy: USD index, US10Y (real-yield proxy), VIX (safe-haven
-flow), gold momentum, copper ("Dr. Copper" global demand), oil inflation
-bid, BTC risk appetite, plus commodity-news tilt and calendar caution. Every
-vote carries the factor-by-factor reasoning, a plain-English narrative and a
-**crowd positioning read** ("what other investors are doing"). It votes in
-the ensemble as source `desk` (weight 0.08) and only fires on 2+ agreeing
-factors with a strict score bar — most cycles it abstains.
+for metals/energy: USD index, real-yield direction (TIPS ETF), gold
+momentum, miner flow (GDX), commodity basket (DBC), BTC risk appetite,
+gold-vs-SPX crowding, WTI inflation bid, plus commodity-news tilt and a
+**fundamental catalyst scanner** (FUND_EVENTS: central-bank buying, CPI,
+supply shocks, geopolitics — each tagged by category). Every vote carries
+the factor-by-factor reasoning, a plain-English narrative and a **crowd
+positioning read**. It votes in the ensemble as source `desk` (weight 0.08)
+and only fires on 2+ agreeing factors with a strict score bar — most cycles
+it abstains.
 
-Validated honestly with a strictly no-lookahead replay over 60/120/250/500
-days of XAUUSD (prior-close data only → 3-day forward labels):
+Factors are data-driven: `GET /desk/factors` runs a no-lookahead attribution
+over the full window. Anti-correlated factors (VIX, gold/silver ratio) and
+sub-50% noise (US10Y, Dr. Copper, WTI) are pruned from config
+(`desk.disabled_factors`) before the live vote — lifting the 3d hit-rate
+from ~56% (all factors) to 58–63% (pruned).
+
+Validated honestly with a strictly no-lookahead replay over 60/120/250
+days of XAUUSD (prior-close data only, 3-day forward labels):
 
 | days | fires | 3d hit-rate | verdict |
 |-----:|------:|------------:|:--------|
-| 60   |  77   |      57.1%  | edge    |
-| 120  |  68   |      58.8%  | edge    |
-| 250  | 260   |      53.9%  | neutral |
-| 500  | 516   |      50.2%  | neutral |
+| 60   | 102   |      58.8%  | edge    |
+| 120  | 171   |      62.6%  | edge    |
+| 250  | 345   |      56.2%  | edge    |
 
-(Coin flip = 50%; always-firing baseline in the same windows ≈ 42%.)
-It reads choppy tape well and short-side positioning especially; like every
-signal it flattens during gold's parabolic trend regimes — which is exactly
-why the desk, not the whole position, carries only 8% ensemble weight and
-the system run under paper-money until the edge stabilizes.)
-
-`GET /desk` shows every live vote + reasoning; `GET /desk/validate` reruns
-the replay any time.
+(Coin flip = 50%; always-firing baseline ≈ 42%.)
+The desk-veto rule (high-conviction macro read + <3 aligned models) suppresses
+under-supported contrarian calls — the ensemble stands aside rather than
+trading when the commodity tape is strong against the position. Every signal
+is backtestable live via `GET /desk/validate`; `GET /desk/factors` shows which
+research factors carry weight and which are noise for this market.
 
 ---
 

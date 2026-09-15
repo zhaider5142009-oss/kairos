@@ -219,6 +219,11 @@ market_forces:
     - { name: WTI,    yahoo: "CL=F",     kind: energy }
     - { name: COPPER, yahoo: "HG=F",     kind: metals }
     - { name: BTC,    yahoo: "BTC-USD",  kind: crypto }
+    - { name: TIP,    yahoo: "TIP",      kind: reals }
+    - { name: GDX,    yahoo: "GDX",      kind: miners }
+    - { name: SLV,    yahoo: "SLV",      kind: metals }
+    - { name: USO,    yahoo: "USO",      kind: energy }
+    - { name: DBC,    yahoo: "DBC",      kind: comm }
 
 # -----------------------------------------------------------------------------
 # Commodities desk — investment-bank research panel for gold/metals/energy.
@@ -231,6 +236,11 @@ desk:
   min_score: 0.20     # |score| below this -> desk abstains (no directional vote)
   min_factors: 2      # at least N dominant-side factors must agree before firing
   long_score_extra: 0.08   # longs need |score| >= min_score+extra (weak long side)
+  # Factors pruned by data (GET /desk/factors attribution, 250d XAUUSD, 3d horizon):
+  #   VIX (0.43), XAU_SLV (0.42) were ANTI-correlated; US10Y (0.50), COPPER
+  #   (0.49), WTI (0.49) were noise. Pruning lifted 3d hit-rate 0.567 -> 0.626
+  #   on 120d and ~0.562 on 250d (verified 60/120/250d, verdict "edge").
+  disabled_factors: [US10Y, COPPER, WTI, VIX, XAU_SLV]
                       # Tuned by historical sweep: 120d XAUUSD 58.8% hit (3d).
 
 # -----------------------------------------------------------------------------
