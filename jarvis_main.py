@@ -16,9 +16,32 @@ exits immediately.
 from __future__ import annotations
 
 import ctypes
+import os
 import sys
 import webbrowser
 from pathlib import Path
+
+
+def _force_utf8_console() -> None:
+    """Windows consoles default to a legacy codepage (cp1252 on en-US). Any
+    emoji/unicode in logs or stdout then raises UnicodeEncodeError and can
+    crash a thread. Reconfigure the process streams to UTF-8 with a lossless
+    fallback before anything else logs."""
+    try:
+        os.environ["PYTHONUTF8"] = "1"
+        os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    except Exception:
+        pass
+    for name in ("stdout", "stderr"):
+        try:
+            stream = getattr(sys, name)
+            if stream is not None and hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+_force_utf8_console()
 
 _ROOT_MUTEX: int | None = None
 

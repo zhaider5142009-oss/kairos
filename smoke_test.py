@@ -96,7 +96,13 @@ if len(sig.models) > 14:
 runtime = JarvisRuntime(cfg)
 print("[OK] JarvisRuntime constructed")
 print(f"     fleet size: {len(runtime.fleet.models)}")
-print(f"     http routes: {sorted({r.path for r in runtime.http.app.routes})}")
+try:
+    app_obj = getattr(runtime.http, "app", None)
+    inner = getattr(app_obj, "app", app_obj)
+    routes = sorted({r.path for r in getattr(inner, "routes", [])})
+    print(f"     http routes ({len(routes)}): {routes[:6]}{'...' if len(routes) > 6 else ''}")
+except Exception as e:
+    print(f"     http routes: (unreadable: {e})")
 
 print()
 print("=== ALL 12-model fleet tests passed ===")

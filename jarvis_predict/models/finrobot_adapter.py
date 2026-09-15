@@ -88,12 +88,15 @@ class FinRobotAnalystAdapter(PredictiveModel):
         point = np.linspace(last, target, horizon, dtype=np.float32)
         direction = 1 if composite > 0.1 else (-1 if composite < -0.1 else 0)
         confidence = float(np.clip(abs(composite) * 0.8 + 0.1, 0.0, 0.9))
+        # Expected return must match the actual projected path, not the
+        # composite score (the composite saturates at ±1, so ±100% was a bug).
+        expected_return_pct = float((point[-1] - last) / last * 100.0)
         return ModelForecast(
             model_name=self.name, family=self.family,
             point=point, quantiles=None,
             horizon=horizon,
             direction=direction,
-            expected_return_pct=composite * 100.0,
+            expected_return_pct=expected_return_pct,
             confidence=confidence,
             inference_ms=2.0,
             status="ok",

@@ -93,7 +93,7 @@ class ChronosAdapter(PredictiveModel):
         t = torch.from_numpy(ctx)
         with torch.no_grad():
             quantiles, mean = self._pipeline.predict_quantiles(
-                context=t,
+                inputs=t,
                 prediction_length=horizon,
                 quantile_levels=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
             )

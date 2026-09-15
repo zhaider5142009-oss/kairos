@@ -1,6 +1,7 @@
 /* =============================================================
    Jarvis — Predictive Trading UI client
-   v1.3: WebSocket-driven, keyboard-first, trading cockpit.
+   v2.0: WebSocket-driven, keyboard-first, trading cockpit.
+         Dark/light/auto themes, focus-visible, system accent.
    ============================================================= */
 "use strict";
 
@@ -101,6 +102,44 @@ async function api(path, opts = {}) {
     throw new Error(`${r.status} ${msg}`);
   }
   return r.json();
+}
+
+// ================= Theme (dark / light / auto) =================
+const THEME_KEY = "jarvis_theme";
+function getThemePref() { return localStorage.getItem(THEME_KEY) || "auto"; }
+function themeMode(pref) {
+  return pref === "auto"
+    ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+    : pref;
+}
+function applyTheme(pref) {
+  document.documentElement.dataset.theme = themeMode(pref);
+}
+function renderThemeBtn() {
+  const btn = $("#theme-toggle");
+  if (!btn) return;
+  const pref = getThemePref();
+  btn.textContent = pref === "dark" ? "☀" : pref === "light" ? "☾" : "◐";
+  btn.title = pref === "auto"
+    ? "Theme: auto (follows system) — click: dark"
+    : pref === "dark"
+      ? "Theme: dark — click: light"
+      : "Theme: light — click: auto";
+  btn.setAttribute("aria-label", btn.title);
+}
+function cycleTheme() {
+  const pref = getThemePref();
+  const next = pref === "dark" ? "light" : pref === "light" ? "auto" : "dark";
+  localStorage.setItem(THEME_KEY, next);
+  applyTheme(next);
+  renderThemeBtn();
+  toast(`🎨 ${next[0].toUpperCase() + next.slice(1)} theme`);
+}
+$("#theme-toggle")?.addEventListener("click", cycleTheme);
+if (matchMedia) {
+  matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => {
+    if (getThemePref() === "auto") applyTheme("auto");
+  });
 }
 
 // ================= View switching =================
@@ -278,6 +317,12 @@ document.addEventListener("keydown", e => {
     const input = $("#chat-input");
     input.focus();
     renderSlash("/");
+    return;
+  }
+  // Alt+T → cycle theme
+  if (e.key === "t" && e.altKey && !e.ctrlKey && !e.metaKey) {
+    e.preventDefault();
+    cycleTheme();
     return;
   }
   // Ctrl+Shift+C → cancel all pending
@@ -1270,6 +1315,7 @@ function riskCardHTML() {
 }
 
 // ================= Boot =================
+renderThemeBtn();
 connectWS();
 refreshStatus();
 refreshMT5();

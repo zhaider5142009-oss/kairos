@@ -1,9 +1,12 @@
 /* ============================================================
    Jarvis — ChatGPT-style Predictive Trading UI
-   Dark, airy, glassy. Sidebar carries every control.
-   v1.2 — polished, animated, responsive.
+   Dark + professional light themes (data-theme on <html>).
+   One variable set drives both schemes; surfaces use semantic
+   tokens so nothing hardcoded leaks between themes.
+   v2.0 — themes, focus rings, reduced-motion, form polish.
    ============================================================ */
 :root {
+  color-scheme: dark;
   --bg-0:      #0b0e14;
   --bg-1:      #11151f;
   --bg-2:      #171c29;
@@ -27,13 +30,66 @@
   --t:         140ms cubic-bezier(.4,0,.2,1);
   --font: 'Inter', 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', sans-serif;
   --mono: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+  /* semantic surfaces — the ONLY surfaces that must adapt per theme */
+  --side-0:     rgba(17,21,31,.96);
+  --side-1:     rgba(13,17,25,.98);
+  --panel-a:    rgba(23,28,41,.75);
+  --panel-b:    rgba(17,21,31,.85);
+  --composer-0: rgba(11,14,20,.9);
+  --ticker-0:   rgba(17,21,31,.92);
+  --ticker-1:   rgba(13,17,25,.96);
+  --bar-0:      rgba(23,28,41,.96);
+  --bar-1:      rgba(15,19,29,.98);
+  --glow-a:     rgba(16,163,127,.08);
+  --glow-b:     rgba(79,143,247,.07);
+  --spark-glow: rgba(16,163,127,.06);
+}
+
+/* ============================================================
+   LIGHT THEME — institutional bright: white panels, slate ink,
+   deeper accents for WCAG AA contrast on light surfaces.
+   ============================================================ */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg-0:      #f3f5f9;
+  --bg-1:      #ffffff;
+  --bg-2:      #e9edf3;
+  --bg-3:      #dce3ec;
+  --bg-4:      #c5cfdb;
+  --border:    #d6dee7;
+  --border-2:  #bcc8d5;
+  --text-0:    #101828;
+  --text-1:    #3d4a60;
+  --text-2:    #5f6f85;
+  --accent:    #0e9c76;
+  --accent-2:  #0a7f60;
+  --accent-glow: rgba(14,156,118,.20);
+  --warn:      #d97706;
+  --bad:       #dc2626;
+  --good:      #15803d;
+  --info:      #2563eb;
+  --shadow:    0 12px 40px rgba(15,23,42,.12);
+  --side-0:     rgba(255,255,255,.97);
+  --side-1:     rgba(247,249,252,.99);
+  --panel-a:    rgba(255,255,255,.85);
+  --panel-b:    rgba(250,251,254,.92);
+  --composer-0: rgba(255,255,255,.95);
+  --ticker-0:   rgba(255,255,255,.95);
+  --ticker-1:   rgba(247,249,252,.92);
+  --bar-0:      rgba(255,255,255,.97);
+  --bar-1:      rgba(244,246,250,.98);
+  --glow-a:     rgba(14,156,118,.07);
+  --glow-b:     rgba(37,99,235,.06);
+  --spark-glow: rgba(14,156,118,.10);
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
+::selection { background: var(--accent-glow); color: var(--text-0); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 body {
   background:
-    radial-gradient(1200px 600px at 80% -10%, rgba(16,163,127,.08), transparent 60%),
-    radial-gradient(900px 500px at -10% 110%, rgba(79,143,247,.07), transparent 55%),
+    radial-gradient(1200px 600px at 80% -10%, var(--glow-a), transparent 60%),
+    radial-gradient(900px 500px at -10% 110%, var(--glow-b), transparent 55%),
     var(--bg-0);
   color: var(--text-0);
   font-family: var(--font);
@@ -62,7 +118,7 @@ kbd {
 
 /* ============================ SIDEBAR ============================ */
 .sidebar {
-  background: linear-gradient(180deg, rgba(17,21,31,.96), rgba(13,17,25,.98));
+  background: linear-gradient(180deg, var(--side-0), var(--side-1));
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -114,6 +170,8 @@ kbd {
 }
 .icon-btn:hover { background: var(--bg-3); color: var(--text-0); border-color: var(--border-2); }
 .icon-btn.ghost { background: transparent; border-color: transparent; }
+.theme-btn { margin-left: auto; }
+.sidebar.collapsed .theme-btn { display: none; }
 .collapse-btn { position: absolute; top: 2px; right: 4px; width: 26px; height: 26px; }
 
 .search-box {
@@ -187,7 +245,7 @@ kbd {
   width: 100%; height: 46px;
   margin: 8px 0 6px;
   background:
-    linear-gradient(180deg, rgba(16,163,127,.06), transparent),
+    linear-gradient(180deg, var(--spark-glow), transparent),
     var(--bg-2);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -276,7 +334,7 @@ main { display: flex; flex-direction: column; background: transparent; overflow:
   position: relative;
   border-top: 1px solid var(--border);
   padding: 12px 24px 14px;
-  background: linear-gradient(180deg, rgba(11,14,20,.9), var(--bg-0));
+  background: linear-gradient(180deg, var(--composer-0), var(--bg-0));
   max-width: 840px; width: 100%; margin: 0 auto;
   display: flex; flex-direction: column; gap: 8px;
 }
@@ -337,7 +395,7 @@ main { display: flex; flex-direction: column; background: transparent; overflow:
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .grid-models, .grid-agents { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 12px; }
 .card {
-  background: linear-gradient(180deg, rgba(23,28,41,.75), rgba(17,21,31,.85));
+  background: linear-gradient(180deg, var(--panel-a), var(--panel-b));
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 14px 16px;
@@ -349,7 +407,7 @@ main { display: flex; flex-direction: column; background: transparent; overflow:
 .card pre { margin: 0; font-size: 12px; font-family: var(--mono); color: var(--text-0); white-space: pre-wrap; word-break: break-word; }
 
 .model-card, .agent-card {
-  background: linear-gradient(180deg, rgba(23,28,41,.75), rgba(17,21,31,.85));
+  background: linear-gradient(180deg, var(--panel-a), var(--panel-b));
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 12px 14px;
@@ -495,7 +553,7 @@ details table th { color: var(--text-2); font-weight: 500; font-size: 11px; }
   margin-bottom: 16px;
 }
 .metric {
-  background: linear-gradient(180deg, rgba(23,28,41,.75), rgba(17,21,31,.85));
+  background: linear-gradient(180deg, var(--panel-a), var(--panel-b));
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 12px 14px;
@@ -574,7 +632,7 @@ table.tbl td b { color: var(--text-0); }
   padding: 10px 4px 4px;
 }
 .conn-card {
-  background: linear-gradient(180deg, rgba(23,28,41,.72), rgba(17,21,31,.85));
+  background: linear-gradient(180deg, var(--panel-a), var(--panel-b));
   border: 1px solid var(--border);
   border-left: 3px solid var(--text-2);
   border-radius: 10px;
@@ -623,7 +681,7 @@ button.action.danger.paused:hover { background: var(--good); color: var(--bg-0);
   bottom: 14px; z-index: 90;
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
   max-width: 92vw;
-  background: linear-gradient(180deg, rgba(23,28,41,.96), rgba(15,19,29,.98));
+  background: linear-gradient(180deg, var(--bar-0), var(--bar-1));
   border: 1px solid var(--border-2);
   border-radius: 14px;
   padding: 10px 14px;
@@ -651,7 +709,7 @@ button.action.danger.paused:hover { background: var(--good); color: var(--bg-0);
   align-items: center;
   gap: 14px;
   flex-shrink: 0;
-  background: linear-gradient(180deg, rgba(17,21,31,.92), rgba(13,17,25,.96));
+  background: linear-gradient(180deg, var(--ticker-0), var(--ticker-1));
   border-bottom: 1px solid var(--border);
   padding: 6px 16px;
   width: 100%;
@@ -700,10 +758,47 @@ button.action.danger.paused:hover { background: var(--good); color: var(--bg-0);
   .sidebar .brand-text, .sidebar .search-box,
   .sidebar .nav-item span, .sidebar .nav-item i,
   .sidebar .status-bar { display: none; }
+  .sidebar .theme-btn { display: none; }
   .sidebar .nav-item { justify-content: center; padding: 11px; font-size: 17px; }
   .view { padding: 16px 16px 26px; }
   .msg { padding: 0 12px; }
   .grid-2 { grid-template-columns: 1fr; }
   .card.wide { grid-column: span 1; }
   .slash-menu { width: calc(100vw - 80px); }
+}
+
+/* ============================ FORM CONTROL POLISH ============================ */
+select, input[type="number"] {
+  background: var(--bg-2);
+  border: 1px solid var(--border-2);
+  border-radius: 10px;
+  padding: 8px 10px;
+  color: var(--text-0);
+  font-family: inherit;
+  font-size: 12.5px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color var(--t), box-shadow var(--t);
+}
+select:focus, input[type="number"]:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
+label { color: var(--text-1); }
+
+button { font-family: var(--font); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+
+/* ============================ ACCESSIBILITY ============================ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+  .view { animation: none; }
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) { color-scheme: dark; }
 }

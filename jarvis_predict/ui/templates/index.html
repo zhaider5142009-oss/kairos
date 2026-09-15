@@ -3,8 +3,23 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<meta name="color-scheme" content="dark" />
+<meta name="color-scheme" content="light dark" />
 <title>Jarvis Reborn — MT5 Algo Trader</title>
+<script>
+  /* Apply the persisted theme before first paint to avoid any flash of the
+     wrong scheme. auto → follow the OS preference. */
+  (function () {
+    try {
+      var pref = localStorage.getItem("jarvis_theme") || "auto";
+      var mode = pref === "auto"
+        ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+        : pref;
+      document.documentElement.dataset.theme = mode;
+    } catch (e) {
+      document.documentElement.dataset.theme = "dark";
+    }
+  })();
+</script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%2310a37f'/><text x='50' y='70' font-size='58' text-anchor='middle' fill='%230e1117' font-family='monospace' font-weight='700'>J</text></svg>" />
 <link rel="stylesheet" href="/static/style.css" />
 </head>
@@ -18,6 +33,7 @@
         <h1>Jarvis Reborn</h1>
         <p>Ultimate Algo Trader</p>
       </div>
+      <button id="theme-toggle" class="icon-btn ghost theme-btn" title="Theme: dark — click: light" aria-label="Toggle light/dark theme">☀</button>
       <button id="collapse-toggle" class="icon-btn ghost collapse-btn" title="Collapse sidebar ([" aria-label="Collapse sidebar">&lsaquo;</button>
     </header>
 

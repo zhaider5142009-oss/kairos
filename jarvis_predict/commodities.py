@@ -315,8 +315,8 @@ forces_service: MarketForcesService,
 
     def _desk_hit_rate_impl(self, days: int, symbol: str) -> dict:
         rows, horizons = self._load_replay_rows(days, symbol)
-        if rows is None:
-            return dict(horizons or {"error": "replay failed"})
+        if not isinstance(rows, list):
+            return dict(rows if isinstance(rows, dict) else {"error": "replay failed"})
         horizons = horizons or (1, 3, 5)
 
         # Score every row (prior-close data only) and bucket by direction.
@@ -324,10 +324,18 @@ forces_service: MarketForcesService,
         for h in horizons:
             buckets[h] = {"long": [], "short": [], "flat": []}
         for r in rows:
-            v = self._score_replay_row(symbol, r["forces"])
+            try:
+                forces = r.get("forces") if isinstance(r, dict) else None
+                if not isinstance(forces, dict):
+                    for h in horizons:
+                        buckets[h]["flat"].append(r.get("fwd", {}).get(h))
+                    continue
+                v = self._score_replay_row(symbol, forces)
+            except Exception:
+                v = None
             if v is None:
                 for h in horizons:
-                    buckets[h]["flat"].append(r["fwd"][h])
+                    buckets[h]["flat"].append(r.get("fwd", {}).get(h))
                 continue
             key = "long" if v.direction > 0 else ("short" if v.direction < 0 else "flat")
             for h in horizons:
@@ -380,14 +388,21 @@ forces_service: MarketForcesService,
 
     def _factor_attribution_impl(self, days: int, symbol: str) -> dict:
         rows, horizons = self._load_replay_rows(days, symbol)
-        if rows is None:
-            return dict(horizons or {"error": "replay failed"})
+        if not isinstance(rows, list):
+            return dict(rows if isinstance(rows, dict) else {"error": "replay failed"})
         stats: dict[str, dict] = {}
         for r in rows:
-            snaps = _assemble_prior_snapshots(r["forces"])
-            factors = self._metal_factors(
-                symbol, snaps, news_sentiment=0.0, news_relevance=0.0)
-            label = r["fwd"][3]
+            try:
+                fwd = r.get("fwd", {}) if isinstance(r, dict) else {}
+                forces = r.get("forces") if isinstance(r, dict) else None
+                if not isinstance(forces, dict) or 3 not in fwd:
+                    continue
+                snaps = _assemble_prior_snapshots(forces)
+                factors = self._metal_factors(
+                    symbol, snaps, news_sentiment=0.0, news_relevance=0.0)
+                label = fwd[3]
+            except Exception:
+                continue
             for f in factors:
                 if f.contribution == 0:
                     continue
