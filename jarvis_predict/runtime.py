@@ -145,8 +145,25 @@ class JarvisRuntime:
         # --- 12-model fleet + parallel executor -----------------------------
         # The OpenRouter client is injected into LLM-backed adapters (deepseek).
         model_specs = specs_from_config(config.section("models"))
+        # Cadence per model (cycles between reruns) — keeps LLM/network models
+        # on a cooldown while CPU models vote every cycle (ultra-efficient loop).
+        # Captured BEFORE build_fleet (which strips the scheduler-only kwarg).
+        fleet_cfg = config.section("fleet")
+        cadence_map = {
+            s.name: int(s.kwargs.get("cadence") or 1)
+            for s in model_specs
+        }
         self.fleet = build_fleet(model_specs, client=self.openrouter)
-        self.parallel = ParallelFleet(self.fleet.models)
+        self.parallel = ParallelFleet(
+            self.fleet.models,
+            cadence=cadence_map,
+            llm_default_cadence=int(fleet_cfg.get("llm_cadence", os.environ.get("JARVIS_LLM_CADENCE", "6"))),
+        )
+        # MTF strategy-analysis TTL cache — rebuild the 4-timeframe confluence
+        # view at most every `analysis_ttl_seconds` (avoids duplicate MT5 IPC +
+        # indicator math on every poll cycle).
+        self._analysis_ttl = float(config.section("strategy").get("analysis_ttl_seconds", 60.0))
+        self._analysis_cache: dict[str, tuple[float, dict, object]] = {}
 
         # --- connector layer (120 integrations across 12 categories) --------
         self.connectors = ConnectorRegistry.from_config(config)
@@ -502,6 +519,23 @@ class JarvisRuntime:
         cycle = 0
         while not self._stop.is_set():
             cycle += 1
+            self._cycle = cycle
+            cheap_only = False
+            try:
+                cheap_only = bool(self.executor.risk_paused()) or bool(
+                    getattr(self, "_drawdown_paused", False))
+            except Exception:
+                pass
+
+            # Prune expired strategy-analysis cache entries.
+            try:
+                now = time.time()
+                stale = [s for s, (ts, _, _) in self._analysis_cache.items()
+                         if now - ts > max(self._analysis_ttl * 4, 300.0)]
+                for s in stale:
+                    self._analysis_cache.pop(s, None)
+            except Exception:
+                pass
             if cycle % 10 == 0:
                 try:
                     self.executor.expire_old()
@@ -556,7 +590,7 @@ class JarvisRuntime:
             async def run_one(sym):
                 async with sem:
                     try:
-                        await self._process_symbol_async(sym)
+                        await self._process_symbol_async(sym, cheap_only=cheap_only)
                     except Exception:
                         LOGGER.exception("error processing %s", sym)
             await asyncio.gather(*(run_one(s) for s in symbols))
@@ -565,7 +599,7 @@ class JarvisRuntime:
             except asyncio.TimeoutError:
                 pass
 
-    async def _process_symbol_async(self, symbol: str) -> None:
+    async def _process_symbol_async(self, symbol: str, *, cheap_only: bool = False) -> None:
         # 1. Async MT5 rates (non-blocking).
         try:
             df = await self.async_bridge.rates(symbol)
@@ -588,46 +622,60 @@ class JarvisRuntime:
             lookback_chart=self.config.section("patterns").get("lookback_chart", 60))
 
         # 2b. Strategy engine analysis (MTF confluence, pattern recognition, hedging)
+        # — TTL-cached per symbol: the 4-timeframe view is fresh for
+        # `analysis_ttl_seconds`, so we don't re-fetch + re-compute indicators
+        # on every poll cycle. Position management still runs every cycle.
         strategy_signal = None
+        tf_data = {}
+        now = time.time()
+        cached_analysis = self._analysis_cache.get(symbol)
+        cached_hit = bool(cached_analysis and (now - cached_analysis[0]) < self._analysis_ttl)
+        cycle_num = int(getattr(self, "_cycle", 0))
         try:
-            # Build multi-timeframe data for strategy engine
-            tf_data = {}
-            for tf in [Timeframe.M15, Timeframe.H1, Timeframe.H4, Timeframe.D1]:
-                try:
-                    tf_df = await self.async_bridge.rates(symbol, timeframe=tf.value, count=100)
-                    if tf_df is not None and not tf_df.empty:
-                        tf_data[tf] = self.bridge.get_indicators(symbol, tf.value)
-                        tf_data[tf]["candles"] = tf_df.to_dict("records")
-                        tf_data[tf]["timestamp"] = time.time()
-                except Exception:
-                    pass
+            if cached_hit:
+                _ts, tf_data, strategy_signal = cached_analysis
+            else:
+                # Build multi-timeframe data for strategy engine
+                for tf in [Timeframe.M15, Timeframe.H1, Timeframe.H4, Timeframe.D1]:
+                    try:
+                        tf_df = await self.async_bridge.rates(symbol, timeframe=tf.value, count=100)
+                        if tf_df is not None and not tf_df.empty:
+                            tf_data[tf] = self.bridge.get_indicators(symbol, tf.value)
+                            tf_data[tf]["candles"] = tf_df.to_dict("records")
+                            tf_data[tf]["timestamp"] = time.time()
+                    except Exception:
+                        pass
 
-            # Get account info and positions
-            account_info = self.bridge.account_info()
-            mt5_positions = self.bridge.open_positions()
+                # Get account info and positions
+                account_info = self.bridge.account_info()
+                mt5_positions = self.bridge.open_positions()
 
-            # Run strategy engine
-            if tf_data and account_info:
-                strategy_signal = self.strategy.analyze_symbol(
-                    symbol, tf_data, account_info, mt5_positions
-                )
-                # Emit strategy signal event
-                self.dispatcher.publish(
-                    EventType.AGENTS,
-                    {"symbol": symbol, "strategy_signal": strategy_signal.__dict__},
-                    source="strategy"
-                )
-                # Apply exit / trailing / hedge management through MT5.
-                try:
-                    applied = self.strategy.apply_management()
-                    if applied:
-                        self.dispatcher.publish(
-                            EventType.PATTERN,
-                            {"symbol": symbol, "strategy_actions": applied},
-                            source="strategy"
-                        )
-                except Exception:
-                    LOGGER.exception("apply_management failed for %s", symbol)
+                # Run strategy engine
+                if tf_data and account_info:
+                    strategy_signal = self.strategy.analyze_symbol(
+                        symbol, tf_data, account_info, mt5_positions
+                    )
+                    self._analysis_cache[symbol] = (time.time(), tf_data, strategy_signal)
+
+            # Publish signal + run exit/trail/hedge management EVERY cycle —
+            # live position management must never wait for a cache expiry.
+            self.dispatcher.publish(
+                EventType.AGENTS,
+                {"symbol": symbol, "strategy_signal":
+                    strategy_signal.__dict__ if strategy_signal is not None else None,
+                 "cached": cached_hit},
+                source="strategy"
+            )
+            try:
+                applied = self.strategy.apply_management()
+                if applied:
+                    self.dispatcher.publish(
+                        EventType.PATTERN,
+                        {"symbol": symbol, "strategy_actions": applied},
+                        source="strategy"
+                    )
+            except Exception:
+                LOGGER.exception("apply_management failed for %s", symbol)
         except Exception:
             LOGGER.exception("Strategy engine failed for %s", symbol)
 
@@ -636,7 +684,10 @@ class JarvisRuntime:
             forecast_task = asyncio.get_running_loop().run_in_executor(
                 None, self.engine.forecast, close,
             )
-            fleet_task = self.parallel.forecast_all(close, horizon=16, symbol=symbol)
+            fleet_task = self.parallel.forecast_all(
+                close, horizon=16, symbol=symbol,
+                cycle=cycle_num, cheap_only=cheap_only,
+            )
             forecast, model_forecasts = await asyncio.gather(forecast_task, fleet_task)
         except Exception:
             LOGGER.exception("Forecast/fleet failed for %s", symbol)
@@ -1011,19 +1062,83 @@ class JarvisRuntime:
                 LOGGER.exception("repo probe failed")
         self._repo_pool.submit(_probe)
 
+    def fleet_snapshot(self) -> dict:
+        """GET /fleet payload — scheduler state, per-model cadence, efficiencies.
+
+        Makes the ultra-efficient polling engine observable: which models vote
+        every cycle, which are on a cooldown/LLM cadence, and whether the
+        drawdown kill-switch put the loop into `cheap_only` (zero-API) mode.
+        """
+        fleet_state = {
+            "models": [{
+                "name": m.name,
+                "family": m.family,
+                "status": m.status,
+                "cadence": self.parallel.cadence_table().get(m.name, 1),
+                "throttled": self.parallel.cadence_table().get(m.name, 1) > 1,
+                "network": self.parallel.is_network(m.name),
+            } for m in self.fleet.models],
+            "llm_default_cadence": getattr(self.parallel, "llm_default_cadence", 6),
+            "analysis_ttl_seconds": getattr(self, "_analysis_ttl", 60),
+            "cycle": int(getattr(self, "_cycle", 0)),
+        }
+        # Policy advisory: show the effective LLM run budget per 30 cycles.
+        try:
+            llm_models = [x for x in fleet_state["models"] if x["network"]]
+            rare = sum(1 for x in llm_models if x["cadence"] > 1)
+            fleet_state["llm_budget"] = {
+                "count": len(llm_models),
+                "throttled": rare,
+                "inferences_per_cycle": sum(1 / max(x["cadence"], 1) for x in llm_models),
+            }
+        except Exception:
+            pass
+        return fleet_state
+
     def repo_snapshot(self) -> dict:
-        """GET /repos payload — local quant repo integration status."""
+        """GET /repos payload — local quant repo integration status.
+
+        `prediction` maps each enabled repo to the fleet models that back it
+        (timesfm→timesfm_2.5, chronos→chronos, qlib→qlib_*, fingpt→fingpt_*,
+        finrobot→finrobot, deepseek→deepseek) so the user sees exactly which
+        of the 15 repos are actively voting in the ensemble today.
+        """
 
         def _build() -> dict:
             try:
+                by_family: dict[str, list[dict]] = {}
+                for m in self.fleet.models:
+                    by_family.setdefault(m.family, []).append({
+                        "name": m.name,
+                        "status": m.status,
+                        "available": m.is_available(),
+                    })
+                prediction: dict[str, dict] = {}
+                for r in self.repo_fabric.summary():
+                    fam = str(r.get("name", "")).lower()
+                    fam_to_repo = {"timesfm": "timesfm", "chronos": "chronos",
+                                   "qlib": "qlib", "fingpt": "fingpt",
+                                   "finrobot": "finrobot", "deepseek": "deepseek"}
+                    fam = fam_to_repo.get(r.get("name", "").lower(), r.get("name", "").lower())
+                    models = by_family.get(fam, [])
+                    prediction[r.get("name", fam)] = {
+                        "repo": r.get("name", ""),
+                        "home": r.get("home", ""),
+                        "kind": r.get("kind", ""),
+                        "fleet_models": models,
+                        "voting": sum(1 for x in models if x["available"]),
+                        "blocked": [x["name"] for x in models
+                                    if x["status"] not in ("ok", "ready") and not x["available"]],
+                    }
                 return {
                     "repos": self.repo_fabric.summary(),
                     "available": self.repo_fabric.available(),
                     "probes": self.repo_probes,
+                    "prediction": prediction,
                 }
             except Exception:
                 LOGGER.exception("repo_snapshot failed")
-                return {"repos": [], "available": [], "probes": {}}
+                return {"repos": [], "available": [], "probes": {}, "prediction": {}}
 
         return self._cached_snapshot("repos", _build)
 

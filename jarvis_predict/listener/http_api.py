@@ -263,6 +263,46 @@ class HttpListener:
                 return {"repos": [], "available": [], "probes": {}}
             return self.runtime.repo_snapshot()
 
+        @app.get("/backtest")
+        def backtest(bars: int = 400, symbol: str = "EURUSD") -> dict[str, Any]:
+            """Run the built-in walk-forward backtester (no MT5 account needed)."""
+            if self.runtime is None:
+                raise HTTPException(503, "runtime not ready")
+            try:
+                import concurrent.futures
+                from jarvis_predict.backtest import Backtester, BacktestConfig
+                bt = BacktestConfig(bars=max(64, min(int(bars), 100000)),
+                                    symbols=[str(symbol).upper()])
+                def _run() -> dict:
+                    return Backtester(self.runtime.config, bt).run()
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                    return ex.submit(_run).result(timeout=600)
+            except Exception as e:
+                LOGGER.exception("backtest failed")
+                raise HTTPException(500, f"backtest failed: {e}")
+
+        @app.get("/backtest/report")
+        def backtest_report() -> dict[str, Any]:
+            """Most recently saved backtest report (cache/backtest_report.json)."""
+            try:
+                from pathlib import Path
+                cfg = self.runtime.config if self.runtime is not None else None
+                cache_dir = cfg.section("paths")["cache_dir"] if cfg is not None \
+                    else "cache"
+                p = Path(cache_dir) / "backtest_report.json"
+                if not p.is_file():
+                    return {"report": None, "note": "no report yet — run GET /backtest"}
+                import json
+                return {"report": json.loads(p.read_text(encoding="utf-8", errors="replace"))}
+            except Exception as e:
+                raise HTTPException(500, f"report read failed: {e}")
+
+        @app.get("/fleet")
+        def fleet() -> dict[str, Any]:
+            if self.runtime is None or not hasattr(self.runtime, "fleet_snapshot"):
+                return {"models": [], "llm_default_cadence": 6}
+            return self.runtime.fleet_snapshot()
+
         @app.get("/repos/lean")
         def repos_lean() -> dict[str, Any]:
             if self.runtime is None or not hasattr(self.runtime, "lean_snapshot"):

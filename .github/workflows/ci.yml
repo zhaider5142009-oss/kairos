@@ -1,0 +1,76 @@
+name: ci
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install runtime deps
+        run: |
+          python -m pip install --upgrade pip
+          # Core CI subset (no MetaTrader5/faster-whisper on Linux runners)
+          pip install numpy pandas PyYAML pydantic requests
+
+      - name: Compile every module
+        run: |
+          python -m compileall -q jarvis_predict
+          python -c "import jarvis_predict; print('package import OK')"
+
+      - name: Config parses from portable example
+        run: |
+          cp config.example.yaml config.yaml
+          python -c "
+          import sys; sys.path.insert(0, '.')
+          from jarvis_predict.config import JarvisConfig
+          cfg = JarvisConfig.load()
+          warnings = cfg.validate() if hasattr(cfg, 'validate') else []
+          print('config OK, warnings:', warnings)
+          "
+
+      - name: Backtester constructs (no MT5 required)
+        run: |
+          python -c "
+          import sys; sys.path.insert(0, '.')
+          from jarvis_predict.backtest import Backtester
+          print('backtester import OK')
+          "
+
+      - name: ParallelFleet cadence sanity (no network)
+        run: |
+          python -c "
+          import asyncio, sys, numpy as np
+          sys.path.insert(0, '.')
+          from jarvis_predict.models.mock import MockModel
+          from jarvis_predict.parallel import ParallelFleet
+          class M(MockModel):
+              def __init__(self, name, fam, calls):
+                  super().__init__(seed=1); self.name=name; self.family=fam; self._calls=calls
+              def forecast(self, values, horizon, symbol=None):
+                  self._calls[self.name] += 1
+                  return super().forecast(values, horizon, symbol=symbol)
+          calls = {'a':0,'b':0}
+          a = M('cpu','timesfm',calls); b = M('llm','deepseek',calls)
+          pf = ParallelFleet([a,b], cadence={'llm':3})
+          async def go():
+              v = np.random.rand(64)
+              for c in (1,2,3):
+                  await pf.forecast_all(v, 8, symbol='EURUSD', cycle=c)
+          asyncio.run(go())
+          assert calls['a'] == 3, calls    # CPU model runs every cycle
+          assert calls['b'] == 2, calls    # LLM throttled (1 + re-run at 3)
+          print('cadence OK', calls)
+          "

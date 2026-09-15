@@ -1,0 +1,28 @@
+# Jarvis Reborn — optional model repos / GPU backends
+# Install only the lines you need. The base fleet (TimesFM, Chronos,
+# FinGPT, FinRobot, DeepSeek) never requires any of these.
+
+# --- DirectML GPU backend (Windows + AMD/Intel GPU) ---
+# Replaces the CPU onnxruntime from requirements.txt with the DirectML
+# provider so ONNX-inferenceable models run on the GPU.
+onnxruntime-directml==1.24.4
+
+# --- Microsoft qlib ML zoo (7 models) ---
+# NOTE: pyqlib publishes NO wheels for Python >= 3.12 and needs a C++
+# compiler to build from source. Use a Python 3.10/3.11 venv if you want
+# the qlib_lstm/gru/alstm/transformer/tcn/localformer/lgbm models.
+#   pyqlib>=0.9.5
+
+# --- QuantConnect LEAN CLI (backtest acceleration / research) ---
+#   lean-cli
+
+# --- FinRL (reinforcement-learning alphas) ---
+#   finrl>=2.0
+
+# --- FinGPT / FinRobot real-LLM paths (large) ---
+#   transformers>=4.40
+#   peft>=0.10
+#   openai>=1.30
+
+# --- Voice push-to-talk hotkey ---
+#   keyboard>=0.13.5

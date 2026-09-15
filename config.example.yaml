@@ -133,18 +133,23 @@ models:
       algo: "lgbm"
 
   # --- FinGPT (LLM-based forecaster + sentiment) ---
+  # cadence: rerun inference only every N poll cycles (default for LLM
+  # families is fleet.llm_cadence; set per model to override). Keeps the
+  # network/LLM path off the hot loop → "ultra-efficient" polling.
   fingpt_forecaster:
     family: fingpt
     enabled: true
     weight: 1.0
     kwargs:
       kind: "forecaster"
+      cadence: 6
   fingpt_sentiment:
     family: fingpt
     enabled: true
     weight: 0.8
     kwargs:
       kind: "sentiment"
+      cadence: 6
 
   # --- FinRobot (multi-agent equity analyst) ---
   finrobot_analyst:
@@ -153,6 +158,7 @@ models:
     weight: 1.0
     kwargs:
       use_llm: false   # deterministic fallback unless OpenAI/DashScope key configured
+      cadence: 6
 
   # --- DeepSeek-V4.1-Flash via OpenRouter ---
   # NOTE: DeepSeek-v4.1-Flash-DGX-Sparks on your PC is the GPU serving
@@ -164,6 +170,7 @@ models:
     kwargs:
       model: "deepseek/deepseek-chat"
       context_bars: 256
+      cadence: 6
 
 # -----------------------------------------------------------------------------
 # Pattern recognition — candle + chart patterns
@@ -333,6 +340,19 @@ strategy:
   hedge_enabled: true
   hedge_threshold_pct: 5.0
   confidence_weight: 0.6
+  # MTF analysis TTL (seconds). The 4-timeframe confluence view is rebuilt at
+  # most this often per symbol; exit/trail/hedge management still runs every
+  # poll cycle. Lower = fresher, higher = cheaper/faster.
+  analysis_ttl_seconds: 60
+
+# -----------------------------------------------------------------------------
+# Fleet scheduler — ultra-efficient polling cadence
+# -----------------------------------------------------------------------------
+fleet:
+  # Default cadence (poll cycles) for LLM/network-backed model families
+  # (fingpt, finrobot, deepseek). Set per model under `models:<name>.kwargs:
+  # cadence:` to override. CPU models (timesfm, chronos, TA…) vote every cycle.
+  llm_cadence: 6
 
 # -----------------------------------------------------------------------------
 # Cross-device / repo integration

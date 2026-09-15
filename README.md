@@ -4,11 +4,20 @@ The ultimate algo trader: an MT5-only, ultra-sophisticated forecasting +
 execution engine integrated with your local MetaTrader 5 terminal and
 QuantConnect for backtesting/live research. Ships a **trading-terminal UI**
 (sidebar carries every control, no dropdowns at the bottom), async MT5
-bridge, real-time WebSocket event stream, parallel 12-model predictive
-fleet, meta-orchestrator over DeepSeek-V3 / Kimi-K3, a risk shield
-(kill-switch, HWM drawdown, daily-loss cap), a **119-connector integration
-layer** (exchanges, data, brokers, QuantConnect/LEAN, LLMs, notifiers), and
-a Windows Scheduled Task that restarts it every minute.
+bridge, real-time WebSocket event stream, parallel predictive fleet,
+meta-orchestrator over DeepSeek, a risk shield (kill-switch, HWM drawdown,
+daily-loss cap), a **119-connector integration layer**, a **paper-money
+broker** and a **walk-forward backtester** — plus a Windows Scheduled Task
+that keeps it running permanently (5-minute keepalive).
+
+**Ultra-efficient by design.** The fleet scheduler throttles LLM/network
+models onto a cadence (default: re-compute every 6 poll cycles, reuse the
+vote in between) while CPU models (TimesFM, Chronos, TA, quantum) vote every
+cycle — cutting LLM API calls per cycle ~6x with zero loss of signal
+freshness. The 4-timeframe strategy view is rebuilt at most every 60 s, and
+when the drawdown kill-switch arms, the loop drops to **cheap-only** mode
+(zero API calls until risk clears). GPU compute runs through **ONNX Runtime
+DirectML** for AMD/Intel GPUs.
 
 **17 enabled signal sources.** TimesFM + Chronos + qlib's LSTM/GRU/
 ALSTM/Transformer/TCN/Localformer/LightGBM + FinGPT forecaster + FinGPT
@@ -172,31 +181,43 @@ traffic never blocks the prediction pipeline.
 
 ## One-time setup
 
-### 1. Install Python dependencies
+### 1. Bootstrapped install (recommended)
 
 ```powershell
-cd C:\Users\Haider\jarvis
-
-# TimesFM from your local clone (the other 5 foundation/model repos
-# are imported directly by their adapter, so they need their own deps):
-pip install -e "C:/Users/Haider/timesfm[torch]"
-pip install -r requirements.txt
-
-# Install the optional model repos (only those you want real weights for):
-pip install chronos-forecasting          # Amazon Chronos
-pip install pyqlib                       # Microsoft qlib ML zoo
-
-# FinGPT / FinRobot need LLM weights. Without them, the adapters use
-# deterministic sector-aware fallbacks (always available, useful, not stubs).
+git clone https://github.com/zhaider5142009-oss/jarvis-reborn.git
+cd jarvis-reborn
+powershell -ExecutionPolicy Bypass -File install.ps1        # venv + deps + config + launchers
+powershell -ExecutionPolicy Bypass -File install.ps1 -WithGPU   # adds DirectML GPU backend
 ```
 
-### 2. Edit `config.yaml`
+`install.ps1` creates `.venv`, installs `requirements.txt`, writes
+`config.yaml` from `config.example.yaml` (never overwrites an existing
+config), creates Desktop/Start-menu shortcuts, and registers the
+permanent launchers (logon task + 5-minute keepalive task).
 
-Set the **HTTP auth token** (`listener.http.auth_token`) to something
-strong before first launch. The `models:` section lets you turn each
-predictor on/off, set its weight, and tune its kwargs.
+### 2. Manual install
 
-### 3. Make sure MT5 is installed and you've logged in once
+```powershell
+cd jarvis-reborn
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+copy config.example.yaml config.yaml
+```
+
+Optional model repos (only what you want real weights for):
+- `pyqlib` — Microsoft qlib ML zoo (7 models). Requires Python 3.10/3.11
+  (no wheels for >= 3.12); the fleet degrades gracefully without it.
+- DirectML GPU backend — `pip install onnxruntime-directml` (Windows,
+  AMD/Intel GPU).
+
+### 3. Edit `config.yaml`
+
+Set the **HTTP auth token** (`listener.http.auth_token`) and your
+**OpenRouter API keys** (env var `OPENROUTER_API_KEYS=key1,key2`, or the
+`openrouter.api_keys` block). The `models:` section turns each predictor
+on/off and sets weight + cadence.
+
+### 4. Make sure MT5 is installed and you've logged in once
 
 `C:\Program Files\MetaTrader 5\terminal64.exe` must exist and have valid
 demo/live credentials saved. Jarvis will *not* type your password.
@@ -208,21 +229,25 @@ demo/live credentials saved. Jarvis will *not* type your password.
 ### Quick run (visible console)
 
 ```powershell
-cd C:\Users\Haider\jarvis
+cd jarvis-reborn
 .\run_jarvis.bat
 ```
 
 ### Production run (hidden, never dies)
 
+`install.ps1` already does this; to re-do it by hand:
+
 ```powershell
-cd C:\Users\Haider\jarvis
-powershell -ExecutionPolicy Bypass -File .\install_task.ps1
+powershell -ExecutionPolicy Bypass -File .\install_task.ps1      # logon task
+schtasks /Create /SC MINUTE /MO 5 /TN JarvisKeepalive /TR "powershell -NoProfile -ExecutionPolicy Bypass -File $PWD\keepalive.ps1" /F
 ```
 
-After this, Jarvis:
+Jarvis then:
 
 - Starts at next logon with no console window.
-- Restarts within 1 minute if it ever crashes (up to 3 times in a row).
+- Is **permanent**: the `JarvisKeepalive` task health-checks
+  `http://127.0.0.1:8765/health` every 5 minutes and restarts the hidden
+  process if it ever dies.
 - Shows a system-tray icon (`J` on dark navy) for status + 1-click confirm.
 - Listens for voice commands on your default microphone.
 - Exposes an HTTP API on `http://127.0.0.1:8765`.
@@ -351,6 +376,7 @@ every connected browser. Multi-tab is supported — every tab stays live.
 | GET  | `/forces` | current macro force snapshots |
 | GET  | `/calendar` | upcoming events + active blackouts |
 | GET  | `/models` | status of every model in the fleet |
+| GET  | `/fleet` | **cadence engine: per-model cadence, LLM budget, cheap-only mode** |
 | GET  | `/agents` | swarm roster + profile + last analysed symbol |
 | GET  | `/track` | model-learner performance tracking |
 | GET  | `/log` | last N log lines (`?lines=60`) |
@@ -375,31 +401,76 @@ every connected browser. Multi-tab is supported — every tab stays live.
 | POST | `/cancel-all` | cancel every staged order |
 | POST | `/kill-switch` | pause/resume the algo loop |
 | POST | `/shutdown` | graceful shutdown |
+| GET  | `/backtest` | **run the walk-forward backtester (no MT5 needed)** |
+| GET  | `/backtest/report` | last backtest report |
 
 ---
 
-## Repo integration fabric
+## Repo integration fabric — all 15 repos, honestly wired
 
 Jarvis Reborn auto-discovers the quant/trading repos already on this machine
-and exposes them as safely-degrading adapters (`Repos` view in the UI, R key):
+and exposes them as safely-degrading adapters. `GET /repos` shows **which
+repos are actively voting in the ensemble today** (`prediction` map: fleet
+models per repo, `voting` = live forecasters, `blocked` = why others can't
+vote):
 
-| Repo | Found | Purpose |
+| Repo | Contributes to prediction | Live on this machine |
 |---|---|---|
-| **LEAN** | optional | QuantConnect local backtest/research engine (`content/LEAN`) |
-| **FinRL** | optional | AI4Finance reinforcement-learning for finance |
-| **qlib** | ✓ | Microsoft AI quant platform (alphas, models, backtest) |
-| **FinGPT** | ✓ | financial LLM (sentiment, forecasting, NER, QA) |
-| **FinRobot** | ✓ | financial analyst agent platform |
-| **RD-Agent** | ✓ | automatic quant R&D agent |
-| **TradeCast** | ✓ | charting terminal on this machine |
-| **TimesFM** | ✓ | Google temporal foundation model |
-| **Chronos** | ✓ | Amazon probabilistic forecaster |
+| **TimesFM** | `timesfm` model (foundation forecaster) | ✓ |
+| **Chronos** | `chronos` model (probabilistic forecaster) | ✓ |
+| **FinGPT** | `fingpt_forecaster` + `fingpt_sentiment` (LLM) | ✓ |
+| **FinRobot** | `finrobot_analyst` (multi-agent analyst) | ✓ |
+| **DeepSeek** | `deepseek_v41` (OpenRouter-backed) | ✓ |
+| **qlib** | `qlib_lstm/gru/alstm/transformer/tcn/localformer/lgbm` — 7 models | blocked: `pyqlib` has no wheel for Py ≥ 3.12 |
+| **LEAN (QuantConnect)** | research/backtest accelerator (`/repos/lean/*`) | optional (clone `QuantConnect/Lean` → `~/LEAN`) |
+| **FinRL / RD-Agent / TradeCast** | research / charting adapters | optional |
 
-Every adapter is exception-proof and probe runs in a background worker pool;
-the trading path never blocks. Repos missing on the machine report `absent`
-and the rest of the system keeps working. To unlock LEAN locally, clone
-`QuantConnect/Lean` into `~/LEAN` (or install the `lean-cli`); FinRL needs
-`~/FinRL`.
+The trading path never blocks on repo discovery — probe runs in a
+background worker pool, and missing repos report `absent` while everything
+else keeps working.
+
+## Ultra-efficient fleet scheduler
+
+Every model declares a **cadence** (poll cycles between re-inferences).
+Deep foundation models (TimesFM, Chronos) and all bulk-math sources vote
+**every cycle**; LLM/network models (FinGPT, FinRobot, DeepSeek) default to
+`cadence: 6` and reuse their last vote in between.
+
+```yaml
+models:
+  deepseek_v41:
+    family: deepseek
+    kwargs: { model: "deepseek/deepseek-chat", cadence: 6 }
+fleet:
+  llm_cadence: 6          # default for all LLM families
+strategy:
+  analysis_ttl_seconds: 60   # MTF recompute budget per symbol
+```
+
+Observable via **`GET /fleet`** — per-model cadence, throttled flag,
+`llm_budget.inferences_per_cycle`, and the active `cycle`. When the
+drawdown kill-switch arms, the loop switches to **cheap-only** (no API
+calls) until risk clears.
+
+## Paper-money broker + walk-forward backtester
+
+- **Paper broker** (`mt5.paper_mode: true`): simulated fills over real MT5
+  data, JSONL ledger with fsync + replay, auto SL/TP, commission, circuit
+  breaker, dedup — reconciled every cycle (`recon_ok` in `/mt5`).
+- **Backtester**: `GET /backtest?bars=400&symbol=EURUSD` runs the walk-forward
+  loop (intrabar SL/TP, per-symbol caps, honest calendar-only features) and
+  saves `cache/backtest_report.json` (`GET /backtest/report`). LEAN/QuantConnect
+  can take over as the validation engine when available.
+
+## Permanent operation (never-dies)
+
+Two scheduled tasks keep Jarvis alive after any crash or reboot:
+
+- `JarvisPredictor` — starts at logon (hidden).
+- `JarvisKeepalive` — every 5 minutes, hits `/health`; restarts the hidden
+  process if the instance is dead.
+
+`install.ps1` + `create_shortcuts.ps1` register everything idempotently.
 
 ## Cross-device connectivity
 
@@ -435,12 +506,15 @@ it can't be loaded.
 | Guard | Default |
 |---|---|
 | Max open positions | 3 |
+| Max per symbol | 1 |
 | Max daily loss | -50 (account ccy) |
 | Equity drawdown cancel | 5% from high-water |
+| Drawdown kill-switch | pause at max_drawdown_pct, resume at 50% margin |
 | Confirm timeout per staged order | 60 s |
 | Min ensemble confidence | 0.45 |
 | SL distance | 1.5 × ATR |
 | TP distance | 2.5 × ATR |
+| Hedging | enabled — drawdown-triggered hedge entries (`hedge_enabled`) |
 | Per-symbol lot | 0.01 micro-lot |
 | Blackout window around FOMC/NFP/CPI | ±30 min |
 
@@ -461,7 +535,7 @@ models:
     family: my_family
     enabled: true
     weight: 1.0
-    kwargs: { ... }
+    kwargs: { ..., cadence: 1 }   # cadence > 1 = throttle inference
 ```
 
 That's it — the ensemble picks it up automatically on next restart.

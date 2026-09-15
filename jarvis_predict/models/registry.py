@@ -93,6 +93,8 @@ class ModelFleet:
 def _build_one(spec: ModelSpec, client: Any = None) -> PredictiveModel:
     """Instantiate one PredictiveModel from a spec. Falls back to MockModel on error."""
     family = spec.family.lower()
+    # `cadence` is a fleet-scheduler hint, not an adapter kwarg.
+    spec.kwargs = {k: v for k, v in spec.kwargs.items() if k != "cadence"}
     try:
         if family == "timesfm":
             from .timesfm_adapter import TimesFMAdapter
