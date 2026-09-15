@@ -71,6 +71,11 @@ class ChatBody(BaseModel):
     message: str
 
 
+class ExecutionModeBody(BaseModel):
+    mode: str
+    confirm: bool = False
+
+
 class HttpListener:
     """Runs FastAPI on a background thread + WebSocket fan-out."""
 
@@ -436,6 +441,51 @@ class HttpListener:
                 raise HTTPException(503, "runtime not ready")
             enabled = body.get("enabled", body.get("paused"))
             return self.runtime.toggle_kill_switch(paused=enabled)
+
+        @app.get("/execution/mode")
+        def execution_mode(x_jarvis_token: str | None = Header(default=None),
+                           authorization: str | None = Header(default=None)) -> dict[str, Any]:
+            _check(authorization, x_jarvis_token)
+            if self.runtime is None or not hasattr(self.runtime, "config"):
+                raise HTTPException(503, "runtime not ready")
+            mode = self.runtime.config.get_execution_mode()
+            return {
+                "mode": mode,
+                "restarting": bool(getattr(self.runtime, "_restarting", False)),
+                "supported": ["paper", "live"],
+                "paper_active": mode == "paper",
+            }
+
+        @app.post("/execution/mode")
+        def set_execution_mode(body: ExecutionModeBody,
+                               x_jarvis_token: str | None = Header(default=None),
+                               authorization: str | None = Header(default=None)) -> dict[str, Any]:
+            _check(authorization, x_jarvis_token)
+            if self.runtime is None or not hasattr(self.runtime, "config"):
+                raise HTTPException(503, "runtime not ready")
+            mode = (body.mode or "").lower()
+            if mode not in ("paper", "live"):
+                raise HTTPException(400, "mode must be 'paper' or 'live'")
+            if mode == "live" and not body.confirm:
+                raise HTTPException(400, "switching to LIVE execution requires confirm=true")
+            current = self.runtime.config.get_execution_mode()
+            if mode == current:
+                return {"ok": True, "mode": mode, "restarting": False, "changed": False}
+            # Persist, then bounce the process so the correct bridge boots cleanly.
+            self.runtime.config.set_execution_mode(mode)
+            self.runtime._restarting = True
+            try:
+                from ..restart import schedule_restart
+                schedule_restart(
+                    self.runtime.config.root,
+                    self.runtime.config.cache_dir,
+                    getattr(self.runtime.config, "path", None),
+                )
+            except Exception as e:
+                self.runtime._restarting = False
+                raise HTTPException(500, f"failed to schedule restart: {e}") from e
+            LOGGER.warning("EXECUTION MODE -> %s (restart scheduled)", mode)
+            return {"ok": True, "mode": mode, "restarting": True, "changed": True}
 
         @app.get("/pending")
         def pending() -> dict[str, Any]:

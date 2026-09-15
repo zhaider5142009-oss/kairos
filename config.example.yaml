@@ -306,6 +306,15 @@ multi_timeframe:
 # -----------------------------------------------------------------------------
 mt5:
   terminal_path: "C:/Program Files/MetaTrader 5/terminal64.exe"
+  # Execution mode: "paper" (journaled simulation on LIVE market data) or
+  # "live" (real MT5 orders to the connected broker account).
+  #   - Switch from the Web UI (MT5 card / Risk card) — a controlled restart
+  #     applies it and persists the choice to {cache_dir}/execution_mode.json.
+  #   - State file takes precedence, then execution_mode, then paper_mode.
+  #   - Going LIVE requires explicit confirmation and a real (non-demo)
+  #     broker login in MetaTrader.
+  execution_mode: paper
+  paper_mode: true
   # Symbols to monitor across all sectors. JS Global Capital symbols.
   symbols:
     - "EURUSD"

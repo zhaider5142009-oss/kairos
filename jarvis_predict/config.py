@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import os
 import sys
+import json
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -51,7 +53,9 @@ class JarvisConfig:
             data = yaml.safe_load(fh) or {}
         if not isinstance(data, dict):
             raise ValueError(f"Config root must be a mapping, got {type(data).__name__}")
-        return cls(raw=data)
+        cfg = cls(raw=data)
+        object.__setattr__(cfg, "path", path)
+        return cfg
 
     # --- convenient accessors -------------------------------------------------
 
@@ -108,6 +112,47 @@ class JarvisConfig:
             if not paths.get(key):
                 warnings.append(f"paths.{key} missing")
         return warnings
+
+    # --- execution mode (paper / live) persistence ----------------------------------
+    # State lives in {cache_dir}/execution_mode.json (atomic write, survives
+    # restarts, avoids clobbering the human-edited config.yaml).
+    # Priority: state file  →  mt5.execution_mode  →  mt5.paper_mode  →  "paper".
+
+    _EXEC_MODE_FILE = "execution_mode.json"
+
+    def _exec_mode_path(self) -> Path:
+        return self.cache_dir / self._EXEC_MODE_FILE
+
+    def get_execution_mode(self) -> str:
+        try:
+            p = self._exec_mode_path()
+            if p.is_file():
+                mode = str(json.loads(p.read_text("utf-8")).get("mode", "")).lower()
+                if mode in ("paper", "live"):
+                    return mode
+        except Exception:
+            pass
+        exc = str(self.raw.get("mt5", {}).get("execution_mode", "")).lower()
+        if exc in ("paper", "live"):
+            return exc
+        return "paper" if bool(self.raw.get("mt5", {}).get("paper_mode", True)) else "live"
+
+    def set_execution_mode(self, mode: str) -> None:
+        mode = str(mode).lower()
+        if mode not in ("paper", "live"):
+            raise ValueError(f"Invalid execution mode: {mode!r} (must be 'paper' or 'live')")
+        path = self._exec_mode_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        try:
+            tmp.write_text(json.dumps({"mode": mode}, indent=2), encoding="utf-8")
+            os.replace(str(tmp), str(path))
+        except Exception:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
+            raise
 
     def ensure_dirs(self) -> None:
         """Create on-disk directories that the config references. Idempotent."""

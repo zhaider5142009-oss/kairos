@@ -37,6 +37,8 @@ const state = {
   lastStatus: null,
   mt5: null,
   kill: false,
+  mode: "paper",
+  restarting: false,
 };
 
 const VIEWS = ["chat", "dashboard", "positions", "signals", "agents", "models",
@@ -96,7 +98,21 @@ function resolveCommand(cmd, full) {
 async function api(path, opts = {}) {
   const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
   if (state.token && !path.endsWith("/health")) headers["X-Jarvis-Token"] = state.token;
-  const r = await fetch(path, { ...opts, headers });
+  const init = { ...opts, headers };
+  if (opts.timeout) {
+    const ctl = new AbortController();
+    init.signal = ctl.signal;
+    const t = setTimeout(() => ctl.abort(), opts.timeout);
+    try {
+      const r = await fetch(path, init);
+      if (!r.ok) {
+        let msg; try { msg = (await r.json()).detail || r.statusText; } catch { msg = r.statusText; }
+        throw new Error(`${r.status} ${msg}`);
+      }
+      return r.json();
+    } finally { clearTimeout(t); }
+  }
+  const r = await fetch(path, init);
   if (!r.ok) {
     let msg; try { msg = (await r.json()).detail || r.statusText; } catch { msg = r.statusText; }
     throw new Error(`${r.status} ${msg}`);
@@ -1251,11 +1267,99 @@ function renderKillButton(paused) {
   }
 }
 
+// ================= Execution mode (paper / live) =================
+function renderExecutionMode() {
+  const m = state.mode === "live" ? "LIVE" : "PAPER";
+  const pill = $("#status-mode");
+  if (pill) {
+    pill.textContent = state.restarting ? "RESTARTING…" : m;
+    pill.className = "mode-pill " + (state.restarting
+      ? "restarting"
+      : state.mode === "live" ? "live" : "paper");
+  }
+  for (const b of $$("[data-mode-btn]")) b.disabled = state.restarting;
+  const liveBtn = $("#btn-mode-live");
+  const paperBtn = $("#btn-mode-paper");
+  if (liveBtn) liveBtn.classList.toggle("active", state.mode === "live" && !state.restarting);
+  if (paperBtn) paperBtn.classList.toggle("active", state.mode === "paper" && !state.restarting);
+  const banner = $("#mode-banner");
+  if (banner) {
+    banner.className = "mode-banner " + (state.restarting ? "restarting" : state.mode);
+    banner.innerHTML = state.restarting
+      ? `⚠ Execution <b>${state.mode.toUpperCase()}</b> applied — restarting Jarvis…`
+      : state.mode === "live"
+        ? `🔴 <b>LIVE execution</b> — real orders go to the broker account logged into MetaTrader`
+        : `🟢 <b>Paper Money</b> — simulated fills, journaled in <code>cache/paper/</code>`;
+  }
+}
+
+async function switchExecutionMode(mode) {
+  if (mode === state.mode) return;
+  const toLive = mode === "live";
+  if (state.restarting) {
+    toast("Restart in progress — the UI returns automatically", "error");
+    return;
+  }
+  if (toLive) {
+    const ok = confirm(
+      "Switch to LIVE execution?\n\n" +
+      "Real market orders will be sent to the broker account currently logged " +
+      "into MetaTrader 5.\n\n" +
+      "• Verify the terminal is logged into your REAL broker account — not demo.\n" +
+      "• Jarvis restarts automatically; trading resumes in ~40 seconds.\n\n" +
+      "Cancel to stay on Paper Money."
+    );
+    if (!ok) return;
+  }
+  try {
+    const r = await api("/execution/mode", {
+      method: "POST",
+      body: JSON.stringify({ mode, confirm: toLive }),
+    });
+    state.mode = r.mode;
+    state.restarting = !!r.restarting;
+    renderExecutionMode();
+    toast(r.restarting
+      ? `🚀 ${toLive ? "LIVE" : "Paper"} mode set — restarting (~40 s)`
+      : `✔ Execution mode: ${mode}`);
+    if (r.restarting) pollAfterRestart();
+  } catch (e) {
+    toast(`⚠ ${esc(e.message)}`, "error");
+  }
+}
+
+function pollAfterRestart() {
+  const t0 = Date.now();
+  const iv = setInterval(async () => {
+    const dead = Date.now() - t0 > 120000;
+    try {
+      const m = state.mode;
+      const r = await api("/execution/mode", { timeout: 4000 });
+      if (r.mode === m && !r.restarting) {
+        clearInterval(iv);
+        toast("✔ Restart complete — execution mode applied");
+        await refreshStatus();
+        await refreshMT5();
+        renderExecutionMode();
+        if (state.view === "dashboard") refreshDashboard();
+      } else if (dead) {
+        clearInterval(iv);
+        toast("⚠ Restart still pending — refresh the page", "error");
+      }
+    } catch {
+      if (dead) { clearInterval(iv); toast("⚠ Jarvis offline after restart", "error"); }
+    }
+  }, 3000);
+}
+
 async function refreshMT5() {
   try {
     const j = await api("/mt5");
     const t0 = Date.now();
     state.mt5 = j;
+    if (j.execution_mode && !j.restarting) state.mode = j.execution_mode;
+    if (typeof j.restarting === "boolean") state.restarting = j.restarting;
+    renderExecutionMode();
     const acc = j.account || {};
     const term = j.terminal || {};
     if (j.connected) {
@@ -1281,21 +1385,29 @@ function mt5CardHTML() {
   const j = state.mt5;
   if (!j) return '<p class="hint">Connecting to MetaTrader 5…</p>';
   const term = j.terminal || {};
+  const modeRow = `
+    <div class="row"><span>Execution</span>
+      <b><span class="mode-value ${state.mode === "live" ? "live" : "paper"}">${state.mode === "live" ? "LIVE" : "Paper Money"}</span></b>
+    </div>`;
   if (!j.connected) return `
+    <div id="mode-banner"></div>
     <div class="conn-flag off"><b>MetaTrader 5 not connected</b></div>
     <div class="meta">Run <code>terminal64.exe</code> and log into your broker to activate algo execution.</div>
     <div class="row"><span>Terminal</span><b>${esc((term.terminal_path || "default path"))}</b></div>
     <div class="row"><span>Symbols watched</span><b>${(j.symbols || []).length}</b></div>
-    <div class="row"><span>Timeframe</span><b>${esc(j.timeframe || "—")}</b></div>`;
+    <div class="row"><span>Timeframe</span><b>${esc(j.timeframe || "—")}</b></div>
+    ${modeRow}`;
   const acc = j.account || {};
   const risk = j.risk || {};
   return `
+    <div id="mode-banner"></div>
     <div class="row"><span>Account</span><b>#${acc.login} @ ${esc(acc.server)}</b></div>
     <div class="row"><span>Broker</span><b>${esc(acc.company || "—")}</b></div>
     <div class="row"><span>Leverage</span><b>1:${acc.leverage}</b></div>
     <div class="row"><span>Free margin</span><b>${money(acc.margin_free)}</b></div>
     <div class="row"><span>Margin level</span><b>${fmt(acc.margin_level, 0)}%</b></div>
     <div class="row"><span>Algo trading</span><b class="${term.trade_allowed ? "pos" : "neg"}">${term.trade_allowed ? "ALLOWED" : "BLOCKED"}</b></div>
+    ${modeRow}
     <div class="row" style="margin-top:8px"><button class="action ${risk.paused ? "primary" : "danger"}" id="btn-dash-kill" onclick="toggleKillSwitch()">${risk.paused ? "▶ Resume algo" : "⛔ Kill switch"}</button></div>`;
 }
 
@@ -1311,7 +1423,15 @@ function riskCardHTML() {
     <div class="row"><span>Now open</span><b>${openCount}</b></div>
     <div class="row"><span>Max daily loss</span><b>${money(risk.max_daily_loss ?? 0)}</b></div>
     <div class="row"><span>Open float PnL</span><b class="${(s.daily_pnl ?? 0) >= 0 ? "pos" : "neg"}">${signedMoney(s.daily_pnl)}</b></div>
-    <div class="row"><span>Drawdown guard</span><b>5% HWM (auto-cancel)</b></div>`;
+    <div class="row"><span>Drawdown guard</span><b>5% HWM (auto-cancel)</b></div>
+    <div class="row"><span>Execution mode</span><b class="${state.mode === "live" ? "neg" : "pos"}">${state.mode === "live" ? "LIVE" : "Paper Money"}</b></div>
+    <div class="row" style="margin-top:10px">
+      <div class="seg">
+        <button type="button" id="btn-mode-paper"  data-mode-btn onclick="switchExecutionMode('paper')">Paper Money</button>
+        <button type="button" id="btn-mode-live"   data-mode-btn onclick="switchExecutionMode('live')">Live</button>
+      </div>
+    </div>
+    <p class="hint" style="margin-top:8px">Switching mode applies after a short restart. Live sends real orders — verify the broker account in MT5.</p>`;
 }
 
 // ================= Boot =================

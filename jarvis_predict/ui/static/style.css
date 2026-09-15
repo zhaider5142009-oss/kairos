@@ -46,41 +46,41 @@
 }
 
 /* ============================================================
-   LIGHT THEME — institutional bright: white panels, slate ink,
-   deeper accents for WCAG AA contrast on light surfaces.
+   LIGHT THEME — brightest white: pure-white panels, crisp
+   slate ink, deeper accents for WCAG AA contrast on white.
    ============================================================ */
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg-0:      #f3f5f9;
+  --bg-0:      #ffffff;
   --bg-1:      #ffffff;
-  --bg-2:      #e9edf3;
-  --bg-3:      #dce3ec;
-  --bg-4:      #c5cfdb;
-  --border:    #d6dee7;
-  --border-2:  #bcc8d5;
-  --text-0:    #101828;
-  --text-1:    #3d4a60;
-  --text-2:    #5f6f85;
+  --bg-2:      #f1f5fa;
+  --bg-3:      #e6ecf4;
+  --bg-4:      #d4deeb;
+  --border:    #e3e9f2;
+  --border-2:  #c5d1e0;
+  --text-0:    #0b1220;
+  --text-1:    #34415a;
+  --text-2:    #5b6b85;
   --accent:    #0e9c76;
   --accent-2:  #0a7f60;
-  --accent-glow: rgba(14,156,118,.20);
+  --accent-glow: rgba(14,156,118,.18);
   --warn:      #d97706;
   --bad:       #dc2626;
   --good:      #15803d;
   --info:      #2563eb;
-  --shadow:    0 12px 40px rgba(15,23,42,.12);
-  --side-0:     rgba(255,255,255,.97);
-  --side-1:     rgba(247,249,252,.99);
-  --panel-a:    rgba(255,255,255,.85);
-  --panel-b:    rgba(250,251,254,.92);
-  --composer-0: rgba(255,255,255,.95);
-  --ticker-0:   rgba(255,255,255,.95);
-  --ticker-1:   rgba(247,249,252,.92);
-  --bar-0:      rgba(255,255,255,.97);
-  --bar-1:      rgba(244,246,250,.98);
-  --glow-a:     rgba(14,156,118,.07);
-  --glow-b:     rgba(37,99,235,.06);
-  --spark-glow: rgba(14,156,118,.10);
+  --shadow:    0 10px 32px rgba(15,23,42,.10);
+  --side-0:     rgba(255,255,255,.98);
+  --side-1:     rgba(250,252,255,.99);
+  --panel-a:    rgba(255,255,255,.92);
+  --panel-b:    rgba(255,255,255,.97);
+  --composer-0: rgba(255,255,255,.98);
+  --ticker-0:   rgba(255,255,255,.98);
+  --ticker-1:   rgba(251,253,255,.96);
+  --bar-0:      rgba(255,255,255,.99);
+  --bar-1:      rgba(248,250,253,.99);
+  --glow-a:     rgba(14,156,118,.06);
+  --glow-b:     rgba(37,99,235,.05);
+  --spark-glow: rgba(14,156,118,.08);
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -789,6 +789,84 @@ label { color: var(--text-1); }
 
 button { font-family: var(--font); }
 button:disabled { opacity: .45; cursor: not-allowed; }
+
+/* ============================ EXECUTION MODE ============================ */
+.mode-pill {
+  display: inline-flex; align-items: center;
+  font-size: 10.5px; font-weight: 700; letter-spacing: .5px;
+  padding: 2px 9px; border-radius: 999px; text-transform: uppercase;
+}
+.mode-pill.paper {
+  color: var(--good);
+  background: color-mix(in srgb, var(--good) 15%, transparent);
+}
+.mode-pill.live {
+  color: #fff;
+  background: color-mix(in srgb, var(--bad) 85%, #7f1d1d);
+}
+.mode-pill.restarting {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.mode-value {
+  display: inline-flex; align-items: center;
+  font-size: 12px; font-weight: 700; letter-spacing: .3px;
+  padding: 2px 9px; border-radius: 999px; text-transform: uppercase;
+}
+.mode-value.paper {
+  color: var(--good); background: color-mix(in srgb, var(--good) 14%, transparent);
+}
+.mode-value.live {
+  color: var(--bad);  background: color-mix(in srgb, var(--bad) 12%, transparent);
+}
+.mode-banner {
+  border-radius: var(--radius-sm);
+  padding: 9px 12px; margin-bottom: 10px;
+  font-size: 12.5px; line-height: 1.45;
+}
+.mode-banner.paper {
+  color: var(--text-0);
+  border: 1px solid color-mix(in srgb, var(--good) 32%, transparent);
+  background: color-mix(in srgb, var(--good) 10%, transparent);
+}
+.mode-banner.live {
+  color: var(--text-0);
+  border: 1px solid color-mix(in srgb, var(--bad) 40%, transparent);
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+}
+.mode-banner.restarting {
+  color: var(--text-0);
+  border: 1px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.mode-banner code { font-family: var(--mono); font-size: 11.5px; }
+.seg {
+  display: inline-flex; align-items: stretch;
+  border: 1px solid var(--border-2); border-radius: 10px;
+  overflow: hidden; background: var(--bg-2);
+}
+.seg button {
+  border: 0; background: transparent; cursor: pointer;
+  color: var(--text-1); font-family: inherit; font-size: 12px; font-weight: 600;
+  padding: 7px 14px; transition: background var(--t), color var(--t);
+}
+.seg button + button { border-left: 1px solid var(--border-2); }
+.seg button:hover:not(:disabled) { background: var(--bg-3); color: var(--text-0); }
+.seg button.active {
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-2));
+  color: var(--accent);
+}
+.seg button#btn-mode-live.active {
+  background: color-mix(in srgb, var(--bad) 16%, var(--bg-2));
+  color: var(--bad);
+}
+.seg button:disabled { opacity: .5; cursor: wait; }
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .55; }
+}
 
 /* ============================ ACCESSIBILITY ============================ */
 @media (prefers-reduced-motion: reduce) {

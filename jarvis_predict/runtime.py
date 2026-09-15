@@ -108,9 +108,12 @@ class JarvisRuntime:
         )
 
         # --- MT5 sync + async wrappers --------------------------------------
-        # paper_mode (default on) swaps order-execution for the crash-safe,
-        # journaled simulated broker — live market data still comes from MT5.
-        if bool(config.section("mt5").get("paper_mode", True)):
+        # Execution mode: "paper" (journaled simulation, live data) or "live"
+        # (real MT5 orders).  Resolved via state-file → config → paper_mode
+        # legacy fallback.
+        self.execution_mode = config.get_execution_mode()
+        self._restarting = False
+        if self.execution_mode == "paper":
             from .paper import PaperBridge
             self.bridge = PaperBridge.from_config(config)
             LOGGER.info("Bridge: PAPER MODE (simulated execution, journaled)")
@@ -1006,6 +1009,8 @@ class JarvisRuntime:
                 "account": account,
                 "paper": self.bridge.paper_snapshot() if getattr(self.bridge, "mode", None) == "paper" else None,
                 "risk": risk,
+                "execution_mode": getattr(self, "execution_mode", "paper"),
+                "restarting": getattr(self, "_restarting", False),
                 "symbols": list(self.bridge.symbols) if self.bridge is not None else [],
                 "timeframe": self.bridge.timeframe_str if self.bridge is not None else "",
             }
