@@ -10,7 +10,7 @@
      wrong scheme. auto → follow the OS preference. */
   (function () {
     try {
-      var pref = localStorage.getItem("jarvis_theme") || "auto";
+      var pref = localStorage.getItem("jarvis_theme") || "light";
       var mode = pref === "auto"
         ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
         : pref;

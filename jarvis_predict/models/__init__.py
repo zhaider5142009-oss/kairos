@@ -35,6 +35,13 @@ from .stats_adapters import (
     ForestAdapter,
     BoostAdapter,
 )
+from .strategy_adapters import (
+    StrategyAdapter,
+    make_strategy_models,
+    RULES as STRATEGY_RULES,
+    PERSONALITIES as STRATEGY_PERSONALITIES,
+)
+from .strategy_features import StrategyContext, StrategyContext as FastFeatures
 
 __all__ = [
     "PredictiveModel",
@@ -59,4 +66,10 @@ __all__ = [
     "SvrAdapter",
     "ForestAdapter",
     "BoostAdapter",
+    "StrategyAdapter",
+    "make_strategy_models",
+    "STRATEGY_RULES",
+    "STRATEGY_PERSONALITIES",
+    "StrategyContext",
+    "FastFeatures",
 ]

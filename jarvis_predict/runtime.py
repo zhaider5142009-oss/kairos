@@ -42,6 +42,7 @@ from .listener.hotkeys import GlobalHotkeys
 from .market_forces import MarketForcesService
 from .meta import MetaOrchestrator
 from .models import build_fleet, specs_from_config
+from .models.strategy_features import StrategyContext as _FastFeatures
 from .mt5_bridge import MT5Bridge, JarvisMT5Error
 from .multi_timeframe import MultiTimeframePredictor, DEFAULT_TIMEFRAMES
 from .strategy import Timeframe
@@ -656,6 +657,10 @@ class JarvisRuntime:
         pattern_snap = detect_patterns(
             open_=open_, high=high, low=low, close=close,
             lookback_chart=self.config.section("patterns").get("lookback_chart", 60))
+        # Shared strategy feature bundle — ONE indicator pass, then every
+        # rule-based model reads from it (≈0 additional ms for 25+ votes).
+        _fctx = _FastFeatures.compute(open_, high, low, close, tick_vol)
+        _proc_t0 = time.perf_counter()
 
         # 2b. Strategy engine analysis (MTF confluence, pattern recognition, hedging)
         # — TTL-cached per symbol: the 4-timeframe view is fresh for
@@ -723,6 +728,7 @@ class JarvisRuntime:
             fleet_task = self.parallel.forecast_all(
                 close, horizon=16, symbol=symbol,
                 cycle=cycle_num, cheap_only=cheap_only,
+                context=_fctx,
             )
             forecast, model_forecasts = await asyncio.gather(forecast_task, fleet_task)
         except Exception:
@@ -822,6 +828,7 @@ class JarvisRuntime:
             "forces": {"hint": i_hint},
             "calendar": {"in_blackout": in_blackout, "impact": cal_impact},
             "swarm": swarm_decision.to_dict() if swarm_decision is not None else None,
+            "decision_ms": round((time.perf_counter() - _proc_t0) * 1000.0, 2),
         }
 
         # 6. Stage if actionable + not in blackout.
@@ -997,6 +1004,16 @@ class JarvisRuntime:
                 pass
             try:
                 snapshot["autopilot"] = self.autopilot_snapshot()
+            except Exception:
+                pass
+            try:
+                _ms = [v.get("decision_ms") for v in self._last_decision.values()
+                       if isinstance(v, dict) and v.get("decision_ms") is not None]
+                if _ms:
+                    snapshot["decision_ms"] = {
+                        "latency_ms": round(float(np.mean(_ms)), 1),
+                        "last_symbols": len(_ms),
+                    }
             except Exception:
                 pass
             return snapshot
@@ -1468,10 +1485,13 @@ class JarvisRuntime:
         )
         pattern_snap = detect_patterns(
             open_=close, high=close+0.05, low=close-0.05, close=close)
+        _fctx = _FastFeatures.compute(close, close + 0.05, close - 0.05, close,
+                                      np.full(close.size, 2000.0))
         forecast_task = asyncio.get_running_loop().run_in_executor(
             None, self.engine.forecast, close,
         )
-        fleet_task = self.parallel.forecast_all(close, horizon=horizon, symbol=symbol)
+        fleet_task = self.parallel.forecast_all(close, horizon=horizon, symbol=symbol,
+                                                context=_fctx)
         forecast, model_forecasts = await asyncio.gather(forecast_task, fleet_task)
         q_decision = self.quantum.decide(
             per_asset_signal=[float(forecast.direction) * forecast.confidence,

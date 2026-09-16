@@ -115,12 +115,15 @@ class ParallelFleet:
         symbol: str | None = None,
         cycle: int = 0,
         cheap_only: bool = False,
+        context: object = None,
     ) -> list[ModelForecast]:
         """Run the fleet concurrently.
 
         `cycle` is the global analysis cycle counter for cadence decisions.
         `cheap_only` skips network/LLM models entirely (reuses cached votes),
         which the runtime enables while the drawdown kill-switch is armed.
+        `context` is a shared per-symbol bundle (FastFeatures + raw OHLC) that
+        rule-based strategy models read instead of recomputing indicators.
         """
         loop = asyncio.get_running_loop()
         pool = self._get_pool()
@@ -139,7 +142,7 @@ class ParallelFleet:
                     continue
                 # First cycle for this symbol — warm it up asynchronously.
             run_handles.append((idx, loop.run_in_executor(
-                pool, _forecast_one, m, values, horizon, symbol)))
+                pool, _forecast_one, m, values, horizon, symbol, context)))
         results = await asyncio.gather(*[f for _, f in run_handles], return_exceptions=False)
         for (idx, _f), res in zip(run_handles, results):
             self._store((symbol, self.models[idx].name), cycle, res)
@@ -157,9 +160,10 @@ class FleetStats:
         self.last_ms: dict[str, float] = {}
 
 
-def _forecast_one(model: PredictiveModel, values, horizon: int, symbol: str | None) -> ModelForecast:
+def _forecast_one(model: PredictiveModel, values, horizon: int, symbol: str | None,
+                  context: object = None) -> ModelForecast:
     try:
-        return model.forecast(values, horizon, symbol=symbol)
+        return model.forecast(values, horizon, symbol=symbol, context=context)
     except Exception as e:  # pragma: no cover
         import numpy as np
         return ModelForecast(

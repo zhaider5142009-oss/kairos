@@ -57,12 +57,13 @@ class ModelFleet:
         *,
         symbol: str | None = None,
         fail_fast: bool = False,
+        context: Any = None,
     ) -> list[ModelForecast]:
         """Call every model. Returns a list of ModelForecast (errors included)."""
         results: list[ModelForecast] = []
         for m in self.models:
             try:
-                res = m.forecast(values, horizon, symbol=symbol)
+                res = m.forecast(values, horizon, symbol=symbol, context=context)
                 # Config weight participates in the ensemble via extras.weight
                 # (read by EnsembleFusion._aggregate_models).  Defaults stay
                 # backward compatible: weight absent -> confidence-driven.
@@ -151,6 +152,9 @@ def _build_one(spec: ModelSpec, client: Any = None) -> PredictiveModel:
                 _model = ForestAdapter(algo=kind or "extra", **spec.kwargs)
             else:
                 _model = BoostAdapter(algo=kind or "xgboost", **spec.kwargs)
+        elif family == "strategy":
+            from .strategy_adapters import StrategyAdapter
+            _model = StrategyAdapter(**spec.kwargs)
         elif family == "mock":
             from .mock import MockModel
             _model = MockModel(**spec.kwargs)

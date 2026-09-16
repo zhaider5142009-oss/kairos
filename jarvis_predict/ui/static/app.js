@@ -122,7 +122,7 @@ async function api(path, opts = {}) {
 
 // ================= Theme (dark / light / auto) =================
 const THEME_KEY = "jarvis_theme";
-function getThemePref() { return localStorage.getItem(THEME_KEY) || "auto"; }
+function getThemePref() { return localStorage.getItem(THEME_KEY) || "light"; }
 function themeMode(pref) {
   return pref === "auto"
     ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")

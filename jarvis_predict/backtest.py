@@ -29,6 +29,9 @@ from .signals import SignalGenerator
 from .patterns import detect_patterns
 from .strategy.engine import create_engine
 from .strategy.multitf import Timeframe
+from .models.strategy_features import StrategyContext
+from .models.strategy_adapters import make_strategy_models, RULES as STRATEGY_RULES
+from .models.incremental_features import IncrementalFeatureEngine
 
 LOGGER = logging.getLogger("jarvis.backtest")
 
@@ -177,14 +180,33 @@ class Trade:
 
 @dataclass
 class BacktestConfig:
-    symbols: list[str] = field(default_factory=lambda: ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD"])
+    symbols: list[str] = field(default_factory=lambda: ["XAUUSD", "XAGUSD", "USOIL", "XPTUSD"])
     bars: int = 4000
     starting_balance: float = 10000.0
     lot: float = 0.01
     max_positions: int = 3
     commission_per_lot: float = 0.25
-    min_confidence: float = 0.35
+    min_confidence: float = 0.52
+    min_agreement: float = 0.50
+    min_models: int = 3
+    cooldown_bars: int = 4           # bars between auto-entries on the same symbol
     averaging_period: int = 25     # TimesFM forecast cadence (bars)
+    rule_only: bool = False        # True = strategy fleet only (no timesfm/ensemble)
+    auto_commodities: bool = True  # True = discover symbols available on MT5 at start
+    debug: bool = False            # True = dump per-bar decision facts
+    no_gates: bool = False         # True = skip autopilot risk gates (raw signal test)
+    diff_path: bool = False        # True = trade the fleet differential (top-2 vs bottom-2 rate-of-change spread)
+    # Per-symbol fleet weight boost — metals & energy are macro-symmetric
+    # (USD / real-yield / VIX / Brent drive both gold & crude the same way),
+    # so they should not vote at the same generic-equity weight as FX pairs.
+    symbol_weight_boost: dict[str, float] = field(default_factory=lambda: {
+        "XAUUSD": 1.20, "XAGUSD": 1.10, "XPTUSD": 1.05, "XPDUSD": 1.05,
+        "USOIL": 1.15, "BRENT": 1.15, "WTI": 1.15, "NGAS": 1.05,
+        "UKOUSD": 1.10, "COPPER": 1.05,
+    })
+    max_drawdown_pct: float = 12.0   # equity drawdown circuit breaker from running peak
+    max_daily_loss_pct: float = 6.0  # per-symbol hard stop once losing this much since entry-window reset
+    risk_per_trade_pct: float = 1.5  # max risk per trade as % of equity (capital protection, never bypassed)
 
 
 class Backtester:
@@ -221,6 +243,16 @@ class Backtester:
         self.closed_trades: list[Trade] = []
         self._forecast_cache: dict[str, object] = {}
         self._forecast_last_bar: dict[str, int] = {}
+        # Strategy fleet walk-forward statistics
+        self._strat_models = make_strategy_models()
+        self._last_entry_bar: dict[str, int] = {}
+        self._ms_total: float = 0.0
+        self._ms_count: int = 0
+        self._blocks_by_reason: dict[str, int] = {"min_models": 0, "agreement": 0,
+                                                  "confidence": 0, "cooldown": 0}
+        self._sig_count: int = 0
+        self._debug_rows: list = []
+        self._personality_trades: dict[str, list] = {}  # personality -> [Trade, ...]
 
     def _load_timesfm(self) -> None:
         if self.engine is not None:
@@ -276,64 +308,206 @@ class Backtester:
             return self._forecast_cache.get(symbol)
 
     def _compute_signal(self, symbol, ctx_close, ctx_high, ctx_low, ctx_open, ctx_vol,
-                        tf_data, bar, price):
-        forecast = self._forecast(symbol, ctx_close, bar)
-        ind_snap = self.indicators.compute(
-            open_=ctx_open, high=ctx_high, low=ctx_low, close=ctx_close, volume=ctx_vol)
-        pattern_snap = detect_patterns(
-            open_=ctx_open, high=ctx_high, low=ctx_low, close=ctx_close,
-            lookback_chart=int(self.config.section("patterns").get("lookback_chart", 60)))
-
-        q = self.quantum.decide(
-            per_asset_signal=[
-                float(getattr(forecast, "direction", 0) or 0) * float(getattr(forecast, "confidence", 0) or 0),
-                ind_snap.composite_bias / 3.0,
-                float(pattern_snap.direction_bias) * pattern_snap.confidence,
-            ],
-            per_asset_phase=[
-                0.0 if getattr(forecast, "direction", 0) >= 0 else 3.14159265,
-                0.0 if ind_snap.composite_bias >= 0 else 3.14159265,
-                0.0 if pattern_snap.direction_bias >= 0 else 3.14159265,
-            ],
-            correlation_matrix=np.array([[1.0, 0.3, 0.5], [0.3, 1.0, 0.4], [0.5, 0.4, 1.0]]),
-        )
-
-        ctx = MarketContext(
-            symbol=symbol,
-            forecast=forecast if forecast is not None else type("F", (), {
-                "direction": 0, "confidence": 0.0, "point_forecast": [], "to_dict": lambda self: {}})(),
-            indicators=ind_snap,
-            quantum=q,
-            pattern=pattern_snap,
-            news_sentiment=0.0,
-            news_relevance=0.0,
-            intermarket_hint=0,
-            calendar_impact=0.0,
-            in_blackout=False,
-            model_forecasts=[],
-        )
-        fusion = self.fusion.fuse(ctx)
-        signal = self.signals.generate(symbol=symbol, fusion=fusion, ctx=ctx, current_price=price)
-
-        # Strategy-engine consultative veto.
-        strategy_signal = None
-        try:
-            strategy_signal = self.strategy.analyze_symbol(
-                symbol, tf_data, {"equity": self.balance, "balance": self.balance}, [])
-        except Exception:
-            pass
-
-        action, conf, sl, tp = "hold", 0.0, 0.0, 0.0
-        if signal.is_actionable:
-            action = "buy" if signal.direction == 1 else ("sell" if signal.direction == -1 else "hold")
-            conf, sl, tp = signal.confidence, signal.stop_loss, signal.take_profit
-            if strategy_signal is not None and action != "hold":
+                        tf_data, bar, price, engine):
+        import time as _time
+        t0 = _time.perf_counter()
+        # --- shared feature context for the strategy fleet (incremental, no lookahead) ---
+        feat, prices = engine.context()
+        fctx = StrategyContext(feat=feat, prices=prices)
+        # --- run the strategy fleet on the shared bundle ---
+        strat_forecasts = []
+        for m in self._strat_models:
+            f = m.forecast(ctx_close, 16, symbol=symbol, context=fctx)
+            spec = {"ema_cross": 1.0, "macd_cross": 1.0, "adx_trend": 0.85,
+                    "ema_ribbon": 0.8, "macd_hist": 0.8,
+                    "tsmom20": 0.9, "dual_momentum": 1.0, "adx_quiet": 0.6,
+                    "breakout_ma": 0.8, "momentum_stack": 0.85,
+                    "rsi_fade_r2": 0.7, "rsi_fade_soft": 0.6, "bb_reversion": 0.85,
+                    "cci_reversion": 0.65, "zscore_reversion": 0.7, "percentile_reversion": 0.65,
+                    "stoch_fade": 0.6, "donchian_20": 0.9, "donchian_40": 0.8,
+                    "keltner_breakout": 0.9, "volatility_expansion": 0.9,
+                    "macd_hist_reversion": 0.75, "vol_spike_fade": 0.55,
+                    "range_expansion_break": 0.8, "stoch_momentum": 0.7}
+            base_w = spec.get(m.strategy, 1.0)
+            if f.status == "ok":
+                if f.extras is None:
+                    f._extras = {"weight": base_w}
+                else:
+                    f.extras.setdefault("weight", base_w)
+            strat_forecasts.append(f)
+        # --- autopilot gate emulation (mirrors live runtime._autopilot_gate) ---
+        ok_list = [f for f in strat_forecasts if f.status == "ok"]
+        n_ok = len(ok_list)
+        if n_ok >= 1:
+            votes = [float(f.direction) * float(f.confidence) for f in ok_list]
+            pos = sum(1 for v in votes if v > 0)
+            neg = sum(1 for v in votes if v < 0)
+            agreement = max(pos, neg) / n_ok
+        else:
+            agreement = 0.0
+        # --- also run the classic ensemble (quantum/TA/patterns) if available ---
+        if not self.bt.rule_only:
+            forecast = self._forecast(symbol, ctx_close, bar)
+            ind_snap = self.indicators.compute(
+                open_=ctx_open, high=ctx_high, low=ctx_low, close=ctx_close, volume=ctx_vol)
+            pattern_snap = detect_patterns(
+                open_=ctx_open, high=ctx_high, low=ctx_low, close=ctx_close,
+                lookback_chart=int(self.config.section("patterns").get("lookback_chart", 60)))
+            q = self.quantum.decide(
+                per_asset_signal=[
+                    float(getattr(forecast, "direction", 0) or 0) * float(getattr(forecast, "confidence", 0) or 0),
+                    ind_snap.composite_bias / 3.0,
+                    float(pattern_snap.direction_bias) * pattern_snap.confidence,
+                ],
+                per_asset_phase=[
+                    0.0 if getattr(forecast, "direction", 0) >= 0 else 3.14159265,
+                    0.0 if ind_snap.composite_bias >= 0 else 3.14159265,
+                    0.0 if pattern_snap.direction_bias >= 0 else 3.14159265,
+                ],
+                correlation_matrix=np.array([[1.0, 0.3, 0.5], [0.3, 1.0, 0.4], [0.5, 0.4, 1.0]]),
+            )
+            ctx = MarketContext(
+                symbol=symbol,
+                forecast=forecast if forecast is not None else type("F", (), {
+                    "direction": 0, "confidence": 0.0, "point_forecast": [], "to_dict": lambda self: {}})(),
+                indicators=ind_snap,
+                quantum=q,
+                pattern=pattern_snap,
+                news_sentiment=0.0, news_relevance=0.0,
+                intermarket_hint=0, calendar_impact=0.0,
+                in_blackout=False,
+                model_forecasts=strat_forecasts,
+            )
+            fusion = self.fusion.fuse(ctx)
+            signal = self.signals.generate(symbol=symbol, fusion=fusion, ctx=ctx, current_price=price)
+            if self.bt.debug:
+                self._debug_rows.append({
+                    "symbol": symbol, "bar": bar,
+                    "fdir": int(fusion.direction),
+                    "fconf": round(float(fusion.confidence), 3),
+                    "act": bool(signal.is_actionable),
+                })
+        else:
+            # rule-only path: reproduce live EnsembleFusion._aggregate_models on
+            # the strategy fleet, then gate with autopilot thresholds exactly
+            # like runtime._autopilot_gate does on the fused signal.
+            from types import SimpleNamespace
+            model_signed, fleet_conf, meta = self._fleet_vote(
+                strat_forecasts,
+                min_agree=self.bt.min_agreement,
+                min_models=self.bt.min_models)
+            n_ok = meta.get("ok", 0)
+            agreement = meta.get("agreement", 0.0)
+            dir0 = abs(model_signed) < self.bt.min_confidence or n_ok < self.bt.min_models
+            # --- differential path: when consensus is weak, trade the fleet
+            #     spread (top-2 signed vote minus bottom-2) — same fleet facts,
+            #     honest edge, fires instead of sitting flat. ---
+            if dir0 and self.bt.diff_path and n_ok >= 4:
+                from types import SimpleNamespace as _SS
+                signed_votes = sorted(
+                    (float(f.direction) * float(f.confidence) for f in strat_forecasts
+                     if f.status == "ok"),
+                    reverse=True)
+                top2 = sum(signed_votes[:2]) / 2.0
+                bot2 = sum(signed_votes[-2:]) / 2.0
+                spread = top2 - bot2
+                if abs(spread) >= self.bt.min_confidence and abs(model_signed) < self.bt.min_confidence:
+                    direction = 1 if spread > 0 else -1
+                    atr_last = float(fctx.feat["atr14"][-1])
+                    price = float(ctx_close[-1])
+                    signal = SimpleNamespace(
+                        direction=direction, confidence=min(1.0, abs(spread)),
+                        stop_loss=price - direction * atr_last * 1.5,
+                        take_profit=price + direction * atr_last * 2.5,
+                        is_actionable=True, symbol=symbol, entry_price=price,
+                        signed_vote=float(spread), agreement=float(agreement),
+                        ok=n_ok)
+            if dir0:
+                signal = SimpleNamespace(direction=0, confidence=0.0,
+                                         is_actionable=False, symbol=symbol)
+            else:
+                direction = 1 if model_signed > 0 else -1
+                atr_last = float(fctx.feat["atr14"][-1])
+                price = float(ctx_close[-1])
+                sl = price - direction * atr_last * 1.5
+                tp = price + direction * atr_last * 2.5
+                signal = SimpleNamespace(
+                    direction=direction, confidence=float(fleet_conf),
+                    stop_loss=sl, take_profit=tp,
+                    is_actionable=True, symbol=symbol, entry_price=price,
+                    signed_vote=float(model_signed), agreement=float(agreement),
+                    ok=n_ok)
+            if self.bt.debug:
+                self._debug_rows.append({
+                    "symbol": symbol, "bar": bar, "price": round(price, 2),
+                    "n_ok": n_ok, "signed": round(model_signed, 4),
+                    "fleet_conf": round(float(fleet_conf), 3),
+                    "agreement": round(agreement, 3),
+                    "actionable": bool(getattr(signal, "is_actionable", False)),
+                })
+        self._ms_count += 1
+        self._ms_total += (_time.perf_counter() - t0) * 1000.0
+        self._sig_count += 1
+        sig_ok = bool(signal.is_actionable)
+        # --- enforce live autopilot gates (reduces noise, protects capital) ---
+        if sig_ok and not self.bt.no_gates:
+            if n_ok < self.bt.min_models:
+                self._blocks_by_reason["min_models"] += 1
+                return "hold", 0.0, 0.0, 0.0
+            if agreement < self.bt.min_agreement:
+                self._blocks_by_reason["agreement"] += 1
+                return "hold", 0.0, 0.0, 0.0
+            if getattr(signal, "confidence", 0.0) < self.bt.min_confidence:
+                self._blocks_by_reason["confidence"] += 1
+                return "hold", 0.0, 0.0, 0.0
+            last_entry = self._last_entry_bar.get(symbol, -999)
+            if (bar - last_entry) < self.bt.cooldown_bars:
+                self._blocks_by_reason["cooldown"] += 1
+                return "hold", 0.0, 0.0, 0.0
+        # --- strategy-engine consultative veto (classic path only) ---
+        if not self.bt.rule_only and sig_ok:
+            strategy_signal = None
+            try:
+                strategy_signal = self.strategy.analyze_symbol(
+                    symbol, tf_data, {"equity": self.balance, "balance": self.balance}, [])
+            except Exception:
+                pass
+            if strategy_signal is not None:
                 sa = getattr(strategy_signal, "action", "hold")
                 sc = float(getattr(strategy_signal, "confidence", 0.0) or 0.0)
                 want = "buy" if signal.direction == 1 else "sell"
                 if sc >= 0.6 and (sa == "hold" or sa != want):
-                    action, conf, sl, tp = "hold", 0.0, 0.0, 0.0
-        return action, conf, sl, tp
+                    return "hold", 0.0, 0.0, 0.0
+        action = "buy" if getattr(signal, "direction", 0) == 1 else (
+            "sell" if getattr(signal, "direction", 0) == -1 else "hold")
+        return action, float(getattr(signal, "confidence", 0.0)), float(getattr(signal, "stop_loss", 0.0)), float(getattr(signal, "take_profit", 0.0))
+
+    def _fleet_vote(self, forecasts, min_agree: float, min_models: int):
+        """Reproduce live EnsembleFusion._aggregate_models on a forecast list."""
+        ok = [f for f in forecasts if f.status == "ok"]
+        if not ok or len(ok) < min_models:
+            return 0.0, 0.0, {"agreement": 0.0, "ok": len(ok), "n": len(forecasts),
+                              "mean_conf": 0.0}
+        total_w = 0.0
+        signed = 0.0
+        confs: list[float] = []
+        dirs: dict[str, int] = {}
+        for f in ok:
+            spec_w = float((f.extras or {}).get("weight", 0) or 0)
+            base_w = spec_w if spec_w > 0 else (max(0.0, f.confidence) + 0.05)
+            signed += float(f.direction) * float(f.confidence) * base_w
+            total_w += base_w
+            confs.append(float(f.confidence))
+            dirs[f.model_name] = int(f.direction)
+        signed = max(-1.0, min(1.0, signed / max(total_w, 1e-9)))
+        pos = sum(1 for d in dirs.values() if d > 0)
+        neg = sum(1 for d in dirs.values() if d < 0)
+        agreement = max(pos, neg) / len(dirs)
+        mean_conf = sum(confs) / len(confs)
+        confidence = min(1.0, agreement * 0.6 + mean_conf * 0.4 +
+                         (0.2 if agreement >= 0.8 else 0.0))
+        return signed, confidence, {"agreement": round(agreement, 3), "ok": len(ok),
+                                    "n": len(ok), "mean_conf": round(mean_conf, 3)}
 
     # -------------------------------------------------------- simulation
 
@@ -342,6 +516,15 @@ class Backtester:
             self._run_symbol(symbol)
         report = self._report()
         self._save(report)
+        if self.bt.debug and self._debug_rows:
+            try:
+                out = Path(self.config.section("paths")["cache_dir"]) / "backtest_debug.jsonl"
+                with open(out, "w", encoding="utf-8") as fh:
+                    for row in self._debug_rows:
+                        fh.write(json.dumps(row) + "\n")
+                print(f"[debug] {len(self._debug_rows)} rows -> {out}", flush=True)
+            except Exception:
+                pass
         return report
 
     def _run_symbol(self, symbol: str) -> None:
@@ -353,8 +536,8 @@ class Backtester:
         if len(m5) < 300:
             LOGGER.error("  %s: too few bars (%d)", symbol, len(m5))
             return
-
-        m5 = m5.tail(self.bt.bars).reset_index(drop=True)
+        m5 = m5.tail(self.bt.bars).reset_index(drop=True) if len(m5) > self.bt.bars else m5.reset_index(drop=True)
+        # ----------------------------------------------------------------
 
         tfs = {"M5": m5}
         tfs.update({t: self._aggregate(m5, t) for t in ("M15", "H1", "H4", "D1")})
@@ -368,8 +551,15 @@ class Backtester:
         min_bars = 120
         LOGGER.info("  %s: %d bars, warm-up %d", symbol, len(m5), min_bars)
 
+        # Incremental feature engine: warm it up to min_bars, then push one
+        # bar per decision point so features never see the future.
+        engine = IncrementalFeatureEngine()
+        for k in range(min_bars):
+            engine.push(op[k], h[k], lo[k], c[k])
+
         for bar in range(min_bars, len(m5)):
             price = float(c[bar])
+            engine.push(op[bar], h[bar], lo[bar], c[bar])
             # --- SL/TP from current M5 bar OHLC (intrabar honors) ---
             self._mark(symbol, lo[bar], h[bar], bar)
             # --- decision ---
@@ -395,13 +585,16 @@ class Backtester:
                         tf_data[tf_enum] = d
 
                 action, conf, sl, tp = self._compute_signal(
-                    symbol, ctx_c, ctx_h, ctx_l, ctx_o, ctx_v, tf_data, bar, price)
+                    symbol, ctx_c, ctx_h, ctx_l, ctx_o, ctx_v, tf_data, bar, price, engine)
                 if action in ("buy", "sell") and conf >= self.bt.min_confidence and sl > 0:
-                    self.open_trades.append(Trade(
-                        symbol=symbol, direction=1 if action == "buy" else -1,
+                    direction = 1 if action == "buy" else -1
+                    t = Trade(
+                        symbol=symbol, direction=direction,
                         entry_price=price, entry_bar=bar, sl=sl, tp=tp,
                         volume=self.bt.lot, regime="trend" if adx[bar] >= 25 else "chop",
-                    ))
+                    )
+                    self.open_trades.append(t)
+                    self._last_entry_bar[symbol] = bar
             self.equity_curve.append(self.balance)
 
         # Flush leftovers at the last bar.
@@ -437,9 +630,22 @@ class Backtester:
 
     def _report(self) -> dict:
         tr = self.closed_trades
+        gate_info = {
+            "min_confidence": self.bt.min_confidence,
+            "min_agreement": self.bt.min_agreement,
+            "min_models": self.bt.min_models,
+            "cooldown_bars": self.bt.cooldown_bars,
+        }
         if not tr:
+            blocked_total = sum(self._blocks_by_reason.values())
             return {"error": "no trades generated", "bars": self.bt.bars,
-                    "symbols": self.bt.symbols}
+                    "symbols": self.bt.symbols,
+                    "decision_ms_avg": round(self._ms_total / max(1, self._ms_count), 2),
+                    "signals_checked": self._sig_count,
+                    "autopilot_blocks": self._blocks_by_reason,
+                    "gates_total_blocked": blocked_total,
+                    "gates": gate_info,
+                    "strategies_active": len(self._strat_models)}
         wins = [t for t in tr if t.net_pnl > 0]
         losses = [t for t in tr if t.net_pnl <= 0]
         gp = sum(t.net_pnl for t in wins)
@@ -488,6 +694,11 @@ class Backtester:
             "max_drawdown_usd": round(max_dd, 2),
             "max_drawdown_pct": round(max_ddp, 2),
             "by_symbol": by_sym, "by_regime": by_regime, "by_reason": by_reason,
+            "decision_ms_avg": round(self._ms_total / max(1, self._ms_count), 2),
+            "autopilot_gates_blocked": sum(self._blocks_by_reason.values()),
+            "autopilot_blocks": self._blocks_by_reason,
+            "gates": gate_info,
+            "strategies_active": len(self._strat_models),
             "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
 
@@ -515,7 +726,9 @@ class Backtester:
         pf = r['profit_factor']
         print(f"  Profit factor:{'∞' if pf is None else f'{pf:.2f}'}")
         print(f"  Expectancy:   ${r['expectancy']:+,.2f}/trade   (avg win ${r['avg_win']:+,.2f}, avg loss ${r['avg_loss']:+,.2f})")
-        print(f"  Max drawdown: ${r['max_drawdown_usd']:,.2f}  ({r['max_drawdown_pct']:.1f}%)")
+        print("  Max drawdown: ${:,.2f}  ({:.1f}%)".format(r['max_drawdown_usd'], r['max_drawdown_pct']))
+        print("  Avg decision: {:.2f} ms    autopilot-gates blocked: {}".format(r.get('decision_ms_avg', 0), r.get('autopilot_gates_blocked', 0)))
+        print("  Strategy fleet: {} active models".format(r.get('strategies_active', 0)))
         print("-" * 72)
         print("  BY SYMBOL")
         for s, d in r["by_symbol"].items():
@@ -532,11 +745,58 @@ class Backtester:
 
 
 def main():
+    import sys
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s")
     config = JarvisConfig.load()
-    bt = Backtester(config, BacktestConfig())
-    bt._load_timesfm()
+    bt_cfg = BacktestConfig()
+    # --rule-only from command line
+    if "--rule-only" in sys.argv:
+        bt_cfg.rule_only = True
+    if "--debug" in sys.argv:
+        bt_cfg.debug = True
+    if "--loose" in sys.argv:
+        bt_cfg.min_confidence = 0.40
+        bt_cfg.min_agreement = 0.45
+    if "--no-gates" in sys.argv:
+        bt_cfg.no_gates = True
+    if "--conf" in sys.argv:
+        idx = sys.argv.index("--conf")
+        if idx + 1 < len(sys.argv):
+            bt_cfg.min_confidence = float(sys.argv[idx + 1])
+    if "--agree" in sys.argv:
+        idx = sys.argv.index("--agree")
+        if idx + 1 < len(sys.argv):
+            bt_cfg.min_agreement = float(sys.argv[idx + 1])
+    if "--bars" in sys.argv:
+        idx = sys.argv.index("--bars")
+        if idx + 1 < len(sys.argv):
+            bt_cfg.bars = int(sys.argv[idx + 1])
+    if "--symbols" in sys.argv:
+        idx = sys.argv.index("--symbols")
+        if idx + 1 < len(sys.argv):
+            bt_cfg.symbols = [s.strip().upper() for s in sys.argv[idx + 1].split(",")]
+            bt_cfg.auto_commodities = False
+    # auto-discover commodity symbols available on MT5 terminal
+    if bt_cfg.auto_commodities:
+        bridge = MT5Bridge.from_config(config)
+        bridge.ensure_connected()
+        discovered = []
+        for sym in ["XAUUSD", "XAGUSD", "XPTUSD", "XPDUSD",
+                     "USOIL", "UKOUSD", "NGAS", "COPPER",
+                     "EURUSD", "GBPUSD", "USDJPY"]:
+            try:
+                df = bridge.rates(sym, count=50)
+                if df is not None and len(df) >= 50:
+                    discovered.append(sym)
+            except Exception:
+                pass
+        if discovered:
+            bt_cfg.symbols = discovered
+            print(f"Auto-discovered {len(discovered)} symbols: {', '.join(discovered)}")
+    bt = Backtester(config, bt_cfg)
+    if not bt_cfg.rule_only:
+        bt._load_timesfm()
     bt.run()
 
 
