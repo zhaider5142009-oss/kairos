@@ -16,18 +16,26 @@
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--txt);font-family:var(--sans);font-size:15px;line-height:1.55}
 a{color:var(--blue);text-decoration:none}
-header{position:sticky;top:0;z-index:50;background:rgba(255,255,255,.94);backdrop-filter:blur(8px);
-  border-bottom:1px solid var(--line);display:flex;align-items:center;gap:18px;padding:12px 24px;flex-wrap:wrap}
-.logo{display:flex;align-items:baseline;gap:10px}
+header{position:fixed;left:0;top:0;bottom:0;width:216px;z-index:50;background:#fff;
+  border-right:1px solid var(--line);display:flex;flex-direction:column;gap:4px;padding:16px 12px}
+.logo{display:flex;flex-direction:column;gap:2px;margin-bottom:14px}
 .logo b{font-size:21px;letter-spacing:4px;color:var(--blue)}
-.logo span{color:var(--faint);font-size:12px}
-nav{display:flex;gap:6px;flex-wrap:wrap}
-nav button{background:none;border:1px solid transparent;color:var(--dim);font-size:14px;padding:8px 16px;
-  cursor:pointer;border-radius:9px;font-family:var(--sans);transition:all .15s}
+.logo span{color:var(--faint);font-size:11.5px}
+nav{display:flex;flex-direction:column;gap:3px;flex:1}
+nav button{background:none;border:1px solid transparent;color:var(--dim);font-size:14px;padding:9px 12px;
+  cursor:pointer;border-radius:9px;font-family:var(--sans);transition:all .15s;text-align:left}
 nav button:hover{color:var(--blue);background:var(--blue-soft)}
 nav button.active{color:var(--blue);background:var(--blue-soft);border-color:#cfe0ff;font-weight:600}
-#healthdot{margin-left:auto;display:flex;align-items:center;gap:7px;font-size:12px;color:var(--dim)}
-main{max-width:1200px;margin:0 auto;padding:28px 24px 90px}
+#healthdot{margin-top:14px;display:flex;align-items:center;gap:7px;font-size:12px;color:var(--dim);
+  border-top:1px solid var(--line2);padding-top:12px}
+main{margin-left:216px;max-width:1140px;padding:28px 34px 90px}
+@media(max-width:860px){header{position:sticky;top:0;bottom:auto;width:auto;flex-direction:row;
+  align-items:center;flex-wrap:wrap;padding:10px 16px}
+  .logo{margin:0 14px 0 0;flex-direction:row;align-items:baseline;gap:8px}
+  nav{flex-direction:row;flex-wrap:wrap;flex:0}
+  nav button{padding:6px 10px;font-size:13px}
+  #healthdot{margin:0 0 0 auto;border-top:none;padding-top:0}
+  main{margin-left:0;padding:20px 14px 70px}}
 .view{display:none;animation:fade .25s}.view.active{display:block}
 h2{font-size:20px;margin-bottom:4px;font-weight:700}
 .sub{color:var(--dim);font-size:13.5px;margin-bottom:20px;max-width:780px}
