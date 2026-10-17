@@ -146,9 +146,33 @@ RATES: list[Instrument] = [
     _yf("DXY", "US Dollar Index", "rate", "Macro", "DX-Y.NYB", tags=("macro", "risk-gauge")),
 ]
 
+def _cr(key: str, name: str, yahoo: str, tags: tuple[str, ...] = ()) -> Instrument:
+    return _yf(key, name, "crypto", "Crypto", yahoo, tags=("crypto", "risk-appetite", *tags))
+
+
 CRYPTO: list[Instrument] = [
-    _yf("BTC", "Bitcoin", "crypto", "Crypto", "BTC-USD", tags=("risk-appetite",)),
-    _yf("ETH", "Ethereum", "crypto", "Crypto", "ETH-USD", tags=("risk-appetite",)),
+    _cr("BTC", "Bitcoin", "BTC-USD", ("safe-haven", "store-of-value")),
+    _cr("ETH", "Ethereum", "ETH-USD", ("l1", "defi")),
+    _cr("SOL", "Solana", "SOL-USD", ("l1", "high-beta")),
+    _cr("BNB", "BNB", "BNB-USD", ("exchange")),
+    _cr("XRP", "XRP", "XRP-USD", ("payments")),
+    _cr("ADA", "Cardano", "ADA-USD", ("l1")),
+    _cr("DOGE", "Dogecoin", "DOGE-USD", ("meme", "high-beta")),
+    _cr("AVAX", "Avalanche", "AVAX-USD", ("l1")),
+    _cr("TRX", "TRON", "TRX-USD", ("payments")),
+    _cr("LINK", "Chainlink", "LINK-USD", ("oracle", "defi")),
+    _cr("DOT", "Polkadot", "DOT-USD", ("l1")),
+    _cr("LTC", "Litecoin", "LTC-USD", ("payments")),
+    _cr("BCH", "Bitcoin Cash", "BCH-USD", ("payments")),
+    _cr("NEAR", "NEAR Protocol", "NEAR-USD", ("l1", "ai")),
+    _cr("APT", "Aptos", "APT-USD", ("l1")),
+    _cr("UNI", "Uniswap", "UNI-USD", ("defi")),
+    _cr("ATOM", "Cosmos", "ATOM-USD", ("l1", "interop")),
+    _cr("FIL", "Filecoin", "FIL-USD", ("storage")),
+    _cr("ARB", "Arbitrum", "ARB-USD", ("l2")),
+    _cr("OP", "Optimism", "OP-USD", ("l2")),
+    _cr("SUI", "Sui", "SUI-USD", ("l1", "high-beta")),
+    _cr("INJ", "Injective", "INJ-USD", ("defi", "high-beta")),
 ]
 
 ALL: list[Instrument] = [PSX_INDEX, *PSX_BLUE_CHIPS, *COMMODITIES,
@@ -160,7 +184,7 @@ _BY_TV = {(i.tv or "").upper(): i for i in ALL if i.tv}
 
 
 def resolve(symbol: str) -> Instrument | None:
-    """Resolve any symbol form (JARVIS key, Yahoo, TV, or PSX ticker) to an Instrument."""
+    """Resolve any symbol form (KAIROS key, Yahoo, TV, or PSX ticker) to an Instrument."""
     s = symbol.strip().upper()
     return _BY_KEY.get(s) or _BY_YAHOO.get(s) or _BY_TV.get(f"PSX:{s}")
 

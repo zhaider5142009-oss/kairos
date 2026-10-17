@@ -1,10 +1,10 @@
 """WSL foundation-model bridge: Chronos, TimesFM, qlib.
 
-Heavy pretrained models run inside the PCMClawUbuntu WSL distro (Linux CUDA
-toolchains are far easier there), invoked as subprocesses speaking JSON over
-stdin/stdout. Health is probed before every batch; if WSL or a model is
-missing, the engine silently falls back to the native battery — no
-fabrication, no crashes.
+Heavy pretrained models run inside a WSL distro (Linux CUDA toolchains are far
+easier there), invoked as subprocesses speaking JSON over stdin/stdout. The
+distro and venv location are configurable (`wsl:` section in config.yaml);
+health is probed before every batch; if WSL or a model is missing, the engine
+silently falls back to the native battery — no fabrication, no crashes.
 
 Protocol (stdin -> stdout):
     {"model": "chronos"|"timesfm"|"qlib", "series": [floats], "horizon": int}
@@ -22,9 +22,16 @@ from typing import Any
 
 from .config import CFG
 
-DISTRO = "PCMClawUbuntu"
-BRIDGE_DIR = Path(__file__).resolve().parent.parent / "wsl_scripts"
-BRIDGE_SCRIPT = "jarvis_models.py"
+BRIDGE_DIR = Path(__file__).resolve().parent / "wsl_scripts"
+BRIDGE_SCRIPT = "kairos_models.py"
+
+
+def _distro() -> str:
+    return str(CFG.section("wsl").get("distro") or "Ubuntu")
+
+
+def _venv() -> str:
+    return str(CFG.section("wsl").get("venv_path") or "~/.kairos-venv")
 
 
 class WslBridge:
@@ -42,9 +49,9 @@ class WslBridge:
             return False
         try:
             r = subprocess.run(
-                ["wsl", "-d", DISTRO, "-e", "python3", "-c", "print('JARVIS_OK')"],
+                ["wsl", "-d", _distro(), "-e", "python3", "-c", "print('KAIROS_OK')"],
                 capture_output=True, text=True, timeout=30)
-            ok = "JARVIS_OK" in (r.stdout or "")
+            ok = "KAIROS_OK" in (r.stdout or "")
         except Exception:
             ok = False
         self._last_probe = (ok, time.time())
@@ -56,7 +63,7 @@ class WslBridge:
             return {"chronos": False, "timesfm": False, "qlib": False}
         try:
             r = subprocess.run(
-                ["wsl", "-d", DISTRO, "-e", "python3", "-c",
+                ["wsl", "-d", _distro(), "-e", "python3", "-c",
                  "import importlib.util as u;"
                  "print(json := __import__('json').dumps({"
                  "'chronos': bool(u.find_spec('chronos')),"
@@ -71,15 +78,17 @@ class WslBridge:
     def setup(self) -> str:
         """Install the model stack inside WSL (heavy: ~4GB, one-time)."""
         if not self.wsl_available(force=True):
-            return ("WSL distro not reachable. Start it with `wsl -d PCMClawUbuntu` "
+            return (f"WSL distro '{_distro()}' not reachable. Start it with "
+                    f"`wsl -d {_distro()}` (or set wsl.distro in config.yaml) "
                     "then re-run setup.")
+        venv = _venv()
         cmds = (
-            "python3 -m venv ~/.jarvis-venv --upgrade-deps && "
-            "~/.jarvis-venv/bin/pip install --quiet "
+            f"python3 -m venv {venv} --upgrade-deps && "
+            f"{venv}/bin/pip install --quiet "
             "chronos-forecasting 'timesfm[torch]' pyqlib pandas numpy torch --index-url https://pypi.org/simple"
         )
         try:
-            r = subprocess.run(["wsl", "-d", DISTRO, "-e", "bash", "-lc", cmds],
+            r = subprocess.run(["wsl", "-d", _distro(), "-e", "bash", "-lc", cmds],
                                capture_output=True, text=True, timeout=1800)
             out = (r.stdout or "")[-2000:] + (r.stderr or "")[-2000:]
             return "SETUP COMPLETE\n" + out
@@ -95,8 +104,8 @@ class WslBridge:
             return None
         try:
             r = subprocess.run(
-                ["wsl", "-d", DISTRO, "--cd", str(BRIDGE_DIR), "-e",
-                 "~/.jarvis-venv/bin/python", BRIDGE_SCRIPT],
+                ["wsl", "-d", _distro(), "--cd", str(BRIDGE_DIR), "-e", "bash",
+                 "-lc", f"{_venv()}/bin/python {BRIDGE_SCRIPT}"],
                 input=json.dumps(payload), capture_output=True, text=True,
                 timeout=240)
             if r.returncode != 0:

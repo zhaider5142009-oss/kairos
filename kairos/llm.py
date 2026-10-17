@@ -26,7 +26,7 @@ from typing import Any
 
 from .config import CFG
 
-_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) JARVIS/2.0"
+_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) KAIROS/2.0"
 
 
 @dataclass
@@ -94,8 +94,8 @@ class LLMRouter:
         req = urllib.request.Request(url, data=body, headers={
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://jarvis.local",
-            "X-Title": "JARVIS Quant System",
+            "HTTP-Referer": "https://kairos.local",
+            "X-Title": "KAIROS Quant System",
             "User-Agent": _UA,
         }, method="POST")
         t0 = time.time()

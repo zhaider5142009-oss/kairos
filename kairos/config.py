@@ -1,4 +1,12 @@
-"""Configuration loader — single source of truth for keys, endpoints, tunables."""
+"""Configuration loader — single source of truth for keys, endpoints, tunables.
+
+Resolution order for the config file: $KAIROS_CONFIG → ./config.yaml (cwd) →
+repo root. The file is OPTIONAL: without it the engine runs on built-in
+defaults, environment-variable keys, and public data sources. Put real keys in
+config.yaml (git-ignored) or env vars — never in tracked source.
+Runtime state (data/, reports/) lives next to the config file, or in the
+current directory when no config file is present.
+"""
 
 from __future__ import annotations
 
@@ -11,17 +19,32 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def _find_config() -> Path | None:
+    env = os.environ.get("KAIROS_CONFIG")
+    if env:
+        p = Path(env).expanduser()
+        return p if p.is_file() else None
+    for p in (Path.cwd() / "config.yaml", ROOT / "config.yaml"):
+        if p.is_file():
+            return p
+    return None
+
+
 class Config:
     _instance: "Config | None" = None
 
     def __init__(self, path: Path | None = None) -> None:
-        self.path = path or ROOT / "config.yaml"
-        with open(self.path, "r", encoding="utf-8") as fh:
-            self._raw: dict[str, Any] = yaml.safe_load(fh) or {}
-        self.root = ROOT
-        self.data_dir = ROOT / self._raw.get("app", {}).get("data_dir", "data")
-        self.cache_dir = ROOT / self._raw.get("app", {}).get("cache_dir", "data/cache")
-        self.reports_dir = ROOT / self._raw.get("app", {}).get("reports_dir", "reports")
+        found = path or _find_config()
+        self.path = found
+        self._raw: dict[str, Any] = {}
+        if found is not None:
+            with open(found, "r", encoding="utf-8") as fh:
+                self._raw = yaml.safe_load(fh) or {}
+        self.root = found.parent if found is not None else Path.cwd()
+        app = self._raw.get("app") or {}
+        self.data_dir = self.root / app.get("data_dir", "data")
+        self.cache_dir = self.root / app.get("cache_dir", "data/cache")
+        self.reports_dir = self.root / app.get("reports_dir", "reports")
         for d in (self.data_dir, self.cache_dir, self.reports_dir):
             d.mkdir(parents=True, exist_ok=True)
 

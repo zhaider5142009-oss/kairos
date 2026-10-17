@@ -8,7 +8,7 @@ Design doctrine (institutional):
     before it happens (intention) and after (result).
   * Kill-switch — a file on disk halts all live execution instantly.
   * Reconciliation — live positions re-read from the broker before every
-    sizing decision; JARVIS never trusts its own memory over the broker's.
+    sizing decision; KAIROS never trusts its own memory over the broker's.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ class OrderIntent:
     stop_loss: float | None = None
     take_profit: float | None = None
     venue: str = "PAPER"            # PAPER | MT5 | PSX_JSGLOBAL
-    comment: str = "JARVIS"
+    comment: str = "KAIROS"
     client_order_id: str = field(default_factory=lambda: uuid.uuid4().hex[:16])
 
     def to_json(self) -> str:
@@ -194,7 +194,7 @@ class PaperBroker:
             "capital": self.capital, "cash": self.cash, "positions": self.positions,
             "fills": self.fills[-500:], "realized_pnl": self.realized_pnl,
             "day_pnl": self.day_pnl, "day_stamp": self._day_stamp,
-        }), indent=1), encoding="utf-8")
+        }, indent=1), encoding="utf-8")
 
     # -- account/positions ----------------------------------------------------
     def account(self) -> dict[str, Any]:
@@ -378,10 +378,10 @@ class Mt5Bridge:
         except Exception:
             return None
 
-    def resolve_symbol(self, jarvis_key: str) -> str | None:
+    def resolve_symbol(self, kairos_key: str) -> str | None:
         if not self.connected:
             return None
-        candidate = MT5_SYMBOL_MAP.get(jarvis_key.upper(), jarvis_key.upper())
+        candidate = MT5_SYMBOL_MAP.get(kairos_key.upper(), kairos_key.upper())
         try:
             info = self._mt5.symbol_info(candidate)
             if info is not None:
@@ -390,7 +390,7 @@ class Mt5Bridge:
                 return candidate
             # fuzzy fallback: any symbol containing the key
             for s in (self._mt5.symbols_get() or []):
-                if jarvis_key.upper() in s.name.upper():
+                if kairos_key.upper() in s.name.upper():
                     self._mt5.symbol_select(s.name, True)
                     return s.name
             return None
@@ -404,7 +404,8 @@ class Mt5Bridge:
             t = self._mt5.symbol_info_tick(symbol)
             if t is None:
                 return None
-            return {"bid": float(t.bid), "ask": float(t.ask)}
+            return {"bid": float(t.bid), "ask": float(t.ask),
+                    "spread": round(float(t.ask) - float(t.bid), 5)}
         except Exception:
             return None
 
@@ -431,7 +432,7 @@ class Mt5Bridge:
             "price": price,
             "deviation": deviation,
             "magic": 20261016,
-            "comment": f"JARVIS {intent.comment}"[:31],
+            "comment": f"KAIROS {intent.comment}"[:31],
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": mt5.ORDER_FILLING_IOC,
         }
@@ -485,12 +486,38 @@ class Mt5Bridge:
         request = {"action": mt5.TRADE_ACTION_DEAL, "symbol": p.symbol,
                    "volume": float(p.volume), "type": side, "position": p.ticket,
                    "price": price, "deviation": 20, "magic": 20261016,
-                   "comment": "JARVIS close", "type_time": mt5.ORDER_TIME_GTC,
+                   "comment": "KAIROS close", "type_time": mt5.ORDER_TIME_GTC,
                    "type_filling": mt5.ORDER_FILLING_IOC}
         result = mt5.order_send(request)
         ok = result is not None and result.retcode == mt5.TRADE_RETCODE_DONE
         JOURNAL.log("MT5_CLOSE", {"ticket": p.ticket, "ok": ok})
         return ok
+
+    def benchmark_latency(self, symbol: str, n: int = 5) -> dict[str, Any]:
+        """Round-trip quote latency over N symbol-select + tick fetches.
+
+        Risk-free by design: measures connectivity only and never sends an
+        order — blasting live market orders to benchmark would violate the
+        paper-first doctrine."""
+        if not self.connected:
+            return {"latencies_ms": [], "success_rate": 0.0, "mean_ms": 0.0}
+        mt5 = self._mt5
+        lat: list[float] = []
+        ok = 0
+        for _ in range(max(1, n)):
+            try:
+                mt5.symbol_select(symbol, True)
+                t0 = time.perf_counter()
+                info = mt5.symbol_info(symbol)
+                tick = mt5.symbol_info_tick(symbol) if info else None
+                ms = (time.perf_counter() - t0) * 1000
+                if tick is not None and (tick.bid or tick.ask):
+                    ok += 1
+                    lat.append(round(ms, 2))
+            except Exception:
+                continue
+        mean = round(sum(lat) / len(lat), 1) if lat else 0.0
+        return {"latencies_ms": lat, "success_rate": ok / max(1, n), "mean_ms": mean}
 
     def shutdown(self) -> None:
         if self.connected and self._mt5 is not None:
@@ -506,7 +533,7 @@ class Mt5Bridge:
 # ---------------------------------------------------------------------------
 class JsGlobalTicket:
     """PSX has no retail FIX/API for individual investors; institutional flow
-    goes through brokers like JS Global Capital. JARVIS produces broker-ready
+    goes through brokers like JS Global Capital. KAIROS produces broker-ready
     order tickets (with all compliance fields) and can deliver them by file
     or webhook. Execution remains human-confirmed — by design."""
 

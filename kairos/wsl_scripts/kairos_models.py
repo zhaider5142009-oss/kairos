@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""JARVIS WSL-side foundation-model server (stdin JSON -> stdout JSON).
+"""KAIROS WSL-side foundation-model server (stdin JSON -> stdout JSON).
 
-Runs inside the PCMClawUbuntu WSL distro under the ~/.jarvis-venv interpreter.
+Runs inside a WSL distro under the venv set by `wsl.distro` / `wsl.venv_path`
+(config.yaml; defaults Ubuntu + ~/.kairos-venv).
 Models are imported lazily; failures degrade to {"ok": false} on stdout so the
 Windows side can fall back to its native battery without crashing.
 """

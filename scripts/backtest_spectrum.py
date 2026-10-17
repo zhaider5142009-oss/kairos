@@ -6,9 +6,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from jarvis.data import MarketData
-from jarvis.universe import resolve
-from jarvis.backtest import walk_forward
+from kairos.data import MarketData
+from kairos.universe import resolve
+from kairos.backtest import walk_forward
 
 SYMBOLS = sys.argv[1].split(",") if len(sys.argv) > 1 else [
     "GOLD", "SILVER", "WTI", "BRENT", "NATGAS", "COPPER", "WHEAT",

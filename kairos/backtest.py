@@ -190,7 +190,8 @@ def _calibrate(close: np.ndarray, comps: dict[str, pd.Series],
 # Public walk-forward entry point
 # ---------------------------------------------------------------------------
 def walk_forward(df: pd.DataFrame, symbol: str, train_window: int = CALIB_WINDOW,
-                 step: int = 1, cost_bps: float | None = None) -> BacktestResult:
+                 step: int = 1, cost_bps: float | None = None,
+                 test_days: int | None = None) -> BacktestResult:
     if df is None or len(df) < 140:
         raise ValueError("insufficient history for backtest (need >= 140 bars)")
     inst_cost = cost_bps
@@ -205,8 +206,13 @@ def walk_forward(df: pd.DataFrame, symbol: str, train_window: int = CALIB_WINDOW
     vol20 = comps["vol20"].values
     n = len(df)
 
-    # true out-of-sample: trade only the final (1 - train/n) segment
-    test_start = max(60, n - max(train_window, int(n * 0.55)))
+    # true out-of-sample: trade only the final segment. test_days (from the
+    # --days flag) sets that segment length directly; otherwise fall back to
+    # the trailing ~45% of the series.
+    if test_days:
+        test_start = max(60, n - int(test_days))
+    else:
+        test_start = max(60, n - max(train_window, int(n * 0.55)))
     if n - test_start < 60:
         test_start = n - 60
 
@@ -355,7 +361,7 @@ def run_paper_session(md, symbols: list[str], engine, days: int = 60,
             results[inst.key] = {"error": "insufficient history"}
             continue
         try:
-            bt = walk_forward(df, inst.key)
+            bt = walk_forward(df, inst.key, test_days=days)
             results[inst.key] = {
                 "verdict": bt.verdict, "trades": bt.trades,
                 "hit_rate": bt.hit_rate, "return": bt.total_return,

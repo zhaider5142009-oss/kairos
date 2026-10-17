@@ -26,31 +26,31 @@ KAIROS predicts commodities, FX, global indices, crypto and the Pakistan Stock E
 pip install -r requirements.txt
 
 # one-shot predictions
-python kairos.py predict GOLD WTI EURUSD
-python kairos.py predict OGDC --council          # with LLM quant council
+python -m kairos predict GOLD WTI EURUSD
+python -m kairos predict OGDC --council          # with LLM quant council
 
 # PSX cross-sectional leaderboard (all 484 stocks)
-python kairos.py scan
+python -m kairos scan
 
 # quantum-assisted portfolio
-python kairos.py portfolio GOLD,WTI,EURUSD,SPX,OGDC,HBL --capital 1000000
+python -m kairos portfolio GOLD,WTI,EURUSD,SPX,OGDC,HBL --capital 1000000
 
 # paper trading validation (does the core signal turn profit?)
-python kairos.py backtest GOLD,SILVER,WTI,EURUSD --days 120
+python -m kairos backtest GOLD,SILVER,WTI,EURUSD --days 120
 
 # place one gated paper order
-python kairos.py paper GOLD --notional 10000
+python -m kairos paper GOLD --notional 10000
 
 # MT5 bridge check + order latency benchmark
-python kairos.py mt5 --benchmark
+python -m kairos mt5 --benchmark
 
 # the web control tower (or just double-click the KAIROS desktop shortcut)
-python kairos.py serve
+python -m kairos serve
 ```
 
 ## The web control tower
 
-`python kairos.py serve` (or the **KAIROS** desktop shortcut) opens http://127.0.0.1:8600 — a single-page command center:
+`python -m kairos serve` (or the **KAIROS** desktop shortcut) opens http://127.0.0.1:8600 — a single-page command center:
 
 - **Home** — system health, live watchlist, plain-language quick asks
 - **Predict** — full dossier per instrument: verdict, targets, models, strategies, risk, council
@@ -63,7 +63,7 @@ python kairos.py serve
 ## Foundation models via WSL (optional, ~4 GB)
 
 ```bash
-python kairos.py setup-wsl     # installs Chronos-Bolt, TimesFM-2.5, qlib into WSL
+python -m kairos setup-wsl     # installs Chronos-Bolt, TimesFM-2.5, qlib into WSL
 ```
 
 Everything degrades gracefully — KAIROS runs fully without WSL, without the LLM council, and with any single data source down.
@@ -75,10 +75,10 @@ Copy `config.example.yaml` to `config.yaml` and fill in your keys (OpenRouter et
 ## Architecture
 
 ```
-kairos.py                    CLI entry (predict/scan/portfolio/backtest/paper/mt5/serve/…)
+python -m kairos             CLI entry (predict/scan/portfolio/backtest/paper/mt5/feedback/serve/…)
 launch_kairos.bat            one-click launcher (desktop shortcut target)
 config.yaml                  all keys + engine tunables (git-ignored)
-jarvis/
+kairos/
   config.py universe.py      config singleton · 80-instrument registry
   data.py                    Yahoo v8 + TradingView PSX scanner + local PSX API + news + CSV store
   features.py                78 features · patterns · regimes · cross-sectional factors
@@ -89,12 +89,13 @@ jarvis/
   quantum.py                 annealer portfolio + coherence check
   kse_regime.py calendar.py  KSE-100 regime · macro event calendar
   engine.py                  PredictionEngine orchestration
+  feedback.py                prediction journal → realized outcomes → confidence calibration
   backtest.py                walk-forward validation + paper sessions
   execution.py               OrderIntent → RiskGate → PaperBroker / Mt5Bridge / JsGlobalTicket + audit journal
   wsl_bridge.py              Chronos/TimesFM/qlib subprocess bridge
-  llm.py report.py           LLM council router · Rich terminal dossiers
-api/server.py api/ui.html    FastAPI control tower + web UI
-wsl_scripts/jarvis_models.py WSL-side model server
+  llm.py report.py cli.py    LLM council router · Rich terminal dossiers · command line
+  api/server.py api/ui.html  FastAPI control tower + web UI
+  wsl_scripts/kairos_models.py WSL-side model server
 data/                        store cache, journal, paper account, LLM cache
 reports/                     saved JSON dossiers
 ```

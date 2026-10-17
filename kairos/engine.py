@@ -21,6 +21,7 @@ from .config import CFG
 from .data import MarketData
 from .calendar import risk_calendar
 from .ensemble import FusedSignal, fuse
+from .feedback import confidence_adjustment, record
 from .features import (compute_features, cross_sectional_factors, detect_patterns,
                        detect_regime)
 from .kse_regime import kse_regime
@@ -118,6 +119,7 @@ class PredictionEngine:
         res = self._predict_uncached(symbol, horizon, use_llm, use_wsl, include_news)
         if res.get("ok"):
             self._pred_cache[key] = (time.time(), res)
+            record(res)
         return res
 
     def _predict_uncached(self, symbol: str, horizon: int = 5, use_llm: bool = False,
@@ -126,7 +128,7 @@ class PredictionEngine:
         instrument = resolve(symbol)
         if instrument is None:
             return {"ok": False, "symbol": symbol,
-                    "error": f"unknown symbol '{symbol}' — see `jarvis symbols`"}
+                    "error": f"unknown symbol '{symbol}' — see `kairos symbols`"}
         df = self.md.history(instrument)
         min_hist = int(CFG.engine.get("min_history", 40))
         if df is None or len(df) < min_hist:
@@ -179,6 +181,12 @@ class PredictionEngine:
 
         # --- fusion -------------------------------------------------------------
         signal = fuse(instrument.key, forecasts, votes, regime_info["regime"], horizon)
+
+        # --- realized track-record calibration ---------------------------------
+        adj = confidence_adjustment()
+        if adj != 1.0:
+            signal.confidence = round(min(0.95, signal.confidence * adj), 3)
+            signal.details["track_record_adjustment"] = adj
 
         # --- risk overlay ---------------------------------------------------------
         risk = compute_risk(instrument.key, close, signal.confidence, horizon)
@@ -304,7 +312,7 @@ class PredictionEngine:
             f"- {s['name']} [{s['category']}]: dir={s['direction']:+d}, "
             f"strength={s['strength']:.2f} — {s['rationale']}"
             for s in pred.get("top_strategies", [])[:10]) or "- (no votes)"
-        prompt = f"""You are the JARVIS Quant Council reviewing {instrument.name} ({instrument.key}), listed on {instrument.market} ({instrument.sector}).
+        prompt = f"""You are the KAIROS Quant Council reviewing {instrument.name} ({instrument.key}), listed on {instrument.market} ({instrument.sector}).
 
 CURRENT STATE
 - Price: {pred['price']} {instrument.currency} (as of {pred['as_of']})

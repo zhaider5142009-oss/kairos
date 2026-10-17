@@ -11,10 +11,9 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
 
-from jarvis.engine import ENGINE  # noqa: E402
-from jarvis.universe import universe  # noqa: E402
+from kairos.engine import ENGINE  # noqa: E402
+from kairos.universe import universe  # noqa: E402
 
 app = FastAPI(title="KAIROS Control Tower", version="2.0.0")
 
@@ -24,25 +23,39 @@ async def _unhandled(request, exc):  # pragma: no cover
     return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
 
 
+def _safe(obj):
+    """Recursively coerce numpy scalars/dates into JSON-encodable Python."""
+    import datetime as _dt
+
+    import numpy as _np
+    import pandas as _pd
+    if isinstance(obj, dict):
+        return {str(k): _safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_safe(v) for v in obj]
+    if isinstance(obj, _np.ndarray):
+        return [_safe(v) for v in obj.tolist()]
+    if isinstance(obj, (_np.bool_,)):
+        return bool(obj)
+    if isinstance(obj, _np.integer):
+        return int(obj)
+    if isinstance(obj, _np.floating):
+        return float(obj)
+    if isinstance(obj, (_dt.datetime, _dt.date, _pd.Timestamp)):
+        return obj.isoformat()
+    if isinstance(obj, _pd.DataFrame):
+        return _safe(obj.to_dict(orient="records"))
+    return obj
+
+
 # ---------------------------------------------------------------- health
 @app.get("/api/health")
 def health():
-    from jarvis.llm import health_probe
-    from jarvis.wsl_bridge import WSL
+    from kairos.health import system_health
     try:
-        h = ENGINE.md.health()
-    except Exception as exc:
-        h = {"market-data": f"error: {exc}"}
-    try:
-        llm = health_probe()
-    except Exception:
-        llm = {"ok": False, "provider": "down"}
-    return {"ok": True, "market_data": h,
-            "llm": {"ok": llm.get("ok", False), "provider": llm.get("provider"),
-                    "models": llm.get("models", 0)},
-            "wsl": {"available": WSL.wsl_available(),
-                    "models_ready": all(WSL.models_ready().values())},
-            "universe_size": len(universe())}
+        return system_health()
+    except Exception as exc:  # pragma: no cover
+        return {"ok": False, "error": str(exc)}
 
 
 # ---------------------------------------------------------------- universe
@@ -63,13 +76,13 @@ def predict(symbol: str, horizon: int = Query(5, ge=1, le=21),
                          use_wsl=wsl, include_news=news)
     if not res.get("ok"):
         raise HTTPException(404, res.get("error"))
-    return res
+    return _safe(res)
 
 
 # ---------------------------------------------------------------- scan
 @app.get("/api/scan")
 def scan(top: int = Query(20, ge=5, le=100)):
-    return ENGINE.scan(top=top)
+    return _safe(ENGINE.scan(top=top))
 
 
 # ---------------------------------------------------------------- portfolio
@@ -84,7 +97,7 @@ def portfolio(req: PortfolioReq):
     res = ENGINE.portfolio(req.symbols, capital=req.capital, k=req.cardinality)
     if not res.get("ok"):
         raise HTTPException(400, res.get("error"))
-    return res
+    return _safe(res)
 
 
 @app.get("/api/portfolio")
@@ -114,7 +127,7 @@ class PaperReq(BaseModel):
 
 @app.post("/api/paper")
 def paper_order(req: PaperReq):
-    from jarvis.execution import OrderIntent, PaperBroker, RiskGate
+    from kairos.execution import OrderIntent, PaperBroker, RiskGate
     r = ENGINE.predict(req.symbol, horizon=5, include_news=False)
     if not r.get("ok"):
         raise HTTPException(404, r.get("error"))
@@ -132,13 +145,13 @@ def paper_order(req: PaperReq):
     if not allowed:
         return {"ok": False, "reason": "risk_gate", "message": why}
     fill = broker.submit(intent, r["price"])
-    return {"ok": True, "fill": fill.__dict__, "signal": s,
+    return {"ok": True, "fill": _safe(fill.__dict__), "signal": _safe(s),
             "account": broker.account()}
 
 
 @app.get("/api/paper/account")
 def paper_account():
-    from jarvis.execution import PaperBroker
+    from kairos.execution import PaperBroker
     return {"ok": True, "account": PaperBroker().account(),
             "positions": PaperBroker().open_positions()}
 
@@ -146,17 +159,17 @@ def paper_account():
 # ---------------------------------------------------------------- backtest
 @app.get("/api/backtest")
 def backtest(symbols: str, days: int = Query(60, ge=20, le=250)):
-    from jarvis.backtest import run_paper_session
+    from kairos.backtest import run_paper_session
     syms = [s.strip() for s in symbols.split(",") if s.strip()]
     if not syms:
         raise HTTPException(400, "no symbols given")
-    return run_paper_session(ENGINE.md, syms, ENGINE, days=days)
+    return _safe(run_paper_session(ENGINE.md, syms, ENGINE, days=days))
 
 
 # ---------------------------------------------------------------- mt5
 @app.get("/api/mt5")
 def mt5(symbols: str = "XAUUSD,XAGUSD,EURUSD", benchmark: bool = False):
-    from jarvis.execution import Mt5Bridge
+    from kairos.execution import Mt5Bridge
     br = Mt5Bridge()
     connected = br.connect()
     out = {"ok": connected, "connected": connected, "ticks": []}
@@ -166,14 +179,15 @@ def mt5(symbols: str = "XAUUSD,XAGUSD,EURUSD", benchmark: bool = False):
             if t:
                 out["ticks"].append(t)
         if benchmark:
-            out["benchmark"] = br.benchmark_orders("XAUUSD", n=3)
+            out["benchmark"] = br.benchmark_latency("XAUUSD", n=3)
     return out
 
 
 # ---------------------------------------------------------------- journal
 @app.get("/api/journal")
 def journal(last: int = 50):
-    p = ROOT / "data" / "audit_journal.jsonl"
+    from kairos.config import CFG
+    p = CFG.data_dir / "audit_journal.jsonl"
     if not p.exists():
         return {"ok": True, "entries": []}
     lines = p.read_text(encoding="utf-8", errors="replace").strip().splitlines()
@@ -184,6 +198,18 @@ def journal(last: int = 50):
         except Exception:
             continue
     return {"ok": True, "entries": out}
+
+
+# ---------------------------------------------------------------- feedback
+@app.get("/api/feedback")
+def feedback(resolve_first: bool = False):
+    from kairos.engine import ENGINE
+    from kairos.feedback import confidence_adjustment, resolve_outcomes, track_record
+    newly = resolve_outcomes(ENGINE.md) if resolve_first else 0
+    tr = track_record()
+    tr["newly_resolved"] = newly
+    tr["confidence_adjustment"] = confidence_adjustment()
+    return tr
 
 
 # ---------------------------------------------------------------- UI

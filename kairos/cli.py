@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 """KAIROS — institutional-grade market prediction & execution system.
 
-Command line entry point. Run `python kairos.py --help` for the command list.
+Command line entry point. Run `python -m kairos --help` (or the `kairos`
+console command after installation) for the full command list.
 """
 from __future__ import annotations
 
@@ -10,10 +11,10 @@ import json
 import sys
 import time
 import warnings
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(ROOT))
+from rich import box
+
+from .config import CFG
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", message=".*starting (autoregressive|MA) parameters.*")
@@ -43,8 +44,8 @@ def _console():
 
 
 def cmd_predict(args) -> int:
-    from jarvis.engine import ENGINE
-    from jarvis.report import render_prediction
+    from .engine import ENGINE
+    from .report import render_prediction
     console = _console()
     console.print(BANNER, style="bold blue")
     for i, sym in enumerate(args.symbols):
@@ -54,7 +55,7 @@ def cmd_predict(args) -> int:
                              use_wsl=not args.no_wsl)
         render_prediction(res, console)
         if args.json:
-            out = ROOT / "reports" / f"predict_{res.get('symbol', 'x')}.json"
+            out = CFG.reports_dir / f"predict_{res.get('symbol', 'x')}.json"
             out.parent.mkdir(exist_ok=True)
             out.write_text(json.dumps(res, indent=2, default=str))
             console.print(f"[dim]saved → {out}[/]")
@@ -62,35 +63,35 @@ def cmd_predict(args) -> int:
 
 
 def cmd_scan(args) -> int:
-    from jarvis.engine import ENGINE
-    from jarvis.report import render_scan
+    from .engine import ENGINE
+    from .report import render_scan
     console = _console()
     res = ENGINE.scan(top=args.top)
     render_scan(res, console, top=args.top)
     if args.json:
-        out = ROOT / "reports" / "psx_scan.json"
+        out = CFG.reports_dir / "psx_scan.json"
         out.parent.mkdir(exist_ok=True)
         out.write_text(json.dumps(res, indent=2, default=str))
     return 0 if res.get("ok") else 1
 
 
 def cmd_portfolio(args) -> int:
-    from jarvis.engine import ENGINE
-    from jarvis.report import render_portfolio
+    from .engine import ENGINE
+    from .report import render_portfolio
     res = ENGINE.portfolio(args.symbols, capital=args.capital, k=args.cardinality)
     render_portfolio(res, _console())
     return 0 if res.get("ok") else 1
 
 
 def cmd_backtest(args) -> int:
-    from jarvis.backtest import run_paper_session
-    from jarvis.engine import ENGINE
-    from jarvis.report import render_backtest
+    from .backtest import run_paper_session
+    from .engine import ENGINE
+    from .report import render_backtest
     console = _console()
     console.print(BANNER, style="bold blue")
     res = run_paper_session(ENGINE.md, args.symbols, ENGINE, days=args.days)
     render_backtest(res, console)
-    out = ROOT / "reports" / "paper_session.json"
+    out = CFG.reports_dir / "paper_session.json"
     out.parent.mkdir(exist_ok=True)
     out.write_text(json.dumps(res, indent=2, default=str))
     console.print(f"[dim]saved → {out}[/]")
@@ -100,13 +101,13 @@ def cmd_backtest(args) -> int:
 def cmd_news(args) -> int:
     from rich.panel import Panel
     from rich.table import Table
-    from jarvis.engine import ENGINE
+    from .engine import ENGINE
     console = _console()
     items = ENGINE.news_items()
     if not items:
         console.print(Panel("[red]no news fetched — feeds unreachable[/]", title="KAIROS NEWS"))
         return 1
-    tbl = Table(title=f"KAIROS NEWS RADAR — {len(items)} items", box="ROUNDED")
+    tbl = Table(title=f"KAIROS NEWS RADAR — {len(items)} items", box=box.ROUNDED)
     for col in ("time", "source", "headline"):
         tbl.add_column(col, overflow="fold" if col == "headline" else "truncate")
     for it in items[:args.limit]:
@@ -119,14 +120,14 @@ def cmd_news(args) -> int:
 
 def cmd_watch(args) -> int:
     """Continuous loop: refresh predictions + show one-line signals."""
-    from jarvis.engine import ENGINE
+    from .engine import ENGINE
     console = _console()
     console.print(BANNER, style="bold blue")
     while True:
         console.clear()
         from rich.table import Table
         tbl = Table(title=f"KAIROS WATCH — {time.strftime('%Y-%m-%d %H:%M:%S')}",
-                    box="ROUNDED")
+                    box=box.ROUNDED)
         for col in ("symbol", "price", "signal", "conf", "exp 5d", "P(up)", "weight"):
             tbl.add_column(col, justify="right" if col != "symbol" else "left")
         for sym in args.symbols:
@@ -139,9 +140,11 @@ def cmd_watch(args) -> int:
                 tbl.add_row(sym, "-", "[dim]no data[/]", "", "", "", "")
                 continue
             s = r["signal"]
-            color = "green" if s["direction"] > 0 else "red" if s["direction"] < 0 else "yellow"
+            from .report import _dirval
+            dv = _dirval(s["direction"])
+            color = "green" if dv > 0 else "red" if dv < 0 else "yellow"
             tbl.add_row(f"[cyan]{r['symbol']}[/]", f"{r['price']:,.2f}",
-                        f"[{color}]{s['direction']:+d}[/]", f"{s['confidence']:.2f}",
+                        f"[{color}]{s['direction']}[/]", f"{s['confidence']:.2f}",
                         f"{s['expected_return']:+.2%}", f"{r['probability_up']:.0%}",
                         f"{r['risk']['suggested_weight']:.0%}")
         console.print(tbl)
@@ -154,7 +157,7 @@ def cmd_watch(args) -> int:
 
 def cmd_serve(args) -> int:
     import uvicorn
-    from api.server import app
+    from .api.server import app
     console = _console()
     console.print(BANNER, style="bold blue")
     console.print(f"[bold]KAIROS control tower → http://127.0.0.1:{args.port}[/]")
@@ -164,10 +167,10 @@ def cmd_serve(args) -> int:
 
 def cmd_symbols(args) -> int:
     from rich.table import Table
-    from jarvis.universe import universe
+    from .universe import universe
     console = _console()
     tbl = Table(title=f"KAIROS UNIVERSE — {len(universe())} instruments",
-                box="ROUNDED")
+                box=box.ROUNDED)
     for col in ("key", "name", "class", "market", "yahoo"):
         tbl.add_column(col, overflow="fold" if col == "name" else "truncate")
     for inst in universe():
@@ -180,44 +183,51 @@ def cmd_symbols(args) -> int:
 def cmd_health(args) -> int:
     from rich.panel import Panel
     from rich.table import Table
-    from jarvis.engine import ENGINE
-    from jarvis.llm import health_probe
-    from jarvis.wsl_bridge import WSL
+    from .health import system_health
     console = _console()
-    h = ENGINE.md.health()
-    tbl = Table(title="KAIROS SYSTEM HEALTH", box="ROUNDED")
+    h = system_health()
+    tbl = Table(title="KAIROS SYSTEM HEALTH", box=box.ROUNDED)
     tbl.add_column("subsystem")
     tbl.add_column("status")
-    for name, state in h.items():
+    for name, state in h["market_data"].items():
         ok = state in ("ok", "up", "degraded")
         tbl.add_row(name, f"[{'green' if ok else 'red'}]{state}[/]")
-    llm = health_probe()
-    tbl.add_row("llm-router", f"[{'green' if llm.get('ok') else 'red'}]"
-                f"{llm.get('provider', 'down')} ({llm.get('models', 0)} models)[/]")
-    tbl.add_row("wsl-bridge", f"[{'green' if WSL.available() else 'yellow'}]"
-                f"{'ready' if WSL.models_ready() else 'available (models not installed)'}[/]")
+    llm = h["llm"]
+    tbl.add_row("llm-router", f"[{'green' if llm['ok'] else 'yellow'}]"
+                f"{llm['provider']} ({llm['models']} council models)[/]")
+    wsl = h["wsl"]
+    if wsl["models_ready"]:
+        cell = "[green]models ready[/]"
+    elif wsl["available"]:
+        cell = "[yellow]available (models not installed)[/]"
+    else:
+        cell = "[dim]offline[/]"
+    tbl.add_row("wsl-bridge", cell)
+    tbl.add_row("universe", f"[cyan]{h['universe_size']} instruments[/]")
     console.print(tbl)
     console.print(Panel(
-        "Full health: `python kairos.py predict GOLD` exercises data → models → "
+        "Full health: `python -m kairos predict GOLD` exercises data → models → "
         "strategies → fusion → risk in one shot.", border_style="dim"))
     return 0
 
 
 def cmd_setup_wsl(args) -> int:
-    from jarvis.wsl_bridge import WSL
+    from .wsl_bridge import WSL
     console = _console()
     console.print("[bold]Installing foundation models into WSL "
                   "(Chronos-Bolt, TimesFM 2.5, qlib LightGBM)…[/]")
-    ok = WSL.setup(verbose=True)
-    console.print(f"[{'green' if ok else 'red'}]"
-                  f"{'WSL foundation models ready.' if ok else 'setup failed — see log above'}[/]")
+    result = WSL.setup()
+    ok = result.startswith("SETUP COMPLETE")
+    console.print(result)
+    console.print("[green]WSL foundation models ready."
+                  if ok else "[red]setup failed — see log above")
     return 0 if ok else 1
 
 
 def cmd_paper(args) -> int:
     """Place one paper order through the full execution stack."""
-    from jarvis.engine import ENGINE
-    from jarvis.execution import OrderIntent, PaperBroker, RiskGate
+    from .engine import ENGINE
+    from .execution import OrderIntent, PaperBroker, RiskGate
     from rich.panel import Panel
     console = _console()
     r = ENGINE.predict(args.symbol, horizon=5, include_news=False)
@@ -249,7 +259,7 @@ def cmd_paper(args) -> int:
 
 def cmd_mt5(args) -> int:
     """MT5 bridge connection + order latency benchmark."""
-    from jarvis.execution import Mt5Bridge
+    from .execution import Mt5Bridge
     from rich.panel import Panel
     from rich.table import Table
     console = _console()
@@ -259,7 +269,7 @@ def cmd_mt5(args) -> int:
                             "with algo trading enabled?[/]", title="KAIROS MT5"))
         return 1
     console.print(Panel("[green]connected to MT5 terminal[/]", title="KAIROS MT5"))
-    tbl = Table(box="ROUNDED")
+    tbl = Table(box=box.ROUNDED)
     tbl.add_column("symbol")
     tbl.add_column("bid", justify="right")
     tbl.add_column("ask", justify="right")
@@ -271,12 +281,50 @@ def cmd_mt5(args) -> int:
                         f"{tick['spread']}")
     console.print(tbl)
     if args.benchmark:
-        console.print("[bold]order latency benchmark (3 round-trips on GOLD micro)…[/]")
-        lat = br.benchmark_orders("XAUUSD", n=3)
+        console.print("[bold]quote latency benchmark (3 round-trips, no orders sent)…[/]")
+        lat = br.benchmark_latency("XAUUSD", n=3)
         console.print(Panel(
-            f"submit→result latency ms: {lat.get('latencies_ms')}\n"
+            f"quote round-trip latency ms: {lat.get('latencies_ms')}\n"
             f"success rate: {lat.get('success_rate'):.0%} · "
-            f"mean {lat.get('mean_ms'):.0f}ms", title="MT5 EXECUTION BENCHMARK"))
+            f"mean {lat.get('mean_ms'):.0f}ms", title="MT5 LATENCY BENCHMARK"))
+    return 0
+
+
+def cmd_feedback(args) -> int:
+    """Resolve elapsed predictions and print the realized track record."""
+    from rich.panel import Panel
+    from rich.table import Table
+    from .engine import ENGINE
+    from .feedback import confidence_adjustment, resolve_outcomes, track_record
+    console = _console()
+    newly = resolve_outcomes(ENGINE.md)
+    tr = track_record()
+    console.print(BANNER, style="bold blue")
+    if not tr.get("ok"):
+        console.print(Panel(f"[yellow]{tr.get('reason', 'nothing recorded')}[/]",
+                            title="KAIROS TRACK RECORD"))
+        return 0
+    tbl = Table(title=f"KAIROS TRACK RECORD — {tr['resolved']}/{tr['predictions']} "
+                      f"predictions resolved ({newly} newly)", box=box.ROUNDED)
+    for col in ("metric", "value"):
+        tbl.add_column(col)
+    tbl.add_row("hit rate (direction)", "n/a" if tr["hit_rate"] is None
+                else f"{tr['hit_rate']:.1%}")
+    tbl.add_row("strong-signal hit rate", "n/a" if tr.get("strong_signal_hit_rate") is None
+                else f"{tr['strong_signal_hit_rate']:.1%}")
+    tbl.add_row("mean abs return error", "n/a" if tr.get("mean_abs_error") is None
+                else f"{tr['mean_abs_error']:.4f}")
+    tbl.add_row("live confidence multiplier", f"{confidence_adjustment():.2f}×")
+    cal = tr.get("calibration_by_confidence") or {}
+    if cal:
+        tbl.add_row("calibration by confidence",
+                    " · ".join(f"{k}: {v:.0%}" for k, v in cal.items()))
+    console.print(tbl)
+    for e in (tr.get("recent") or [])[-5:]:
+        mark = "[green]✓[/]" if e.get("correct") else "[red]✗[/]"
+        console.print(f"  {mark} {e['symbol']:<8} {e['direction']:<12} "
+                      f"exp {e['expected_return']:+.2%} → realized "
+                      f"{e.get('realized_return', 0):+.2%}")
     return 0
 
 
@@ -338,10 +386,13 @@ def main() -> int:
     sp.add_argument("--notional", type=float, default=10_000.0)
     sp.set_defaults(fn=cmd_paper)
 
-    sp = sub.add_parser("mt5", help="MT5 bridge check + latency benchmark")
+    sp = sub.add_parser("mt5", help="MT5 bridge check + quote latency benchmark")
     sp.add_argument("--symbols", nargs="*")
     sp.add_argument("--benchmark", action="store_true")
     sp.set_defaults(fn=cmd_mt5)
+
+    sp = sub.add_parser("feedback", help="resolve outcomes + realized track record")
+    sp.set_defaults(fn=cmd_feedback)
 
     args = p.parse_args()
     try:
