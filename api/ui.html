@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KAIROS — Market Intelligence</title>
+<style>
+:root{
+  --bg:#0b1220;--bg2:#111a2e;--card:#16213a;--card2:#1b2947;
+  --line:#24365c;--txt:#e8eefc;--dim:#8fa3c8;--faint:#5b6d94;
+  --blue:#4da3ff;--green:#2ecc8f;--red:#ff5c72;--yellow:#f5c542;--purple:#a78bfa;
+  --mono:'Cascadia Code',Consolas,monospace;--sans:'Segoe UI',system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);font-family:var(--sans);font-size:15px;line-height:1.5}
+a{color:var(--blue);text-decoration:none}
+header{position:sticky;top:0;z-index:50;background:rgba(11,18,32,.92);backdrop-filter:blur(8px);
+  border-bottom:1px solid var(--line);display:flex;align-items:center;gap:18px;padding:10px 22px;flex-wrap:wrap}
+.logo{display:flex;align-items:baseline;gap:10px}
+.logo b{font-size:22px;letter-spacing:4px;color:var(--blue)}
+.logo span{color:var(--faint);font-size:12px}
+nav{display:flex;gap:4px;flex-wrap:wrap}
+nav button{background:none;border:none;color:var(--dim);font-size:14px;padding:8px 14px;cursor:pointer;
+  border-radius:8px;font-family:var(--sans)}
+nav button:hover{color:var(--txt);background:var(--card)}
+nav button.active{color:var(--blue);background:var(--card);font-weight:600}
+#healthdot{margin-left:auto;display:flex;align-items:center;gap:7px;font-size:12px;color:var(--dim)}
+main{max-width:1200px;margin:0 auto;padding:26px 22px 80px}
+.view{display:none}.view.active{display:block}
+h2{font-size:19px;margin-bottom:4px}
+.sub{color:var(--dim);font-size:13px;margin-bottom:20px;max-width:760px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin-bottom:16px}
+.grid{display:grid;gap:16px}
+.g2{grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}
+.g3{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+.g4{grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
+label{display:block;font-size:12px;color:var(--dim);margin:10px 0 4px;text-transform:uppercase;letter-spacing:.5px}
+input,select{width:100%;background:var(--bg2);border:1px solid var(--line);color:var(--txt);
+  border-radius:9px;padding:10px 12px;font-size:14px;font-family:var(--sans)}
+input:focus,select:focus{outline:none;border-color:var(--blue)}
+.btn{background:linear-gradient(135deg,#2f6fdd,#4da3ff);border:none;color:#fff;font-size:14px;font-weight:600;
+  padding:11px 22px;border-radius:10px;cursor:pointer;font-family:var(--sans)}
+.btn:hover{filter:brightness(1.12)}
+.btn.ghost{background:var(--bg2);border:1px solid var(--line);color:var(--dim)}
+.btn.small{padding:6px 14px;font-size:13px}
+.spinner{display:inline-block;width:15px;height:15px;border:2px solid var(--faint);border-top-color:var(--blue);
+  border-radius:50%;animation:spin .8s linear infinite;vertical-align:-3px;margin-right:8px}
+@keyframes spin{to{transform:rotate(360deg)}}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th{color:var(--dim);text-align:left;font-weight:600;padding:8px 10px;border-bottom:1px solid var(--line);
+  font-size:12px;text-transform:uppercase;letter-spacing:.4px;cursor:default;white-space:nowrap}
+td{padding:8px 10px;border-bottom:1px solid rgba(36,54,92,.4);white-space:nowrap}
+tr:hover td{background:rgba(77,163,255,.05)}
+.r{text-align:right}.c{text-align:center}
+.tag{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11.5px;font-weight:600}
+.tag.bull{background:rgba(46,204,143,.15);color:var(--green)}
+.tag.bear{background:rgba(255,92,114,.15);color:var(--red)}
+.tag.neut{background:rgba(245,197,66,.15);color:var(--yellow)}
+.tag.ok{background:rgba(46,204,143,.15);color:var(--green)}
+.tag.bad{background:rgba(255,92,114,.15);color:var(--red)}
+.tag.warn{background:rgba(245,197,66,.15);color:var(--yellow)}
+.big{font-size:26px;font-weight:700;font-family:var(--mono)}
+.up{color:var(--green)}.down{color:var(--red)}.flat{color:var(--yellow)}
+.dim{color:var(--dim)}.faint{color:var(--faint)}.mono{font-family:var(--mono)}
+.bar{height:7px;border-radius:4px;background:var(--bg2);overflow:hidden;margin-top:5px}
+.bar>div{height:100%;border-radius:4px}
+.explain{background:rgba(77,163,255,.07);border-left:3px solid var(--blue);padding:10px 14px;
+  border-radius:0 9px 9px 0;font-size:13px;color:var(--dim);margin-top:14px}
+.verdict{display:flex;align-items:center;gap:26px;flex-wrap:wrap;padding:22px;border-radius:14px}
+.verdict.bull{background:linear-gradient(135deg,rgba(46,204,143,.16),rgba(46,204,143,.04));border:1px solid rgba(46,204,143,.35)}
+.verdict.bear{background:linear-gradient(135deg,rgba(255,92,114,.16),rgba(255,92,114,.04));border:1px solid rgba(255,92,114,.35)}
+.verdict.neut{background:linear-gradient(135deg,rgba(245,197,66,.13),rgba(245,197,66,.03));border:1px solid rgba(245,197,66,.3)}
+.vdir{font-size:30px;font-weight:800;letter-spacing:1px}
+.vmeta{color:var(--dim);font-size:13px}
+.arrow{font-size:30px;font-weight:800}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.chip{background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:5px 12px;font-size:13px;cursor:pointer}
+.chip:hover{border-color:var(--blue);color:var(--blue)}
+.kpi{display:flex;justify-content:space-between;align-items:baseline;padding:7px 0;border-bottom:1px dashed rgba(36,54,92,.5);font-size:13.5px}
+.kpi:last-child{border-bottom:none}
+.kpi b{font-family:var(--mono)}
+.newsitem{padding:11px 0;border-bottom:1px solid rgba(36,54,92,.4)}
+.newsitem .t{font-weight:600;font-size:14px}
+.newsitem .m{color:var(--faint);font-size:12px;margin-top:3px}
+.sectiontitle{font-size:14px;font-weight:700;color:var(--blue);margin:22px 0 10px;letter-spacing:.5px;text-transform:uppercase}
+.error{background:rgba(255,92,114,.1);border:1px solid rgba(255,92,114,.4);color:var(--red);
+  padding:14px 18px;border-radius:10px}
+.tabs2{display:flex;gap:2px;margin-bottom:14px;flex-wrap:wrap}
+.tabs2 button{background:var(--bg2);border:1px solid var(--line);border-bottom:none;color:var(--dim);
+  padding:7px 16px;font-size:13px;cursor:pointer;border-radius:9px 9px 0 0;font-family:var(--sans)}
+.tabs2 button.on{color:var(--blue);background:var(--card);font-weight:600}
+.fadepanel{animation:fade .3s}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1}}
+canvas{max-width:100%}
+.pulse{animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:var(--line);border-radius:5px}
+@media(max-width:700px){.verdict{gap:14px}.big{font-size:21px}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><b>KAIROS</b><span>market intelligence · v2 institutional</span></div>
+  <nav id="nav">
+    <button data-view="home" class="active">Home</button>
+    <button data-view="predict">Predict</button>
+    <button data-view="scan">PSX Scan</button>
+    <button data-view="portfolio">Portfolio</button>
+    <button data-view="paper">Paper Trading</button>
+    <button data-view="news">News</button>
+    <button data-view="system">System</button>
+  </nav>
+  <div id="healthdot"><span class="pulse">●</span><span id="healthtxt">checking systems…</span></div>
+</header>
+
+<main>
+
+<!-- ================= HOME ================= -->
+<section class="view active" id="view-home">
+  <h2>Welcome to KAIROS</h2>
+  <p class="sub">Your institutional-grade prediction desk for commodities, forex, global indices and the Pakistan Stock Exchange. Everything below runs on your machine, with your data sources and your broker bridges.</p>
+
+  <div class="grid g4" id="homekpi"></div>
+
+  <div class="card">
+    <div class="sectiontitle" style="margin-top:0">What do you want to know?</div>
+    <p class="dim" style="font-size:13px;margin-bottom:10px">One tap each — KAIROS will run the full engine (model battery → 100 strategies → fusion → risk) and answer in plain language.</p>
+    <div class="chips" id="quickasks"></div>
+  </div>
+
+  <div class="grid g2">
+    <div class="card">
+      <div class="sectiontitle" style="margin-top:0">How KAIROS thinks</div>
+      <div class="kpi"><span class="dim">1 · Data</span><span class="dim">Yahoo Finance, TradingView PSX, your local PSX API, news feeds</span></div>
+      <div class="kpi"><span class="dim">2 · Understand</span><span class="dim">78 features, market-regime detection, candlestick patterns</span></div>
+      <div class="kpi"><span class="dim">3 · Forecast</span><span class="dim">ARIMA, GARCH, Kalman, OU, Fourier + ML trees + LSTM/GRU + Chronos/TimesFM</span></div>
+      <div class="kpi"><span class="dim">4 · Cross-check</span><span class="dim">100-strategy library votes, then regime-weighted fusion</span></div>
+      <div class="kpi"><span class="dim">5 · Size it</span><span class="dim">VaR, Kelly, volatility targeting, event &amp; KSE-regime risk gates</span></div>
+      <div class="kpi"><span class="dim">6 · Execute</span><span class="dim">Paper broker → MT5 (commodities/FX) → JS Global desk (PSX)</span></div>
+    </div>
+    <div class="card">
+      <div class="sectiontitle" style="margin-top:0">Reading a KAIROS verdict</div>
+      <div class="kpi"><span class="dim">Bullish / Bearish</span><span>direction of the fused signal</span></div>
+      <div class="kpi"><span class="dim">Confidence 0–1</span><span>how much the models &amp; strategies agree</span></div>
+      <div class="kpi"><span class="dim">Expected return</span><span>best estimate over your horizon</span></div>
+      <div class="kpi"><span class="dim">P(up)</span><span>probability the price is higher at horizon</span></div>
+      <div class="kpi"><span class="dim">Suggested weight</span><span>position size after all risk gates</span></div>
+      <div class="kpi"><span class="dim">Anything red</span><span>an event (FOMC, SBP policy) or regime that shrinks size</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="sectiontitle" style="margin-top:0">Live watchlist</div>
+    <div id="homewatch"><span class="dim">loading…</span></div>
+  </div>
+</section>
+
+<!-- ================= PREDICT ================= -->
+<section class="view" id="view-predict">
+  <h2>Predict anything</h2>
+  <p class="sub">Type a ticker — GOLD, WTI, EURUSD, BTC, OGDC, LUCK, KSE100 — or pick a quick chip below. The engine returns a full dossier: signal, targets, models, strategies, risk and sizing.</p>
+  <div class="card">
+    <div class="grid" style="grid-template-columns:2fr 1fr 1fr auto;align-items:end">
+      <div><label>Instrument</label><input id="psym" list="univlist" placeholder="e.g. GOLD, OGDC, EURUSD…" value="GOLD">
+        <datalist id="univlist"></datalist></div>
+      <div><label>Horizon (days)</label><input id="phor" type="number" min="1" max="21" value="5"></div>
+      <div><label>LLM council</label><select id="pcouncil"><option value="0">Off (faster)</option><option value="1">On (deeper)</option></select></div>
+      <div style="padding-bottom:1px"><button class="btn" id="pgo">Run engine</button></div>
+    </div>
+    <div class="chips" id="pchips"></div>
+  </div>
+  <div id="presult"></div>
+</section>
+
+<!-- ================= SCAN ================= -->
+<section class="view" id="view-scan">
+  <h2>Pakistan Stock Exchange — cross-section leaderboard</h2>
+  <p class="sub">Every listed stock ranked by a composite of momentum, value, quality and low-volatility factors, scored live from TradingView. The top decile is KAIROS's candidate long basket.</p>
+  <div class="card">
+    <button class="btn" id="scango">Scan the market now</button>
+    <span class="dim" id="scanmeta" style="margin-left:14px"></span>
+  </div>
+  <div class="card" style="overflow-x:auto"><div id="scanbody"><span class="dim">click the button to run the scan…</span></div></div>
+  <div class="explain">Composite = weighted z-scores across factors. Positive momentum = outperformance vs the market over 1–3 months. Value = cheap vs peers (low price-to-fundamentals). Quality = profitability &amp; balance-sheet strength. Ranks update with every scan.</div>
+</section>
+
+<!-- ================= PORTFOLIO ================= -->
+<section class="view" id="view-portfolio">
+  <h2>Portfolio constructor</h2>
+  <p class="sub">Choose instruments and capital. KAIROS solves a cardinality-constrained mean-variance problem with a quantum-annealing heuristic, then stress-checks the allocation.</p>
+  <div class="card">
+    <label>Instruments (comma separated)</label>
+    <input id="fosyms" value="GOLD,WTI,EURUSD,SPX,OGDC,HBL,LUCK,ENGRO">
+    <div class="grid" style="grid-template-columns:1fr 1fr auto;align-items:end">
+      <div><label>Capital</label><input id="focap" type="number" value="1000000" step="10000"></div>
+      <div><label>Max names held</label><input id="fok" type="number" placeholder="auto"></div>
+      <div style="padding-bottom:1px"><button class="btn" id="fogo">Optimize</button></div>
+    </div>
+    <div class="chips" id="fochips"></div>
+  </div>
+  <div id="foresult"></div>
+</section>
+
+<!-- ================= PAPER ================= -->
+<section class="view" id="view-paper">
+  <h2>Paper trading desk</h2>
+  <p class="sub">Prove the machine before a single real rupee or dollar moves. Orders pass the same fail-closed risk gate, fill against live prices with realistic slippage &amp; commission, and are journaled immutably.</p>
+  <div class="grid g2">
+    <div class="card">
+      <div class="sectiontitle" style="margin-top:0">Place a paper order</div>
+      <label>Instrument</label><input id="ppsym" list="univlist" value="GOLD">
+      <label>Notional (USD)</label><input id="ppnotional" type="number" value="10000" step="1000">
+      <div style="margin-top:14px;display:flex;gap:10px">
+        <button class="btn" id="ppgo">Submit through risk gate</button>
+      </div>
+      <div id="ppresult" style="margin-top:12px"></div>
+      <div class="explain" style="margin-top:16px">KAIROS only submits when the fused signal exceeds ±0.18. Weak signal = standing down. Every fill lands in the audit journal with its client order ID.</div>
+    </div>
+    <div class="card">
+      <div class="sectiontitle" style="margin-top:0">Paper account</div>
+      <div id="ppacct"><span class="dim">loading…</span></div>
+      <div style="margin-top:12px"><button class="btn ghost small" id="pprefresh">Refresh</button></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="sectiontitle" style="margin-top:0">Walk-forward validation</div>
+    <p class="dim" style="font-size:13px">Replays the recent history per instrument with the core signal, realistic costs and hysteresis — the honest answer to "does this actually turn profit?"</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">
+      <button class="btn small" id="btrun">Run validation on watchlist</button>
+      <span class="dim" id="btmeta"></span>
+    </div>
+    <div id="btresult" style="margin-top:14px"></div>
+  </div>
+  <div class="card">
+    <div class="sectiontitle" style="margin-top:0">Execution journal (immutable)</div>
+    <div id="journalbody" style="max-height:340px;overflow:auto"><span class="dim">loading…</span></div>
+  </div>
+</section>
+
+<!-- ================= NEWS ================= -->
+<section class="view" id="view-news">
+  <h2>News radar</h2>
+  <p class="sub">Macro, commodities and Pakistan-market headlines from seven feeds, scored for relevance. The LLM council reads these when you enable it on a prediction.</p>
+  <div class="card"><button class="btn" id="newsgo">Fetch headlines</button></div>
+  <div class="card" id="newsbody"><span class="dim">click fetch…</span></div>
+</section>
+
+<!-- ================= SYSTEM ================= -->
+<section class="view" id="view-system">
+  <h2>System</h2>
+  <p class="sub">Subsystems, bridges and the tradable universe. Green = operational, yellow = available but not installed/running, red = down.</p>
+  <div class="grid g2">
+    <div class="card"><div class="sectiontitle" style="margin-top:0">Health</div><div id="syshealth"><span class="dim">checking…</span></div></div>
+    <div class="card"><div class="sectiontitle" style="margin-top:0">Broker bridges</div>
+      <button class="btn ghost small" id="mt5go">Test MT5 connection</button>
+      <div id="mt5body" style="margin-top:12px"></div>
+      <div class="explain" style="margin-top:14px">MT5 executes commodities/FX orders programmatically. JS Global (PSX) generates a broker-ready ticket awaiting your one-click confirmation — human-in-the-loop by design.</div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="sectiontitle" style="margin-top:0">Tradable universe <span class="dim" id="univcount"></span></div>
+    <div style="overflow-x:auto;max-height:520px;overflow-y:auto"><div id="univbody"><span class="dim">loading…</span></div></div>
+  </div>
+</section>
+
+</main>
+
+<script>
+const $=s=>document.querySelector(s);
+const $$=s=>[...document.querySelectorAll(s)];
+const pct=(v,d=2)=>v==null?'—':(v*100).toFixed(d)+'%';
+const num=(v,d=2)=>v==null?'—':Number(v).toLocaleString(undefined,{maximumFractionDigits:d,minimumFractionDigits:d});
+const dirTag=d=>{d=+d;return d>0?'<span class="tag bull">▲ BULLISH</span>':d<0?'<span class="tag bear">▼ BEARISH</span>':'<span class="tag neut">— NEUTRAL</span>'};
+const esc=t=>String(t??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let UNIVERSE=[];
+
+async function api(path,opts){const r=await fetch(path,opts);const j=await r.json().catch(()=>({ok:false,error:'bad response'}));if(!r.ok&&!j.ok)throw new Error(j.error||j.detail||('HTTP '+r.status));return j}
+
+/* ---------- nav ---------- */
+$$('#nav button').forEach(b=>b.onclick=()=>{
+  $$('#nav button').forEach(x=>x.classList.toggle('active',x===b));
+  $$('.view').forEach(v=>v.classList.toggle('active',v.id==='view-'+b.dataset.view));
+});
+
+/* ---------- health ---------- */
+async function loadHealth(){
+  try{
+    const h=await api('/api/health');
+    const md=Object.entries(h.market_data||{});
+    const bad=md.some(([k,v])=>String(v).match(/down|error/i))&&!md.some(([k,v])=>String(v).match(/ok|up/i));
+    const dot=$('#healthdot span');
+    dot.style.color=h.llm&&h.llm.ok?'var(--green)':'var(--yellow)';
+    $('#healthtxt').textContent=h.llm&&h.llm.ok?`all systems nominal · ${h.universe_size} instruments`:'degraded mode — running';
+    const cards=[['Market data',md.filter(x=>String(x[1]).match(/ok|up/i)).length+'/'+md.length,'ok'],
+      ['LLM council',h.llm&&h.llm.ok?h.llm.provider+' · '+h.llm.models+' models':'offline','ok'],
+      ['Foundation models',h.wsl.models_ready?'Chronos + TimesFM + qlib ready':h.wsl.available?'WSL ready — models not installed':'WSL offline','warn'],
+      ['Universe',h.universe_size+' instruments','ok']];
+    $('#homekpi').innerHTML=cards.map(c=>`<div class="card" style="padding:14px 18px"><div class="dim" style="font-size:12px;text-transform:uppercase;letter-spacing:.5px">${c[0]}</div><div style="font-size:19px;font-weight:700;margin-top:4px">${esc(c[1])}</div><span class="tag ${c[2]}" style="margin-top:8px">${c[2]==='ok'?'operational':'attention'}</span></div>`).join('');
+    $('#syshealth').innerHTML=[...md.map(([k,v])=>`<div class="kpi"><span class="dim">${esc(k)}</span><span class="${String(v).match(/ok|up/i)?'up':String(v).match(/down|error/i)?'down':'flat'}">${esc(v)}</span></div>`),
+      `<div class="kpi"><span class="dim">llm router</span><span class="${h.llm&&h.llm.ok?'up':'down'}">${h.llm?esc(h.llm.provider||'down'):'down'}</span></div>`,
+      `<div class="kpi"><span class="dim">wsl bridge</span><span class="${h.wsl.models_ready?'up':'flat'}">${h.wsl.models_ready?'models ready':'available'}</span></div>`].join('');
+  }catch(e){$('#healthtxt').textContent='server unreachable';$('#healthdot span').style.color='var(--red)'}
+}
+
+/* ---------- universe ---------- */
+async function loadUniverse(){
+  try{const u=await api('/api/universe');UNIVERSE=u.instruments;
+    $('#univlist').innerHTML=UNIVERSE.map(i=>`<option value="${esc(i.key)}">${esc(i.name)} (${esc(i.market)})</option>`).join('');
+    $('#univcount').textContent=`· ${UNIVERSE.length} instruments`;
+    $('#univbody').innerHTML=`<table><thead><tr><th>Key</th><th>Name</th><th>Class</th><th>Market</th><th>Sector</th></tr></thead><tbody>${UNIVERSE.map(i=>`<tr><td class="mono" style="color:var(--blue);cursor:pointer" onclick="predictGo('${esc(i.key)}')">${esc(i.key)}</td><td>${esc(i.name)}</td><td class="dim">${esc(i.asset_class)}</td><td class="dim">${esc(i.market)}</td><td class="dim">${esc(i.sector||'')}</td></tr>`).join('')}</tbody></table>`;
+    const picks=['GOLD','WTI','EURUSD','BTC','SPX','KSE100','OGDC','LUCK','HBL','ENGRO'];
+    $('#pchips').innerHTML=picks.map(p=>`<span class="chip" onclick="predictGo('${p}')">${p}</span>`).join('');
+    $('#fochips').innerHTML=['GOLD,WTI,EURUSD,SPX','OGDC,HBL,LUCK,ENGRO,MCB','GOLD,SILVER,WTI,BRENT,NATGAS,COPPER','SPX,NDX,UKX,DAX,N225,HSI'].map(p=>`<span class="chip" onclick="$('#fosyms').value='${p}';optimizeGo()">${p.slice(0,34)}</span>`).join('');
+    $('#quickasks').innerHTML=[['Where is gold heading?','GOLD'],['Is WTI tradable now?','WTI'],['Euro vs dollar','EURUSD'],['Bitcoin this week','BTC'],['OGDC verdict','OGDC'],['LUCKY Cement','LUCK'],['HBL bank','HBL'],['KSE-100 index','KSE100']].map(([t,s])=>`<span class="chip" onclick="predictGo('${s}')">${t}</span>`).join('');
+  }catch(e){}
+}
+function predictGo(sym){$('#psym').value=sym;$$('#nav button')[1].click();runPredict()}
+
+/* ---------- home watchlist ---------- */
+const WATCH=['GOLD','WTI','EURUSD','BTC','KSE100','OGDC'];
+async function loadWatch(){
+  const rows=await Promise.all(WATCH.map(s=>api(`/api/predict?symbol=${s}&news=0&council=0`).catch(()=>null)));
+  const ok=rows.filter(r=>r&&r.ok);
+  $('#homewatch').innerHTML=`<table><thead><tr><th>Instrument</th><th class="r">Price</th><th class="c">Signal</th><th class="r">Conf</th><th class="r">Exp 5d</th><th class="r">P(up)</th><th class="r">Weight</th></tr></thead><tbody>${ok.map(r=>{const s=r.signal;const c=s.direction>0?'up':s.direction<0?'down':'flat';return `<tr><td class="mono" style="color:var(--blue);cursor:pointer" onclick="predictGo('${esc(r.symbol)}')">${esc(r.symbol)}</td><td class="r mono">${num(r.price)}</td><td class="c ${c}">${s.direction>0?'▲':s.direction<0?'▼':'—'} ${s.direction>0?'BULL':s.direction<0?'BEAR':'FLAT'}</td><td class="r mono">${(s.confidence*100).toFixed(0)}%</td><td class="r mono ${c}">${pct(s.expected_return)}</td><td class="r mono">${(r.probability_up*100).toFixed(0)}%</td><td class="r mono">${pct(r.risk.suggested_weight,0)}</td></tr>`}).join('')||'<tr><td class="dim">no data yet</td></tr>'}</tbody></table>`;
+}
+
+/* ---------- predict ---------- */
+async function runPredict(){
+  const sym=$('#psym').value.trim().toUpperCase();if(!sym)return;
+  const out=$('#presult');out.innerHTML=`<div class="card"><span class="spinner"></span>Running the full engine on <b>${esc(sym)}</b> — model battery, 100 strategies, fusion, risk…</div>`;
+  try{
+    const r=await api(`/api/predict?symbol=${encodeURIComponent(sym)}&horizon=${+$('#phor').value||5}&council=${$('#pcouncil').value}&news=1`);
+    out.innerHTML=renderDossier(r);
+  }catch(e){out.innerHTML=`<div class="error">${esc(e.message)}</div>`}
+}
+$('#pgo').onclick=runPredict;
+$('#psym').addEventListener('keydown',e=>{if(e.key==='Enter')runPredict()});
+
+function renderDossier(r){
+  const s=r.signal,rg=r.regime,rk=r.risk,b=r.confidence_band;
+  const cls=s.direction>0?'bull':s.direction<0?'bear':'neut';
+  const arrow=s.direction>0?'▲':s.direction<0?'▼':'—';
+  let h=`<div class="fadepanel">`;
+  h+=`<div class="verdict ${cls}"><div><div class="dim" style="font-size:12px;text-transform:uppercase;letter-spacing:1px">${esc(r.symbol)} · ${esc(r.name)} · ${esc(r.market)}</div><div class="vdir ${cls}" style="color:${s.direction>0?'var(--green)':s.direction<0?'var(--red)':'var(--yellow)'}">${arrow} ${s.direction>0?'BULLISH':s.direction<0?'BEARISH':'NEUTRAL'}</div><div class="vmeta">over the next ${s.horizon_days} days · price ${num(r.price)} ${esc(r.currency)} · as of ${esc(r.as_of)}</div></div>
+  <div><div class="dim" style="font-size:11px">EXPECTED RETURN</div><div class="big" style="color:${s.direction>0?'var(--green)':s.direction<0?'var(--red)':'var(--yellow)'}">${pct(s.expected_return)}</div><div class="dim" style="font-size:12px">P(up) ${(r.probability_up*100).toFixed(1)}%</div></div>
+  <div><div class="dim" style="font-size:11px">CONFIDENCE</div><div class="big">${(s.confidence*100).toFixed(0)}%</div><div class="bar" style="width:130px"><div style="width:${s.confidence*100}%;background:var(--blue)"></div></div><div class="dim" style="font-size:12px">score ${s.score.toFixed(2)} · models agree ${pct(s.model_agreement,0)}</div></div></div>`;
+  // targets
+  h+=`<div class="grid g2"><div class="card"><div class="sectiontitle" style="margin-top:0">Price targets</div><div class="kpi"><span class="dim">today</span><b>${num(r.price)}</b></div>`;
+  for(const[k,v]of Object.entries(r.targets))h+=`<div class="kpi"><span class="dim">in ${esc(k)}</span><b>${num(v)}</b></div>`;
+  h+=`<div class="kpi"><span class="dim">80% range (p10–p90)</span><b>${num(b.p10)} – ${num(b.p90)}</b></div></div>`;
+  // risk
+  h+=`<div class="card"><div class="sectiontitle" style="margin-top:0">Risk &amp; suggested sizing</div>
+  <div class="kpi"><span class="dim">Suggested position weight</span><b style="color:var(--blue)">${pct(rk.suggested_weight)}</b></div>
+  <div class="kpi"><span class="dim">Annual volatility</span><b>${pct(rk.annual_vol,1)}</b></div>
+  <div class="kpi"><span class="dim">Daily VaR / CVaR (95%)</span><b>${pct(rk.var_95_daily)} / ${pct(rk.cvar_95_daily)}</b></div>
+  <div class="kpi"><span class="dim">Sharpe / Sortino</span><b>${rk.sharpe} / ${rk.sortino}</b></div>
+  <div class="kpi"><span class="dim">Max drawdown (2y)</span><b>${pct(rk.max_drawdown,1)}</b></div>
+  <div class="kpi"><span class="dim">Kelly fraction</span><b>${rk.kelly_fraction}</b></div></div></div>`;
+  // regime & events
+  h+=`<div class="grid g2"><div class="card"><div class="sectiontitle" style="margin-top:0">Market regime</div>
+  <div class="kpi"><span class="dim">regime</span><b style="color:var(--cyan,var(--blue))">${esc(rg.regime)}</b></div>
+  <div class="kpi"><span class="dim">Hurst (trendiness)</span><b>${rg.hurst}</b></div>
+  <div class="kpi"><span class="dim">ADX (trend strength)</span><b>${rg.adx}</b></div>
+  <div class="kpi"><span class="dim">Volatility percentile</span><b>${pct(rg.vol_percentile,0)}</b></div></div>`;
+  h+=`<div class="card"><div class="sectiontitle" style="margin-top:0">Overlays</div>
+  <div class="kpi"><span class="dim">Event risk</span>${r.event_risk&&r.event_risk.position_multiplier<1?`<b class="down">${esc(r.event_risk.next_event)} on ${esc(r.event_risk.next_date)} · size ×${r.event_risk.position_multiplier}</b>`:'<b class="up">no near-term macro event</b>'}</div>
+  <div class="kpi"><span class="dim">KSE-100 regime multiplier</span><b>×${r.kse_regime_multiplier}</b></div>`;
+  if(r.patterns&&r.patterns.length)h+=`<div class="kpi"><span class="dim">Chart patterns</span><b>${r.patterns.map(esc).join(', ')}</b></div>`;
+  if(r.factor_context){const f=r.factor_context;h+=`<div class="kpi"><span class="dim">PSX factors</span><b>rank #${f.composite_rank??'—'} · mom1m ${f.momentum_1m_z??'—'} · value ${f.value_z??'—'}</b></div>`}
+  h+=`</div></div>`;
+  // models
+  if(r.models&&r.models.length){
+    h+=`<div class="card"><div class="sectiontitle" style="margin-top:0">Model battery — ${r.models.length} forecasters</div><div style="overflow-x:auto"><table><thead><tr><th>Model</th><th class="c">Direction</th><th class="r">Expected</th><th class="r">Confidence</th><th class="dim">Detail</th></tr></thead><tbody>`;
+    for(const m of r.models)h+=`<tr><td class="mono" style="color:var(--blue)">${esc(m.model)}</td><td class="c">${m.direction>0?'<span class="up">▲</span>':m.direction<0?'<span class="down">▼</span>':'<span class="flat">—</span>'}</td><td class="r mono">${pct(m.expected_return)}</td><td class="r mono">${(m.confidence*100).toFixed(0)}%</td><td class="dim" style="white-space:normal">${esc(m.detail)}</td></tr>`;
+    h+=`</tbody></table></div></div>`;
+  }
+  // strategies
+  if(r.top_strategies&&r.top_strategies.length){
+    h+=`<div class="card"><div class="sectiontitle" style="margin-top:0">Strategy library — top votes of ${r.strategies_voted}/100 · consensus ${s.strategy_consensus?.toFixed(2)}</div><div style="overflow-x:auto"><table><thead><tr><th>Strategy</th><th class="dim">Family</th><th class="c">Dir</th><th class="r">Strength</th><th class="dim" style="white-space:normal">Why</th></tr></thead><tbody>`;
+    for(const st of r.top_strategies)h+=`<tr><td style="color:var(--blue)">${esc(st.name)}</td><td class="dim">${esc(st.category)}</td><td class="c">${st.direction>0?'<span class="up">▲</span>':st.direction<0?'<span class="down">▼</span>':'—'}</td><td class="r mono">${st.strength.toFixed(2)}</td><td class="dim" style="white-space:normal">${esc(st.rationale)}</td></tr>`;
+    h+=`</tbody></table></div></div>`;
+  }
+  // council
+  if(r.council&&r.council.ok){
+    const c=r.council,cons=c.consensus||{};const view=String(cons.view||'neutral');
+    const col=view==='bullish'?'var(--green)':view==='bearish'?'var(--red)':'var(--yellow)';
+    h+=`<div class="card" style="border-color:${col}66"><div class="sectiontitle" style="margin-top:0;color:${col}">LLM quant council — ${view.toUpperCase()}</div>`;
+    if(cons.probability_up!=null)h+=`<div class="kpi"><span class="dim">Council P(up)</span><b>${(cons.probability_up*100).toFixed(1)}%</b></div>`;
+    if(cons.key_drivers)h+=`<div style="margin-top:8px"><span class="dim">Drivers:</span> ${cons.key_drivers.map(esc).join(' · ')}</div>`;
+    if(cons.risks)h+=`<div style="margin-top:8px"><span class="down">Risks:</span> ${cons.risks.map(esc).join(' · ')}</div>`;
+    if(cons.entry||cons.stop||cons.target)h+=`<div class="kpi" style="margin-top:10px"><span class="dim">entry / stop / target</span><b>${num(cons.entry)} / ${num(cons.stop)} / ${num(cons.target)}</b></div>`;
+    if(cons.thesis)h+=`<div style="margin-top:10px;font-style:italic;color:var(--dim)">"${esc(cons.thesis)}"</div>`;
+    h+=`<div class="dim" style="font-size:12px;margin-top:8px">${esc(c.models_polled||'')} deliberating models reached this by consensus${c.dissent?' — with dissent noted':''}.</div></div>`;
+  }
+  h+=`<div class="dim" style="font-size:12px">computed in ${r.computation_ms}ms · ${r.history_bars} bars of history · shrinkage ×${s.shrinkage??1}</div></div>`;
+  return h;
+}
+
+/* ---------- scan ---------- */
+$('#scango').onclick=async()=>{
+  const body=$('#scanbody');body.innerHTML='<span class="spinner"></span>scanning 484 listed stocks…';
+  try{const r=await api('/api/scan?top=100');
+    $('#scanmeta').textContent=`${r.universe} stocks · ${new Date(r.as_of).toLocaleString()}`;
+    const bar=(v,max)=>`<div class="bar" style="width:70px"><div style="width:${Math.min(100,Math.abs(v)/(max||1)*100)}%;background:${v>=0?'var(--green)':'var(--red)'}"></div></div>`;
+    const maxm=Math.max(...r.top.map(x=>Math.abs(x.momentum_1m||0)),1);
+    body.innerHTML=`<table id="scantbl"><thead><tr><th class="c">#</th><th>Ticker</th><th class="r">Price</th><th>Momentum 1m</th><th class="r">3m z</th><th class="r">Value z</th><th class="r">Quality z</th><th class="r">Composite</th></tr></thead><tbody>${r.top.map(x=>`<tr><td class="c mono">${x.rank}</td><td class="mono" style="color:var(--blue);cursor:pointer" onclick="predictGo('${esc(x.name)}')">${esc(x.name)}</td><td class="r mono">${num(x.close)}</td><td>${bar(x.momentum_1m,maxm)}<span class="mono" style="font-size:12px">${(x.momentum_1m??0).toFixed(2)}</span></td><td class="r mono">${num(x.momentum_3m)}</td><td class="r mono">${num(x.value)}</td><td class="r mono">${num(x.quality)}</td><td class="r mono" style="color:var(--blue);font-weight:700">${num(x.composite_score,3)}</td></tr>`).join('')}</tbody></table>`;
+  }catch(e){body.innerHTML=`<div class="error">${esc(e.message)}</div>`}
+};
+
+/* ---------- portfolio ---------- */
+async function optimizeGo(){
+  const syms=$('#fosyms').value.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean);
+  if(!syms.length)return;
+  const out=$('#foresult');out.innerHTML=`<div class="card"><span class="spinner"></span>annealing the optimal allocation…</div>`;
+  try{
+    const cap=+$('#focap').value||1000000;const k=+$('#fok').value||null;
+    const r=await api('/api/portfolio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbols:syms,capital:cap,cardinality:k})});
+    const qc=r.quantum_check||{};
+    out.innerHTML=`<div class="fadepanel grid g2">
+    <div class="card"><div class="sectiontitle" style="margin-top:0">Allocation · ${esc(r.solver)} · ${r.cardinality} names</div>
+    ${Object.entries(r.weights).sort((a,b)=>Math.abs(b[1])-Math.abs(a[1])).map(([s,w])=>`<div class="kpi"><span class="mono" style="color:var(--blue)">${esc(s)}</span><span><b>${pct(w)}</b> <span class="dim mono">(${Math.round(r.allocations[s]||0).toLocaleString()})</span></span></div>`).join('')}
+    </div>
+    <div class="card"><div class="sectiontitle" style="margin-top:0">Portfolio profile</div>
+    <div class="kpi"><span class="dim">Expected return</span><b class="up">${pct(r.expected_return)}</b></div>
+    <div class="kpi"><span class="dim">Expected volatility</span><b>${pct(r.expected_vol)}</b></div>
+    <div class="kpi"><span class="dim">Sharpe ratio</span><b>${r.sharpe}</b></div>
+    <div class="kpi"><span class="dim">Quantum coherence check</span><b>${qc.coherence??'—'} ${qc.coherent===false?'<span class="tag warn">review</span>':'<span class="tag ok">stable</span>'}</b></div>
+    </div></div>`;
+  }catch(e){out.innerHTML=`<div class="error">${esc(e.message)}</div>`}
+}
+$('#fogo').onclick=optimizeGo;
+
+/* ---------- paper ---------- */
+$('#ppgo').onclick=async()=>{
+  const sym=$('#ppsym').value.trim().toUpperCase();const out=$('#ppresult');
+  out.innerHTML='<span class="spinner"></span>running engine + risk gate…';
+  try{const r=await api('/api/paper',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:sym,notional:+$('#ppnotional').value||10000})});
+    if(!r.ok){out.innerHTML=`<div class="card" style="border-color:var(--yellow)"><b class="flat">${r.reason==='signal_below_threshold'?'Stood down — signal too weak':'Risk gate blocked'}</b><div class="dim" style="margin-top:6px">${esc(r.message)}</div></div>`}
+    else{const f=r.fill;out.innerHTML=`<div class="card" style="border-color:var(--green)"><b class="up">FILLED</b> — ${esc(f.symbol)} ${esc(f.side)} ${f.quantity} @ ${f.fill_price} <span class="dim">(slip ${f.slippage}, comm ${f.commission})</span><div class="dim mono" style="font-size:12px;margin-top:6px">order ${esc(f.client_order_id)} journaled</div></div>`}
+    loadPaperAcct();loadJournal();
+  }catch(e){out.innerHTML=`<div class="error">${esc(e.message)}</div>`}
+};
+async function loadPaperAcct(){
+  try{const r=await api('/api/paper/account');const a=r.account;
+    $('#ppacct').innerHTML=`<div class="kpi"><span class="dim">Equity</span><b class="big">${(a.equity||0).toLocaleString(undefined,{maximumFractionDigits:0})}</b></div>
+    <div class="kpi"><span class="dim">Cash</span><b>${(a.cash||0).toLocaleString(undefined,{maximumFractionDigits:0})}</b></div>
+    <div class="kpi"><span class="dim">Open positions</span><b>${(r.positions||[]).length}</b></div>
+    ${(r.positions||[]).map(p=>`<div class="kpi"><span class="mono dim">${esc(p.symbol)}</span><span>${esc(p.side)} ${p.quantity} @ ${p.entry_price}</span></div>`).join('')}`;
+  }catch(e){$('#ppacct').innerHTML=`<span class="dim">${esc(e.message)}</span>`}
+}
+$('#pprefresh').onclick=loadPaperAcct;
+
+/* ---------- backtest ---------- */
+$('#btrun').onclick=async()=>{
+  $('#btmeta').innerHTML='<span class="spinner"></span>replaying history…';
+  try{const syms=WATCH.join(',');
+    const r=await api(`/api/backtest?symbols=${syms}&days=120`);
+    const sm=r.summary||{};
+    $('#btmeta').textContent=`${sm.instruments} instruments · ${sm.profitable} profitable · ${sm.marginal} marginal · ${sm.unprofitable} unprofitable`;
+    const vc=v=>v==='PROFITABLE'?'ok':v==='MARGINAL'?'warn':'bad';
+    $('#btresult').innerHTML=`<div style="overflow-x:auto"><table><thead><tr><th>Instrument</th><th class="c">Verdict</th><th class="r">Return</th><th class="r">Buy&amp;hold</th><th class="r">Excess</th><th class="r">Sharpe</th><th class="r">Hit rate</th><th class="r">Max dd</th><th class="r">Trades</th></tr></thead><tbody>${Object.entries(r.results).map(([s,x])=>{if(x.error)return `<tr><td>${esc(s)}</td><td colspan="8" class="dim">${esc(x.error)}</td></tr>`;const e=(x.return||0)-(x.benchmark||0);return `<tr><td class="mono" style="color:var(--blue)">${esc(s)}</td><td class="c"><span class="tag ${vc(x.verdict)}">${esc(x.verdict)}</span></td><td class="r mono ${(x.return||0)>=0?'up':'down'}">${pct(x.return)}</td><td class="r mono dim">${pct(x.benchmark)}</td><td class="r mono ${e>=0?'up':'down'}">${pct(e)}</td><td class="r mono">${x.sharpe}</td><td class="r mono">${pct(x.hit_rate,0)}</td><td class="r mono down">${pct(x.max_dd,1)}</td><td class="r mono">${x.trades}</td></tr>`}).join('')}</tbody></table></div>
+    ${r.demo_paper_order?`<div class="explain">Execution path proven: a live demo order flowed gate → paper broker → journal (${esc(r.demo_paper_order.symbol)} ${esc(r.demo_paper_order.side)}).</div>`:''}`;
+  }catch(e){$('#btmeta').textContent='';$('#btresult').innerHTML=`<div class="error">${esc(e.message)}</div>`}
+};
+
+/* ---------- journal ---------- */
+async function loadJournal(){
+  try{const r=await api('/api/journal?last=60');
+    $('#journalbody').innerHTML=r.entries.length?`<table><tbody>${r.entries.slice().reverse().map(j=>`<tr><td class="mono dim" style="font-size:12px">${esc(j.ts||j.timestamp||'')}</td><td class="mono" style="color:var(--blue)">${esc(j.event||j.type||'')}</td><td style="white-space:normal">${esc(typeof j.detail==='string'?j.detail:JSON.stringify(j.detail||j))}</td></tr>`).join('')}</tbody></table>`:'<span class="dim">no entries yet — place a paper order above</span>';
+  }catch(e){$('#journalbody').innerHTML='<span class="dim">journal unavailable</span>'}
+}
+
+/* ---------- news ---------- */
+$('#newsgo').onclick=async()=>{
+  const body=$('#newsbody');body.innerHTML='<span class="spinner"></span>fetching seven feeds…';
+  try{const r=await api('/api/news?limit=40');
+    body.innerHTML=r.items.map(n=>`<div class="newsitem"><div class="t">${n.url?`<a href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.title)}</a>`:esc(n.title)}</div><div class="m">${esc(n.source)} · ${esc((n.published||'').slice(0,16).replace('T',' '))}</div></div>`).join('')||'<span class="dim">no headlines right now</span>';
+  }catch(e){body.innerHTML=`<div class="error">${esc(e.message)}</div>`}
+};
+
+/* ---------- mt5 ---------- */
+$('#mt5go').onclick=async()=>{
+  const b=$('#mt5body');b.innerHTML='<span class="spinner"></span>connecting to MetaTrader 5…';
+  try{const r=await api('/api/mt5');
+    b.innerHTML=r.connected?`<div class="kpi"><span class="dim">MT5 terminal</span><b class="up">CONNECTED</b></div>${(r.ticks||[]).map(t=>`<div class="kpi"><span class="mono dim">${esc(t.symbol)}</span><span class="mono">bid ${t.bid} / ask ${t.ask} <span class="dim">(spread ${t.spread})</span></span></div>`).join('')}`
+      :`<div class="kpi"><span class="dim">MT5 terminal</span><b class="down">UNREACHABLE</b></div><div class="dim" style="margin-top:8px">Launch MetaTrader 5 and enable algo trading, then retry.</div>`;
+  }catch(e){b.innerHTML=`<div class="error">${esc(e.message)}</div>`}
+};
+
+/* ---------- boot ---------- */
+loadHealth();loadUniverse().then(()=>{loadWatch()});loadPaperAcct();loadJournal();
+setInterval(loadHealth,60000);
+</script>
+</body>
+</html>

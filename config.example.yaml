@@ -1,0 +1,132 @@
+Version: "2.0.0"
+Codename: "Institutional"
+
+app:
+  name: KAIROS
+  data_dir: data
+  cache_dir: data/cache
+  reports_dir: reports
+  log_level: INFO
+
+market_hours:
+  psx_tz: "Asia/Karachi"
+  psx_open: "09:30"
+  psx_close: "15:30"
+  psx_days: [0, 1, 2, 3, 4]
+
+# ---------------------------------------------------------------------------
+# API keys. Copy this file to config.yaml and fill in your own values.
+# config.yaml is git-ignored — NEVER commit real keys.
+# ---------------------------------------------------------------------------
+apis:
+  psx_local:
+    base_url: "http://localhost:8000/api/stock"
+    enabled: true
+
+  openrouter:
+    enabled: true
+    base_url: "https://openrouter.ai/api/v1"
+    keys:
+      - "sk-or-v1-YOUR-KEY-1"
+      - "sk-or-v1-YOUR-KEY-2"
+      - "sk-or-v1-YOUR-KEY-3"
+    council_models:
+      - "deepseek/deepseek-chat-v3-0324"
+      - "meta-llm/llama-3.3-70b-instruct"
+      - "qwen/qwen-2.5-72b-instruct"
+    fast_model: "deepseek/deepseek-chat-v3-0324"
+    deep_model: "deepseek/deepseek-r1"
+    timeout_s: 90
+
+  deepseek:
+    enabled: false
+    base_url: "https://api.deepseek.com"
+    api_key: "YOUR-KEY"
+    model: "deepseek-chat"
+
+  gemini:
+    enabled: false
+    base_url: "https://generativelanguage.googleapis.com/v1beta"
+    api_key: "YOUR-KEY"
+    model: "gemini-2.0-flash"
+
+  zai:
+    enabled: false
+    base_url: "https://api.z.ai/api/paas/v4"
+    api_key: "YOUR-KEY"
+    model: "glm-4-flash"
+
+  grok:
+    enabled: false
+    base_url: "https://api.x.ai/v1"
+    api_key: "YOUR-KEY"
+    model: "grok-3-mini"
+
+  ibm_quantum:
+    enabled: false
+    token: "YOUR-TOKEN"
+    channel: "ibm_quantum_platform"
+
+data:
+  yahoo:
+    enabled: true
+    base_url: "https://query1.finance.yahoo.com"
+    lookback_days: 730
+    timeout_s: 20
+  tradingview:
+    enabled: true
+    scanner_url: "https://scanner.tradingview.com/pakistan/scan"
+    global_scanner_url: "https://scanner.tradingview.com/global/scan"
+    timeout_s: 25
+
+news:
+  enabled: true
+  feeds:
+    - name: "Google News - Pakistan Stocks"
+      url: "https://news.google.com/rss/search?q=Pakistan+Stock+Exchange+OR+KSE-100+when:2d&hl=en-PK&gl=PK&ceid=PK:en"
+    - name: "Google News - Commodities"
+      url: "https://news.google.com/rss/search?q=gold+OR+oil+OR+commodities+market+when:1d&hl=en&gl=US&ceid=US:en"
+    - name: "Google News - Global Markets"
+      url: "https://news.google.com/rss/search?q=stock+market+OR+fed+OR+inflation+when:1d&hl=en&gl=US&ceid=US:en"
+    - name: "Business Recorder"
+      url: "https://www.brecorder.com/feeds/latest-news"
+    - name: "Dawn Business"
+      url: "https://www.dawn.com/feeds/home-business"
+    - name: "FXStreet"
+      url: "https://www.fxstreet.com/rss/news"
+    - name: "MarketWatch Top"
+      url: "https://feeds.content.dowjones.io/public/rss/mw_topstories"
+  max_items_per_feed: 25
+
+engine:
+  min_history: 40
+  forecast_horizons: [1, 5, 21]
+  strategy_vote_threshold: 0.45
+  model_confidence_floor: 0.30
+  use_neural: true
+  use_ml: true
+  use_stat: true
+  use_strategies: true
+  use_llm: false
+  llm_council_models: 3
+
+risk:
+  annual_vol_target: 0.18
+  max_position_weight: 0.10
+  max_sector_weight: 0.40
+  var_confidence: 0.95
+  kelly_fraction_cap: 0.25
+  daily_loss_limit_pct: 0.03
+  psx_cost_bps: 60
+  global_cost_bps: 12
+
+quantum:
+  enabled: true
+  mode: "local"
+  shots: 2048
+
+backtest:
+  train_window: 252
+  step_days: 1
+  refit_every: 20
+  start_capital: 1000000

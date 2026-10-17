@@ -1,0 +1,16 @@
+# Secrets — NEVER commit
+config.yaml
+*.key
+*.env
+
+# Runtime state
+data/
+reports/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.log
+
+# Local junk
+Thumbs.db
+.DS_Store
