@@ -71,6 +71,7 @@ python -m kairos serve
 - **Portfolio** — annealed allocation with per-instrument metrics
 - **Paper Trading** — gated orders, account state, walk-forward validation, immutable journal
 - **Trade Like a Pro** — the autonomous desk: start/stop the autopilot, arm LIVE execution, broker-connection strip (MT5 + JS Global), kill switch, live signal board, positions and audit feed
+- **Shareable live signals** — one click per signal: an Instagram-square 1080×1080 PNG card (`/api/signal-card?symbol=…`) plus a WhatsApp-ready caption copied to your clipboard; every card carries the not-investment-advice disclaimer
 - **News** — seven-feed macro/Pakistan radar
 - **System** — health, MT5 bridge, tradable universe browser
 
@@ -89,7 +90,7 @@ Copy `config.example.yaml` to `config.yaml` and fill in your keys (OpenRouter et
 ## Architecture
 
 ```
-python -m kairos             CLI entry (predict/scan/portfolio/backtest/paper/mt5/autopilot/rules/feedback/serve/…)
+python -m kairos             CLI entry (predict/scan/portfolio/backtest/paper/mt5/autopilot/rules/share/feedback/serve/…)
 launch_kairos.bat            one-click launcher (desktop shortcut target)
 config.yaml                  all keys + engine tunables (git-ignored)
 kairos/
@@ -105,6 +106,7 @@ kairos/
   engine.py                  PredictionEngine orchestration
   feedback.py                prediction journal → realized outcomes → confidence calibration
   rules.py                   JARVIS v1 doctrine merged: risk-per-trade, R:R floor, ATR stops, wisdom corpus
+  signalcard.py              shareable live signal cards: 1080×1080 PNG + WhatsApp caption
   backtest.py                walk-forward validation + paper sessions
   execution.py               OrderIntent → RiskGate → PaperBroker / Mt5Bridge / JsGlobalTicket + audit journal
   autopilot.py               autonomous loop: scan → verdicts → doctrine-sized orders → gated execution

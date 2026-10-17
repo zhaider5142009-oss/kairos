@@ -385,6 +385,18 @@ def cmd_rules(args) -> int:
     return 0
 
 
+def cmd_share(args) -> int:
+    """Render a shareable live signal card (WhatsApp/Instagram)."""
+    from rich.panel import Panel
+    from . import signalcard
+    console = _console()
+    console.print(f"[bold blue]building live signal card for {args.symbol}…[/]")
+    path, cap = signalcard.card_for(args.symbol, args.out)
+    console.print(Panel(cap, title="KAIROS LIVE SIGNAL", style="blue"))
+    console.print(f"[green]card saved:[/] {path}")
+    return 0
+
+
 def cmd_feedback(args) -> int:
     """Resolve elapsed predictions and print the realized track record."""
     from rich.panel import Panel
@@ -502,6 +514,12 @@ def main() -> int:
     sp.add_argument("--wisdom", action="store_true",
                     help="also print the Wyckoff/Dow/CANSLIM/Buffett/Dalio/Lynch corpus")
     sp.set_defaults(fn=cmd_rules)
+
+    sp = sub.add_parser("share", help="shareable live signal card (PNG + caption)")
+    sp.add_argument("symbol")
+    sp.add_argument("-o", "--out",
+                    help="output PNG path (default: data/cards/SYMBOL.png)")
+    sp.set_defaults(fn=cmd_share)
 
     sp = sub.add_parser("feedback", help="resolve outcomes + realized track record")
     sp.set_defaults(fn=cmd_feedback)

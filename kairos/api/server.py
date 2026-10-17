@@ -246,6 +246,34 @@ def desk():
     return _safe(st)
 
 
+# ---------------------------------------------------------------- live signals
+@app.get("/api/live")
+def live_signals():
+    """Shareable live signal board from the autopilot's latest cycle."""
+    from kairos.autopilot import AUTOPILOT
+    st = AUTOPILOT.status()
+    rows = [dict(r, share=f"/api/signal-card?symbol={r['symbol']}")
+            for r in st.get("signals") or []]
+    return _safe({"ok": True, "as_of": st.get("last_cycle"),
+                  "running": st.get("running"), "mode": st.get("mode"),
+                  "signals": rows})
+
+
+@app.get("/api/signal-card")
+def signal_card(symbol: str, caption: bool = False):
+    """Instagram-square PNG signal card; ?caption=1 returns the share text."""
+    from fastapi.responses import FileResponse
+    from kairos import signalcard
+    try:
+        path, cap = signalcard.card_for(symbol)
+    except Exception as e:
+        raise HTTPException(404, f"no signal for {symbol!r}: {e}")
+    if caption:
+        return {"ok": True, "caption": cap}
+    return FileResponse(path, media_type="image/png",
+                        filename=f"kairos-{symbol.upper()}-signal.png")
+
+
 # ---------------------------------------------------------------- chat
 class ChatReq(BaseModel):
     message: str
