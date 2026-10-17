@@ -25,7 +25,7 @@ from .config import CFG
 VOL_TARGET = 0.20
 CALIB_WINDOW = 252          # trailing bars used for parameter calibration
 REFIT_EVERY = 30            # re-calibrate every N bars
-SMOOTH_SPAN = 3             # EMA smoothing of the blended signal (anti-whipsaw)
+SMOOTH_SPANS = (1, 3)       # raw and EMA-conditioned blends compete per instrument
 
 
 @dataclass
@@ -76,7 +76,7 @@ def _components(df: pd.DataFrame) -> dict[str, pd.Series]:
 
 def _blended(comps: dict[str, pd.Series],
              w_t: float, w_m: float, w_r: float, w_b: float,
-             adx_gate: float, shorts: str) -> pd.Series:
+             adx_gate: float, shorts: str, span: int = 1) -> pd.Series:
     denom = w_t + w_m + w_r + w_b
     if denom <= 0:
         return pd.Series(0.0, index=comps["trend"].index)
@@ -91,7 +91,9 @@ def _blended(comps: dict[str, pd.Series],
     else:  # "bear": shorts only in confirmed bear structure
         bear_ok = (comps["sma200_d"] < 0) & (comps["ret63"] < 0.08)
         sig = sig.where(~((sig < 0) & ~bear_ok), 0.0)
-    return sig.ewm(span=SMOOTH_SPAN, adjust=False).mean().clip(-1, 1)
+    if span > 1:
+        sig = sig.ewm(span=span, adjust=False).mean()
+    return sig.clip(-1, 1)
 
 
 def _simulate(close: np.ndarray, sig: pd.Series, vol20: np.ndarray,
@@ -157,7 +159,7 @@ def _grid() -> list[dict[str, Any]]:
         for w_m in (0.10, 0.25, 0.40):
             for w_r in (0.05, 0.25, 0.45):
                 for w_b in (0.05, 0.20):
-                    for entry in (0.12, 0.22, 0.32):
+                    for entry in (0.12, 0.22, 0.32, 0.45):
                         for adx_gate in (10, 20, 30):
                             for shorts in ("bear", "off"):
                                 out.append({"w_t": w_t, "w_m": w_m, "w_r": w_r,
@@ -173,20 +175,21 @@ def _calibrate(close: np.ndarray, comps: dict[str, pd.Series],
     objective. Purely in-window — no future leakage."""
     best, best_obj = None, -1e9
     for prm in _grid():
-        sig = _blended(comps, prm["w_t"], prm["w_m"], prm["w_r"], prm["w_b"],
-                       prm["adx_gate"], prm["shorts"])
-        sim = _simulate(close, sig, vol20, start, end, cost, prm["entry"])
-        if sim["trades"] < 6:
-            continue                       # not statistically meaningful
-        tpy = sim["trades"] * 252 / max(end - start - 1, 1)
-        obj = (sim["sharpe"]
-               + 2.0 * (sim["equity"] - 1.0)               # reward real money
-               + 1.5 * min(sim["mdd"] + 1.0, 1.0)          # reward shallow drawdowns
-               - 0.015 * tpy)                              # turnover penalty
-        if obj > best_obj:
-            best_obj, best = obj, prm
+        for span in SMOOTH_SPANS:
+            sig = _blended(comps, prm["w_t"], prm["w_m"], prm["w_r"], prm["w_b"],
+                           prm["adx_gate"], prm["shorts"], span)
+            sim = _simulate(close, sig, vol20, start, end, cost, prm["entry"])
+            if sim["trades"] < 6:
+                continue                   # not statistically meaningful
+            tpy = sim["trades"] * 252 / max(end - start - 1, 1)
+            obj = (sim["sharpe"]
+                   + 2.0 * (sim["equity"] - 1.0)               # reward real money
+                   + 1.5 * min(sim["mdd"] + 1.0, 1.0)          # reward shallow drawdowns
+                   - 0.015 * tpy)                              # turnover penalty
+            if obj > best_obj:
+                best_obj, best = obj, {**prm, "span": span}
     return best or {"w_t": 0.40, "w_m": 0.25, "w_r": 0.05, "w_b": 0.05,
-                    "entry": 0.22, "adx_gate": 20, "shorts": "bear"}
+                    "entry": 0.22, "adx_gate": 20, "shorts": "bear", "span": 1}
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +237,8 @@ def walk_forward(df: pd.DataFrame, symbol: str, train_window: int = CALIB_WINDOW
     exit_band = max(0.35 * params["entry"], 0.05)
     throttle = 1.0
     sig = _blended(comps, params["w_t"], params["w_m"], params["w_r"],
-                   params["w_b"], params["adx_gate"], params["shorts"]).values
+                   params["w_b"], params["adx_gate"], params["shorts"],
+                   params.get("span", 1)).values
     fwd5: dict[int, float] = {}
 
     for i in range(test_start, n - 1):
@@ -245,7 +249,7 @@ def walk_forward(df: pd.DataFrame, symbol: str, train_window: int = CALIB_WINDOW
             exit_band = max(0.35 * params["entry"], 0.05)
             sig = _blended(comps, params["w_t"], params["w_m"], params["w_r"],
                            params["w_b"], params["adx_gate"],
-                           params["shorts"]).values
+                           params["shorts"], params.get("span", 1)).values
         v = float(vol20[i]) if np.isfinite(vol20[i]) and vol20[i] > 0 else 0.5
         size = float(np.clip(VOL_TARGET / v, 0.25, 1.0)) * throttle
         sv = float(sig[i])
