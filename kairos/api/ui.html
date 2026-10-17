@@ -233,6 +233,15 @@ canvas{max-width:100%}
     <div id="btresult" style="margin-top:14px"></div>
   </div>
   <div class="card">
+    <div class="sectiontitle" style="margin-top:0">Prediction track record (self-audit)</div>
+    <p class="dim" style="font-size:13px">Every prediction is journaled, later resolved against realized prices, and the realized hit-rate feeds back into live confidence. Resolve elapsed outcomes to update.</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">
+      <button class="btn small" id="bfdbtn">Resolve outcomes</button>
+      <span class="dim" id="fdmeta"></span>
+    </div>
+    <div id="fdbody" style="margin-top:14px"><span class="dim">loading…</span></div>
+  </div>
+  <div class="card">
     <div class="sectiontitle" style="margin-top:0">Execution journal (immutable)</div>
     <div id="journalbody" style="max-height:340px;overflow:auto"><span class="dim">loading…</span></div>
   </div>
@@ -437,7 +446,7 @@ $('#ppgo').onclick=async()=>{
   out.innerHTML='<span class="spinner"></span>running engine + risk gate…';
   try{const r=await api('/api/paper',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:sym,notional:+$('#ppnotional').value||10000})});
     if(!r.ok){out.innerHTML=`<div class="card" style="border-color:var(--yellow)"><b class="flat">${r.reason==='signal_below_threshold'?'Stood down — signal too weak':'Risk gate blocked'}</b><div class="dim" style="margin-top:6px">${esc(r.message)}</div></div>`}
-    else{const f=r.fill;out.innerHTML=`<div class="card" style="border-color:var(--green)"><b class="up">FILLED</b> — ${esc(f.symbol)} ${esc(f.side)} ${f.quantity} @ ${f.fill_price} <span class="dim">(slip ${f.slippage}, comm ${f.commission})</span><div class="dim mono" style="font-size:12px;margin-top:6px">order ${esc(f.client_order_id)} journaled</div></div>`}
+    else{const f=r.fill;out.innerHTML=`<div class="card" style="border-color:var(--green)"><b class="up">FILLED</b> — ${esc(f.symbol)} ${esc(f.side)} ${f.quantity} @ ${f.fill_price??f.price} <span class="dim">(slip ${f.slippage}, comm ${f.commission})</span><div class="dim mono" style="font-size:12px;margin-top:6px">order ${esc(f.client_order_id)} journaled</div></div>`}
     loadPaperAcct();loadJournal();
   }catch(e){out.innerHTML=`<div class="error">${esc(e.message)}</div>`}
 };
@@ -471,6 +480,24 @@ async function loadJournal(){
   }catch(e){$('#journalbody').innerHTML='<span class="dim">journal unavailable</span>'}
 }
 
+/* ---------- feedback ---------- */
+async function loadFeedback(resolveFirst){
+  const body=$('#fdbody');
+  if(resolveFirst){$('#fdmeta').textContent='resolving…';}
+  try{const r=await api('/api/feedback?resolve_first='+(resolveFirst?'true':'false'));
+    $('#fdmeta').textContent=resolveFirst?`+${r.newly_resolved||0} newly resolved`:'';
+    if(!r.ok||!r.resolved){body.innerHTML=`<span class="dim">${esc(r.reason||'no predictions resolved yet — horizons must elapse first')}</span>`;return;}
+    const hr=r.hit_rate, adj=r.confidence_adjustment;
+    const recent=(r.recent||[]).slice(-6).reverse().map(e=>`<tr><td class="mono" style="color:var(--blue)">${esc(e.symbol)}</td><td>${esc(e.direction)}</td><td class="mono">${(e.expected_return*100).toFixed(2)}%</td><td class="mono">${((e.realized_return||0)*100).toFixed(2)}%</td><td>${e.correct?'<span class="up">✓</span>':'<span class="down">✗</span>'}</td></tr>`).join('');
+    body.innerHTML=`<div class="kpi"><span class="dim">hit rate (${r.resolved} resolved)</span><b class="${hr>=0.5?'up':'down'}">${hr==null?'n/a':(hr*100).toFixed(1)+'%'}</b></div>`+
+      `<div class="kpi"><span class="dim">strong-signal hit rate</span><b>${r.strong_signal_hit_rate==null?'n/a':(r.strong_signal_hit_rate*100).toFixed(1)+'%'}</b></div>`+
+      `<div class="kpi"><span class="dim">live confidence multiplier</span><b>${(adj||1).toFixed(2)}×</b></div>`+
+      (recent?`<table style="margin-top:10px"><tbody>${recent}</tbody></table>`:'');
+  }catch(e){body.innerHTML=`<div class="error">${esc(e.message)}</div>`}
+  finally{if(resolveFirst)loadFeedback(false);}
+}
+$('#bfdbtn').onclick=()=>loadFeedback(true);
+
 /* ---------- news ---------- */
 $('#newsgo').onclick=async()=>{
   const body=$('#newsbody');body.innerHTML='<span class="spinner"></span>fetching seven feeds…';
@@ -489,7 +516,7 @@ $('#mt5go').onclick=async()=>{
 };
 
 /* ---------- boot ---------- */
-loadHealth();loadUniverse().then(()=>{loadWatch()});loadPaperAcct();loadJournal();
+loadHealth();loadUniverse().then(()=>{loadWatch()});loadPaperAcct();loadJournal();loadFeedback(false);
 setInterval(loadHealth,60000);
 </script>
 </body>

@@ -26,6 +26,7 @@ async def _unhandled(request, exc):  # pragma: no cover
 def _safe(obj):
     """Recursively coerce numpy scalars/dates into JSON-encodable Python."""
     import datetime as _dt
+    import math as _math
 
     import numpy as _np
     import pandas as _pd
@@ -40,7 +41,9 @@ def _safe(obj):
     if isinstance(obj, _np.integer):
         return int(obj)
     if isinstance(obj, _np.floating):
-        return float(obj)
+        obj = float(obj)
+    if isinstance(obj, float) and not _math.isfinite(obj):
+        return None
     if isinstance(obj, (_dt.datetime, _dt.date, _pd.Timestamp)):
         return obj.isoformat()
     if isinstance(obj, _pd.DataFrame):

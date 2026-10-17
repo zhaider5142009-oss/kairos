@@ -24,7 +24,8 @@ from .config import CFG
 
 VOL_TARGET = 0.20
 CALIB_WINDOW = 252          # trailing bars used for parameter calibration
-REFIT_EVERY = 20            # re-calibrate every N bars
+REFIT_EVERY = 30            # re-calibrate every N bars
+SMOOTH_SPAN = 3             # EMA smoothing of the blended signal (anti-whipsaw)
 
 
 @dataclass
@@ -66,6 +67,7 @@ def _components(df: pd.DataFrame) -> dict[str, pd.Series]:
         "brk": brk,
         "adx": pd.Series(_adx(df).values, index=df.index),
         "sma200_d": p["sma200_d"],
+        "ret63": p["ret_63"],
         "ret63_abs": p["ret_63"].abs(),
         "vol20": p["vol20"],
         "bb_b_abs": p["bb_b"].abs(),
@@ -87,9 +89,9 @@ def _blended(comps: dict[str, pd.Series],
     if shorts == "off":
         sig = sig.clip(lower=0.0)
     else:  # "bear": shorts only in confirmed bear structure
-        bear_ok = comps["sma200_d"] < 0
+        bear_ok = (comps["sma200_d"] < 0) & (comps["ret63"] < 0.08)
         sig = sig.where(~((sig < 0) & ~bear_ok), 0.0)
-    return sig.clip(-1, 1)
+    return sig.ewm(span=SMOOTH_SPAN, adjust=False).mean().clip(-1, 1)
 
 
 def _simulate(close: np.ndarray, sig: pd.Series, vol20: np.ndarray,
@@ -178,8 +180,9 @@ def _calibrate(close: np.ndarray, comps: dict[str, pd.Series],
             continue                       # not statistically meaningful
         tpy = sim["trades"] * 252 / max(end - start - 1, 1)
         obj = (sim["sharpe"]
-               + 1.5 * min(sim["mdd"] + 1.0, 1.0)      # reward shallow drawdowns
-               - 0.015 * tpy)                          # turnover penalty
+               + 2.0 * (sim["equity"] - 1.0)               # reward real money
+               + 1.5 * min(sim["mdd"] + 1.0, 1.0)          # reward shallow drawdowns
+               - 0.015 * tpy)                              # turnover penalty
         if obj > best_obj:
             best_obj, best = obj, prm
     return best or {"w_t": 0.40, "w_m": 0.25, "w_r": 0.05, "w_b": 0.05,

@@ -251,7 +251,7 @@ def cmd_paper(args) -> int:
     fill = broker.submit(intent, r["price"])
     console.print(Panel(
         f"[green]FILLED[/] {fill.symbol} {fill.side} {fill.quantity} @ "
-        f"{fill.fill_price} (slip {fill.slippage:.4f}, comm {fill.commission:.2f})\n"
+        f"{fill.price} (slip {fill.slippage:.4f}, comm {fill.commission:.2f})\n"
         f"[dim]client_order_id {fill.client_order_id} · journaled[/]",
         title="KAIROS PAPER EXECUTION"))
     return 0
