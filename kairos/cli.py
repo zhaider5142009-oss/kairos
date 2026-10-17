@@ -363,6 +363,28 @@ def cmd_autopilot(args) -> int:
     return 0
 
 
+def cmd_rules(args) -> int:
+    """Show the effective trading doctrine (ported JARVIS v1 rules)."""
+    from rich.panel import Panel
+    from rich.table import Table
+    from . import rules as R
+    console = _console()
+    console.print(Panel(R.describe(), title="KAIROS DOCTRINE", style="blue"))
+    tbl = Table(box=box.ROUNDED, title="effective rules (config/rules.json override)")
+    tbl.add_column("rule")
+    tbl.add_column("value", justify="right")
+    for k, v in R.rules().items():
+        tbl.add_row(k, str(v))
+    console.print(tbl)
+    if args.wisdom:
+        for name, corpus in (("WYCKOFF", R.WYCKOFF_PHASES), ("DOW", R.DOW_THEORY),
+                             ("CANSLIM", R.CANSLIM), ("BUFFETT", R.BUFFETT_FILTERS),
+                             ("DALIO", R.DALIO_PRINCIPLES), ("LYNCH", R.LYNCH_CATEGORIES)):
+            console.print(Panel("\n".join(f"• {k}: {v}" for k, v in corpus.items()),
+                                title=name, style="dim"))
+    return 0
+
+
 def cmd_feedback(args) -> int:
     """Resolve elapsed predictions and print the realized track record."""
     from rich.panel import Panel
@@ -475,6 +497,11 @@ def main() -> int:
     sp.add_argument("--yes-live", action="store_true",
                     help="explicitly arm live MT5 execution (real money)")
     sp.set_defaults(fn=cmd_autopilot)
+
+    sp = sub.add_parser("rules", help="show effective trading doctrine")
+    sp.add_argument("--wisdom", action="store_true",
+                    help="also print the Wyckoff/Dow/CANSLIM/Buffett/Dalio/Lynch corpus")
+    sp.set_defaults(fn=cmd_rules)
 
     sp = sub.add_parser("feedback", help="resolve outcomes + realized track record")
     sp.set_defaults(fn=cmd_feedback)

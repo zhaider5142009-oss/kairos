@@ -319,6 +319,25 @@ def chat(req: ChatReq):
                                "expected_return": r["expected_return"],
                                "expected_vol": r["expected_vol"], "sharpe": r["sharpe"]}})
 
+    if has("trading rule", "your rule", "doctrine", "risk rule", "discipline",
+           "wyckoff", "dow theory", "canslim", "buffett", "dalio", "lynch"):
+        from kairos import rules as R
+        for name, corpus in (("wyckoff", R.WYCKOFF_PHASES),
+                             ("dow", R.DOW_THEORY), ("canslim", R.CANSLIM),
+                             ("buffett", R.BUFFETT_FILTERS),
+                             ("dalio", R.DALIO_PRINCIPLES),
+                             ("lynch", R.LYNCH_CATEGORIES)):
+            if name in low:
+                lines = "\n".join(f"• {k}: {v}" for k, v in corpus.items())
+                return {"ok": True,
+                        "reply": f"{name.upper()} — a framework KAIROS carries:\n"
+                                 f"{lines}\n\nMy live doctrine: {R.describe()}",
+                        "action": "rules", "data": None}
+        return {"ok": True, "reply": f"{R.describe()} I also encode Wyckoff, Dow "
+                                     "theory, CANSLIM, Buffett, Dalio and Lynch — "
+                                     "ask me about any of them.",
+                "action": "rules", "data": None}
+
     if has("track record", "hit rate", "accuracy", "how good are you", "how reliable"):
         from kairos.feedback import track_record
         tr = track_record()

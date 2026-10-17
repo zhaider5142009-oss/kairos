@@ -199,8 +199,16 @@ class Autopilot:
             # ---- open a fresh position on a strong call ----
             elif abs(score) >= st["entry_threshold"] and hp is None and \
                     trades < st["max_trades_per_cycle"]:
-                notional = min((rk["suggested_weight"] or 0) * float(acct["equity"]),
-                               0.15 * float(acct["equity"]))
+                eq = float(acct["equity"] or 0)
+                notional = min((rk["suggested_weight"] or 0) * eq, 0.15 * eq)
+                # doctrine sizing cap: risk-unit position from the stop
+                bands = res.get("confidence_band") or {}
+                sl0 = bands.get("p10") if score > 0 else bands.get("p90")
+                if sl0 and eq > 0:
+                    from . import rules as _R
+                    ps = _R.position_size(eq, price, sl0)
+                    if ps.get("position_value"):
+                        notional = min(notional, float(ps["position_value"]))
                 if notional > 10:
                     qty = notional / price if not live else \
                         round(max(0.01, notional / price / 100), 2)
@@ -262,12 +270,30 @@ class Autopilot:
         venue = "PAPER"
         if live and not is_psx:
             venue = "MT5"
+        acc = (self.mt5.account() if venue == "MT5" else broker.account())
+        pos = (self.mt5.positions() if venue == "MT5" else broker.open_positions())
+
+        # ---- doctrine plan check (opens only): R:R, risk-per-trade,
+        # confidence, stop side. Exits must always be allowed.
+        from . import rules as _R
+        if not close:
+            plan = _R.check_plan(price, sl, tp,
+                                 float((acc or {}).get("equity") or 0),
+                                 (res.get("signal") or {}).get("confidence"),
+                                 1 if side == "BUY" else -1, qty=qty)
+            if not plan["passed"]:
+                why = "; ".join(f"{c['rule']} {c['value']} (needs {c['required']})"
+                                for c in plan["checks"] if not c["passed"])
+                self.st["actions"].insert(0, {"ts": _now(), "symbol": inst.key,
+                                              "action": "PLANCHECK", "why": why})
+                self.st["actions"] = self.st["actions"][:MAX_ACTIONS_KEPT]
+                JOURNAL.log("AUTOPILOT_PLANCHECK", {"symbol": inst.key, "why": why})
+                return "PLANCHECK", why
+
         intent = OrderIntent(symbol=inst.key, side=side,
                              quantity=round(qty, 4), venue=venue,
                              stop_loss=sl, take_profit=tp,
                              comment="autopilot-close" if close else "autopilot")
-        acc = (self.mt5.account() if venue == "MT5" else broker.account())
-        pos = (self.mt5.positions() if venue == "MT5" else broker.open_positions())
         allowed, why = self.gate.check(intent, acc, pos)
         if not allowed:
             self.st["actions"].insert(0, {"ts": _now(), "symbol": inst.key,

@@ -65,11 +65,12 @@ python -m kairos serve
 
 `python -m kairos serve` (or the **KAIROS** desktop shortcut) opens http://127.0.0.1:8600 — a single-page command center:
 
-- **Home** — system health, live watchlist, plain-language quick asks
+- **Home** — ChatGPT-style chat console: ask anything ("where is gold this week?", "best Pakistani stocks?", "allocate 1M across GOLD WTI SPX") and the full engine answers in bubbles with inline verdict cards
 - **Predict** — full dossier per instrument: verdict, targets, models, strategies, risk, council
 - **PSX Scan** — factor leaderboard over the whole exchange
 - **Portfolio** — annealed allocation with per-instrument metrics
 - **Paper Trading** — gated orders, account state, walk-forward validation, immutable journal
+- **Trade Like a Pro** — the autonomous desk: start/stop the autopilot, arm LIVE execution, broker-connection strip (MT5 + JS Global), kill switch, live signal board, positions and audit feed
 - **News** — seven-feed macro/Pakistan radar
 - **System** — health, MT5 bridge, tradable universe browser
 
@@ -88,7 +89,7 @@ Copy `config.example.yaml` to `config.yaml` and fill in your keys (OpenRouter et
 ## Architecture
 
 ```
-python -m kairos             CLI entry (predict/scan/portfolio/backtest/paper/mt5/feedback/serve/…)
+python -m kairos             CLI entry (predict/scan/portfolio/backtest/paper/mt5/autopilot/rules/feedback/serve/…)
 launch_kairos.bat            one-click launcher (desktop shortcut target)
 config.yaml                  all keys + engine tunables (git-ignored)
 kairos/
@@ -103,8 +104,10 @@ kairos/
   kse_regime.py calendar.py  KSE-100 regime · macro event calendar
   engine.py                  PredictionEngine orchestration
   feedback.py                prediction journal → realized outcomes → confidence calibration
+  rules.py                   JARVIS v1 doctrine merged: risk-per-trade, R:R floor, ATR stops, wisdom corpus
   backtest.py                walk-forward validation + paper sessions
   execution.py               OrderIntent → RiskGate → PaperBroker / Mt5Bridge / JsGlobalTicket + audit journal
+  autopilot.py               autonomous loop: scan → verdicts → doctrine-sized orders → gated execution
   wsl_bridge.py              Chronos/TimesFM/qlib subprocess bridge
   llm.py report.py cli.py    LLM council router · Rich terminal dossiers · command line
   api/server.py api/ui.html  FastAPI control tower + web UI
@@ -134,3 +137,8 @@ with attribution. See [CONTRIBUTING.md](CONTRIBUTING.md) to get involved and
 ## Lineage
 
 JARVIS v1/v1.5 (MiniMax build) → **KAIROS v2** (this repo). Full v1.5 source preserved in git history on GitHub: `zhaider5142009-oss/jarvis-reborn`.
+
+**Single project (2026-10-17 merge disposition).** Every jarvis component found on this machine was audited against KAIROS:
+- *Merged in*: `trading_rules.py` doctrine → `kairos/rules.py` (risk-per-trade, R:R floor, ATR stops, Kelly, wisdom corpus — enforced by the autopilot's pre-trade plan check); v1 state (paper ledgers, backtest reports) mirrored to `data/v1_legacy/`.
+- *Superseded, not merged*: `profit_engine` (regime/pattern/sizing → features+risk+engine), `stock_analysis` (indicators → features.py), `trading_signals` & `predictive_trader` & `paper_trader` (→ autopilot + execution.py), `psx.py` (→ data.py + universe), `chronos/timesfm/quantum bridges` (→ wsl_bridge + quantum), `model_router` (→ llm.py tiers), `jarvis_commands`/`connectors`/`job_finder`/`code_lab`/VoiceAI app (general assistant, out of trading scope).
+- *Archived*: everything else lives at `D:\JARVIS_ARCHIVE_2026-10-17\` with a README; this repo is the one KAIROS.

@@ -651,7 +651,7 @@ $('#mt5go').onclick=async()=>{
 
 /* ---------- pro desk ---------- */
 function actTag(a,det){if(!a||a==='hold')return '<span class="tag neut">stood aside</span>';
-  const m={OPENED:'ok',CLOSED:'ok','LIVE-FILLED':'bad',TICKET:'warn',GATED:'warn',BLOCKED:'bad','LIVE-REJECT':'bad'};
+  const m={OPENED:'ok',CLOSED:'ok','LIVE-FILLED':'bad',TICKET:'warn',GATED:'warn',PLANCHECK:'warn',BLOCKED:'bad','LIVE-REJECT':'bad'};
   return `<span class="tag ${m[a]||'neut'}">${esc(a)}</span> <span class="faint">${esc(String(det||''))}</span>`}
 async function loadDesk(){
   try{
