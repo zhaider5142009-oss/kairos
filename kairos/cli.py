@@ -357,9 +357,15 @@ def cmd_autopilot(args) -> int:
                              str(a.get("why") or a.get("coid") or ""))
             console.print(cons)
         acct = st.get("paper_account") or {}
+        rp = st.get("risk_posture") or {}
         console.print(f"paper equity: {acct.get('equity', 0):,.0f} · "
                       f"day P&L: {acct.get('day_pnl', 0):+,.0f} · "
                       f"positions: {len(st.get('paper_positions') or [])}")
+        console.print(f"exposure: {rp.get('exposure_pct', 0)}% · "
+                      f"consec losses: {rp.get('consec_losses', 0)} · "
+                      + ("[yellow]breakers: " + "; ".join(rp.get("blockers") or [])
+                         + "[/]" if rp.get("block_entries")
+                         else "[green]breakers: clear[/]"))
     return 0
 
 

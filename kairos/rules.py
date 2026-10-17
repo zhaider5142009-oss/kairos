@@ -43,6 +43,13 @@ DEFAULT_RULES: dict[str, Any] = {
     "min_confidence": 50,                # engine confidence floor (%)
     "fee_pct": 0.15,                     # PSX brokerage
     "tax_pct": 0.10,                     # capital gains
+    # ---- institutional overlays (ultimate form) ----
+    "max_daily_loss_pct": 3.0,           # breaker: stop opening after -3% day
+    "max_total_exposure_pct": 60.0,      # breaker: gross exposure cap
+    "max_consecutive_losses": 4,         # breaker: pause entries after 4 red
+    "min_model_agreement": 0.55,         # entry needs 55% of models agreeing
+    "max_spread_pct": 0.60,              # live MT5 entry spread guard
+    "trail_after_r_multiples": 1,        # start ratcheting stop at +1R
 }
 
 # ---------------------------------------------------------------- wisdom corpus

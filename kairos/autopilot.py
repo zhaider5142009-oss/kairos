@@ -44,6 +44,7 @@ class Autopilot:
         self.gate = RiskGate()
         self.mt5 = Mt5Bridge()
         self.jsg = JsGlobalTicket()
+        self._posture: dict[str, Any] | None = None
         self.st = self._load()
 
     # ------------------------------------------------------------- state io
@@ -53,7 +54,7 @@ class Autopilot:
                 "entry_threshold": 0.18, "exit_threshold": 0.05,
                 "max_trades_per_cycle": 2, "horizon_days": 5,
                 "cycles": 0, "last_cycle": None, "last_error": None,
-                "signals": [], "actions": [], "held": {}}
+                "signals": [], "actions": [], "held": {}, "consec_losses": 0}
 
     def _load(self) -> dict[str, Any]:
         st = self._defaults()
@@ -149,6 +150,7 @@ class Autopilot:
             delay = self.st["interval_s"]
 
     def cycle(self) -> dict[str, Any]:
+        from . import rules as _R
         from .engine import ENGINE
         from .universe import resolve
 
@@ -158,6 +160,12 @@ class Autopilot:
         acct = (self.mt5.account() if live else None) or broker.account()
         pos_list = self.mt5.positions() if live else broker.open_positions()
         held = {p["symbol"].upper(): p for p in (pos_list or [])}
+        # the venue is the source of truth: drop managed entries it no
+        # longer reports (manual close, broker-side stop hit, restart drift)
+        self._reconcile(held, live)
+        posture = self._risk_posture(acct, pos_list)
+        with self._lock:
+            self._posture = posture
 
         rows: list[dict[str, Any]] = []
         trades = 0
@@ -179,47 +187,62 @@ class Autopilot:
             action = "hold"
             detail = ""
 
-            # ---- exit existing position if the call flipped / matured ----
+            # ---- manage an existing position: stops/targets/trail/flip/age.
+            # Risk reduction is never rate-limited by max_trades_per_cycle.
             hp = held.get((self._venue_symbol(inst.key, is_psx, live)).upper())
-            if hp is not None and trades < st["max_trades_per_cycle"]:
-                flip = abs(score) >= st["exit_threshold"] and \
-                    (score * (1 if hp["side"] == "BUY" else -1)) < 0
-                mature = st["held"].get(inst.key, {}).get("started", "") and \
-                    self._age_days(st["held"][inst.key]["started"]) >= st["horizon_days"]
-                if flip or mature:
+            if hp is not None:
+                hb = st["held"].get(inst.key, {})
+                reason = self._manage_exit(inst, hp, hb, price, score)
+                if reason:
                     side = "SELL" if hp["side"] == "BUY" else "BUY"
                     qty = float(hp["qty"])
-                    act, detail = self._execute(inst, side, qty, price, res,
-                                                broker, live, close=True)
-                    action = act
-                    trades += 1
-                    if act.startswith("CLOSED"):
-                        st["held"].pop(inst.key, None)
+                    act, _d = self._execute(inst, side, qty, price, res,
+                                            broker, live, close=True)
+                    action, trades = act, trades + 1
+                    if act in ("CLOSED", "LIVE-FILLED"):
+                        self._book_close(inst.key, hp, hb, price, reason)
+                        detail = f"{reason} exit"
 
             # ---- open a fresh position on a strong call ----
             elif abs(score) >= st["entry_threshold"] and hp is None and \
                     trades < st["max_trades_per_cycle"]:
-                eq = float(acct["equity"] or 0)
-                notional = min((rk["suggested_weight"] or 0) * eq, 0.15 * eq)
-                # doctrine sizing cap: risk-unit position from the stop
-                bands = res.get("confidence_band") or {}
-                sl0 = bands.get("p10") if score > 0 else bands.get("p90")
-                if sl0 and eq > 0:
-                    from . import rules as _R
-                    ps = _R.position_size(eq, price, sl0)
-                    if ps.get("position_value"):
-                        notional = min(notional, float(ps["position_value"]))
-                if notional > 10:
-                    qty = notional / price if not live else \
-                        round(max(0.01, notional / price / 100), 2)
-                    side = "BUY" if score > 0 else "SELL"
-                    act, detail = self._execute(inst, side, qty, price, res,
-                                                broker, live, close=False)
-                    action = act
-                    trades += 1
-                    if act in ("OPENED", "TICKET"):
-                        st["held"][inst.key] = {"started": _now(),
-                                                "side": side, "qty": qty}
+                if posture["block_entries"]:
+                    action, detail = "BREAKER", posture["blockers"][0]
+                else:
+                    # model-agreement gate: the battery must broadly concur
+                    models = res.get("models") or []
+                    dirn = 1 if score > 0 else -1
+                    agree = (sum(1 for m in models
+                                 if (m.get("direction") or 0) * dirn > 0)
+                             / len(models)) if models else 1.0
+                    if agree < float(_R.get_rule("min_model_agreement", 0.55)):
+                        action = "AGREEMENT"
+                        detail = f"only {agree:.0%} of models concur"
+                    else:
+                        eq = float(acct["equity"] or 0)
+                        notional = min((rk["suggested_weight"] or 0) * eq,
+                                       0.15 * eq)
+                        bands = res.get("confidence_band") or {}
+                        sl0 = bands.get("p10") if score > 0 else bands.get("p90")
+                        tgt0 = (res.get("targets") or {}).get(f"{s['horizon_days']}d")
+                        if sl0 and eq > 0:
+                            ps = _R.position_size(eq, price, sl0)
+                            if ps.get("position_value"):
+                                notional = min(notional, float(ps["position_value"]))
+                        if notional > 10:
+                            qty = notional / price if not live else \
+                                round(max(0.01, notional / price / 100), 2)
+                            side = "BUY" if score > 0 else "SELL"
+                            act, detail = self._execute(inst, side, qty, price,
+                                                        res, broker, live,
+                                                        close=False)
+                            action = act
+                            trades += 1
+                            if act in ("OPENED", "TICKET"):
+                                st["held"][inst.key] = {
+                                    "started": _now(), "side": side,
+                                    "qty": qty, "entry": price,
+                                    "stop": sl0, "stop0": sl0, "target": tgt0}
 
             rows.append({"symbol": res["symbol"], "name": res["name"],
                          "price": price, "direction": s["direction"],
@@ -248,6 +271,104 @@ class Autopilot:
             return (datetime.now() - datetime.fromisoformat(iso)).total_seconds() / 86400
         except Exception:
             return 0.0
+
+    def _act(self, symbol: str, action: str, why: str) -> None:
+        self.st["actions"].insert(0, {"ts": _now(), "symbol": symbol,
+                                      "action": action, "why": why})
+        self.st["actions"] = self.st["actions"][:MAX_ACTIONS_KEPT]
+
+    # ------------------------------------------------- reconciliation & posture
+    def _reconcile(self, held: dict[str, Any], live: bool) -> None:
+        """Trust the venue over our memory: a managed entry the venue no
+        longer reports is dropped (manual close / broker-side stop hit)."""
+        from .universe import resolve
+        for key in list(self.st["held"].keys()):
+            inst = resolve(key)
+            if inst and inst.market.upper() in ("PSX", "KSE"):
+                continue          # PSX flow is tickets, never venue positions
+            vsym = (self._venue_symbol(key, False, live) or key).upper()
+            if vsym not in held:
+                self.st["held"].pop(key, None)
+                self._act(key, "RECONCILE", "venue no longer holds it")
+                JOURNAL.log("AUTOPILOT_RECONCILE", {"symbol": key})
+
+    def _risk_posture(self, acct: dict | None,
+                      pos_list: list | None) -> dict[str, Any]:
+        """Circuit breakers computed from fresh venue data every cycle."""
+        from . import rules as _R
+        r = _R.rules()
+        eq = float((acct or {}).get("equity") or 0)
+        day = float((acct or {}).get("day_pnl") or 0)
+        gross = sum(abs(float(p.get("qty") or 0))
+                    * float(p.get("last") or p.get("entry") or 0)
+                    for p in (pos_list or []))
+        exposure_pct = gross / eq * 100 if eq > 0 else 0.0
+        consec = int(self.st.get("consec_losses") or 0)
+        blockers = []
+        if eq > 0 and day < -float(r["max_daily_loss_pct"]) / 100 * eq:
+            blockers.append(f"daily loss {day:,.0f} breached the "
+                            f"-{r['max_daily_loss_pct']}% breaker")
+        if exposure_pct > float(r["max_total_exposure_pct"]):
+            blockers.append(f"gross exposure {exposure_pct:.0f}% past the "
+                            f"{r['max_total_exposure_pct']}% cap")
+        if consec >= int(r["max_consecutive_losses"]):
+            blockers.append(f"{consec} consecutive losses — cooling off entries")
+        return {"equity": eq, "day_pnl": day,
+                "exposure_pct": round(exposure_pct, 1),
+                "consec_losses": consec, "n_positions": len(pos_list or []),
+                "block_entries": bool(blockers), "blockers": blockers}
+
+    # ------------------------------------------------------ position management
+    def _manage_exit(self, inst, hp: dict, hb: dict, price: float,
+                     score: float) -> str | None:
+        """Returns an exit reason for this position, or None to keep holding.
+        Priority: hard stop > target > trailing ratchet > signal flip > maturity."""
+        from . import rules as _R
+        st = self.st
+        dirn = 1 if hp["side"] == "BUY" else -1
+        entry = float(hb.get("entry") or hp.get("entry") or 0)
+        stop, tp = hb.get("stop"), hb.get("target")
+        if stop and (price - float(stop)) * dirn <= 0:
+            return "STOP"
+        if tp and entry and (price - float(tp)) * dirn >= 0 and \
+                (price - entry) * dirn > 0:
+            return "TARGET"
+        # trailing ratchet in R multiples — only ever moves with the trend
+        stop0 = hb.get("stop0") or stop
+        if stop0 and entry:
+            r = abs(entry - float(stop0))
+            profit = (price - entry) * dirn
+            if r > 0 and profit >= float(_R.get_rule("trail_after_r_multiples", 1)) * r:
+                k = int(profit // r)
+                want = entry + dirn * r * max(0, k - 1)
+                if stop is None or (want - float(stop)) * dirn > 0:
+                    hb["stop"] = round(want, 6)
+                    self._act(inst.key, "TRAIL",
+                              f"stop ratcheted to {want:,.2f} (+{k - 1}R locked)")
+                    JOURNAL.log("AUTOPILOT_TRAIL", {"symbol": inst.key,
+                                                    "stop": hb["stop"]})
+                    if hp.get("ticket") is not None and self.mt5.connected:
+                        self.mt5.modify_sl(int(hp["ticket"]), sl=hb["stop"])
+        flip = abs(score) >= st["exit_threshold"] and (score * dirn) < 0
+        mature = hb.get("started") and \
+            self._age_days(hb["started"]) >= st["horizon_days"]
+        if flip:
+            return "FLIP"
+        if mature:
+            return "MATURE"
+        return None
+
+    def _book_close(self, key: str, hp: dict, hb: dict, price: float,
+                    reason: str) -> None:
+        dirn = 1 if hp["side"] == "BUY" else -1
+        entry = float(hp.get("entry") or hb.get("entry") or price)
+        pnl = (price - entry) * dirn * float(hp.get("qty") or 0)
+        st = self.st
+        st["consec_losses"] = int(st.get("consec_losses") or 0) + 1 if pnl < 0 else 0
+        st["held"].pop(key, None)
+        JOURNAL.log("AUTOPILOT_BOOK_CLOSE",
+                    {"symbol": key, "reason": reason, "pnl_est": round(pnl, 2),
+                     "consec_losses": st["consec_losses"]})
 
     def _execute(self, inst, side: str, qty: float, price: float,
                  res: dict[str, Any], broker: PaperBroker, live: bool,
@@ -304,10 +425,29 @@ class Autopilot:
             return "GATED", why
 
         if venue == "MT5":
+            # live entry spread guard: never pay an absurd crossing cost
+            if not close:
+                t = self.mt5.tick(self.mt5.resolve_symbol(inst.key) or inst.key)
+                msp = float(_R.get_rule("max_spread_pct", 0.6))
+                if t and price > 0 and t["spread"] / price * 100 > msp:
+                    why = f"spread {t['spread'] / price * 100:.2f}% > {msp}%"
+                    self._act(inst.key, "SPREAD", why)
+                    JOURNAL.log("AUTOPILOT_SPREAD", {"symbol": inst.key, "why": why})
+                    return "SPREAD", why
             fill = self.mt5.place_order(intent)
             act = "LIVE-FILLED" if fill else "LIVE-REJECT"
             if fill and close:
                 self._mt5_close_one(fill.symbol)
+            if fill and not close:
+                # never trust the ack — confirm the position exists venue-side
+                time.sleep(1.0)
+                syms = [str(p.get("symbol", "")).upper()
+                        for p in (self.mt5.positions() or [])]
+                if fill.symbol.upper() not in syms:
+                    act = "LIVE-UNVERIFIED"
+                    JOURNAL.log("AUTOPILOT_UNVERIFIED",
+                                {"coid": intent.client_order_id,
+                                 "symbol": fill.symbol})
         elif is_psx and live:
             ticket = self.jsg.build_ticket(intent)
             act = "TICKET"
@@ -342,15 +482,20 @@ class Autopilot:
     # ------------------------------------------------------------- reporting
     def status(self) -> dict[str, Any]:
         broker = PaperBroker()
+        acct = broker.account()
+        pos = broker.open_positions()
+        posture = getattr(self, "_posture", None) or self._risk_posture(acct, pos)
         return {"ok": True, **{k: self.st[k] for k in
                 ("running", "mode", "armed_live", "symbols", "interval_s",
                  "entry_threshold", "max_trades_per_cycle", "horizon_days",
-                 "cycles", "last_cycle", "last_error", "signals", "actions")},
+                 "cycles", "last_cycle", "last_error", "signals", "actions",
+                 "held", "consec_losses")},
+                "risk_posture": posture,
                 "kill_switch": KILL.engaged(),
                 "mt5": {"connected": self.mt5.connected,
                         "error": self.mt5.last_error},
-                "paper_account": broker.account(),
-                "paper_positions": broker.open_positions()}
+                "paper_account": acct,
+                "paper_positions": pos}
 
 
 def _read_json(path) -> dict[str, Any]:

@@ -146,3 +146,10 @@ rules:
   max_risk_per_trade_pct: 2.0
   min_risk_reward_ratio: 2.0
   max_position_pct: 15.0
+  # institutional circuit breakers (autopilot pauses ENTRIES; exits always run)
+  max_daily_loss_pct: 3.0            # stop opening after a -3% day
+  max_total_exposure_pct: 60.0       # gross exposure ceiling
+  max_consecutive_losses: 4          # cool off entries after 4 red trades
+  min_model_agreement: 0.55          # require 55% of models to concur
+  max_spread_pct: 0.60               # live MT5 entry crossing-cost guard
+  trail_after_r_multiples: 1         # start ratcheting the stop at +1R

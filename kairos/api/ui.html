@@ -327,6 +327,11 @@ tbody tr:hover td{background:#f9f9f9}
   </div>
 
   <div class="card">
+    <div class="sectiontitle" style="margin-top:0">Risk posture <span class="dim" id="driskmeta"></span></div>
+    <div id="drisk"><span class="dim">loading…</span></div>
+  </div>
+
+  <div class="card">
     <div class="sectiontitle" style="margin-top:0">Live signal board <span class="dim" id="dmeta"></span></div>
     <div style="overflow-x:auto"><div id="dsignals"><span class="dim">press Start (or “Run one cycle”) — KAIROS will scan the watchlist, gate and act…</span></div></div>
   </div>
@@ -335,7 +340,7 @@ tbody tr:hover td{background:#f9f9f9}
     <div class="card"><div class="sectiontitle" style="margin-top:0">Book &amp; positions <span class="dim" id="dposmeta"></span></div><div id="dpos"><span class="dim">loading…</span></div></div>
     <div class="card"><div class="sectiontitle" style="margin-top:0">Actions &amp; audit feed</div><div id="dfeed" style="max-height:300px;overflow:auto"><span class="dim">no actions yet</span></div></div>
   </div>
-  <div class="explain">Doctrine: paper-first, fail-closed. Every order still passes the risk gate (max positions, daily-loss limit, quantity bounds, kill switch). A live session never resurrects after a restart — you must re-arm it consciously.</div>
+  <div class="explain">Doctrine: paper-first, fail-closed. Every open passes plan-check (R:R, risk-per-trade, confidence, model agreement) and the risk gate; every held position is actively managed — hard stops, targets, a trailing ratchet in R-multiples, venue reconciliation. Circuit breakers pause entries on a −3% day, 60% gross exposure, or four straight losses; exits are never rate-limited. A live session never resurrects after a restart — you must re-arm it consciously.</div>
 </section>
 
 <!-- ================= NEWS ================= -->
@@ -652,7 +657,7 @@ $('#mt5go').onclick=async()=>{
 
 /* ---------- pro desk ---------- */
 function actTag(a,det){if(!a||a==='hold')return '<span class="tag neut">stood aside</span>';
-  const m={OPENED:'ok',CLOSED:'ok','LIVE-FILLED':'bad',TICKET:'warn',GATED:'warn',PLANCHECK:'warn',BLOCKED:'bad','LIVE-REJECT':'bad'};
+  const m={OPENED:'ok',CLOSED:'ok','LIVE-FILLED':'bad',TICKET:'warn',GATED:'warn',PLANCHECK:'warn',BLOCKED:'bad','LIVE-REJECT':'bad',BREAKER:'warn',AGREEMENT:'neut',SPREAD:'warn',TRAIL:'ok',RECONCILE:'warn','LIVE-UNVERIFIED':'bad',STOP:'bad',TARGET:'ok',FLIP:'warn',MATURE:'neut'};
   return `<span class="tag ${m[a]||'neut'}">${esc(a)}</span> <span class="faint">${esc(String(det||''))}</span>`}
 async function loadDesk(){
   try{
@@ -666,9 +671,17 @@ async function loadDesk(){
       $('#dsignals').innerHTML=`<table><thead><tr><th>Instrument</th><th class="r">Price</th><th class="c">Call</th><th class="r">Score</th><th class="r">Exp</th><th class="r">P(up)</th><th class="r">Weight</th><th>Autopilot</th><th></th></tr></thead><tbody>${d.signals.map(s=>{
         if(s.error)return `<tr><td class="mono">${esc(s.symbol)}</td><td colspan="8" class="down">${esc(s.error)}</td></tr>`;
         const c=dirCode(s.direction);return `<tr style="cursor:pointer" onclick="predictGo('${esc(s.symbol)}')"><td class="mono" style="color:var(--blue)">${esc(s.symbol)}</td><td class="r mono">${num(s.price)}</td><td class="c ${c>0?'up':c<0?'down':'flat'}">${esc(s.direction)}</td><td class="r mono">${(s.score||0).toFixed(3)}</td><td class="r mono ${c>0?'up':c<0?'down':'flat'}">${pct(s.expected_return)}</td><td class="r mono">${((s.probability_up||0)*100).toFixed(0)}%</td><td class="r mono">${pct(s.weight,1)}</td><td>${actTag(s.action,s.detail)}</td><td style="white-space:nowrap"><button class="btn small" title="Instagram-square PNG + WhatsApp caption copied to clipboard" onclick="event.stopPropagation();shareSignal('${esc(s.symbol)}')">Share</button></td></tr>`}).join('')}</tbody></table>`;
-    const a=d.paper_account||{},p=d.paper_positions||[];
+    const rp=d.risk_posture||{};
+    $('#driskmeta').textContent=`as of cycle ${d.cycles}`;
+    $('#drisk').innerHTML=`<div class="grid g4">
+      <div><div class="dim" style="font-size:12px">Day P&L</div><div class="big ${((rp.day_pnl||0)>=0)?'up':'down'}" style="font-size:20px">${(rp.day_pnl||0)>=0?'+':''}${num(rp.day_pnl||0,0)}</div></div>
+      <div><div class="dim" style="font-size:12px">Gross exposure</div><div class="big" style="font-size:20px">${rp.exposure_pct??0}%</div></div>
+      <div><div class="dim" style="font-size:12px">Consecutive losses</div><div class="big" style="font-size:20px">${rp.consec_losses??0}</div></div>
+      <div><div class="dim" style="font-size:12px">Circuit breakers</div><div style="margin-top:4px">${rp.block_entries?'<span class="tag warn">ENTRIES PAUSED</span>':'<span class="tag ok">clear</span>'}</div></div>
+    </div>${(rp.blockers||[]).map(b=>`<div class="down" style="font-size:13px;margin-top:8px">⚠ ${esc(b)}</div>`).join('')}`;
+    const a=d.paper_account||{},p=d.paper_positions||[],hb=d.held||{};
     $('#dposmeta').textContent=`equity ${num(a.equity,0)} · day P&L ${(a.day_pnl||0)>=0?'+':''}${num(a.day_pnl||0,0)}`;
-    $('#dpos').innerHTML=p.length?`<table><thead><tr><th>Symbol</th><th>Side</th><th class="r">Qty</th><th class="r">Entry</th><th class="r">Last</th><th class="r">P&L</th></tr></thead><tbody>${p.map(x=>`<tr><td class="mono">${esc(x.symbol)}</td><td>${esc(x.side)}</td><td class="r mono">${num(x.qty,2)}</td><td class="r mono">${num(x.entry??x.entry_price)}</td><td class="r mono">${num(x.last)}</td><td class="r mono ${x.pnl>=0?'up':'down'}">${num(x.pnl,0)}</td></tr>`).join('')}</tbody></table>`:'<span class="dim">flat — the machine is standing aside (no signal cleared the gate)</span>';
+    $('#dpos').innerHTML=p.length?`<table><thead><tr><th>Symbol</th><th>Side</th><th class="r">Qty</th><th class="r">Entry</th><th class="r">Last</th><th class="r">Stop</th><th class="r">Target</th><th class="r">P&L</th></tr></thead><tbody>${p.map(x=>{const h=hb[x.symbol]||{};return `<tr><td class="mono">${esc(x.symbol)}</td><td>${esc(x.side)}</td><td class="r mono">${num(x.qty,2)}</td><td class="r mono">${num(x.entry??x.entry_price)}</td><td class="r mono">${num(x.last)}</td><td class="r mono down">${num(h.stop)}</td><td class="r mono up">${num(h.target)}</td><td class="r mono ${x.pnl>=0?'up':'down'}">${num(x.pnl,0)}</td></tr>`}).join('')}</tbody></table>`:'<span class="dim">flat — the machine is standing aside (no signal cleared the gate)</span>';
     const acts=(d.actions||[]).slice(0,15);
     $('#dfeed').innerHTML=acts.length?acts.map(x=>`<div class="newsitem"><div class="t">${esc(x.symbol||'')} · ${actTag(x.action,(x.why||x.coid||''))}</div><div class="m">${esc(x.ts||'')}${x.side?(' · '+esc(x.side)+' '+num(x.qty,2)+' @ '+num(x.price)):''}</div></div>`).join(''):'<span class="dim">no actions yet</span>';
   }catch(e){}

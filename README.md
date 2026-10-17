@@ -70,7 +70,7 @@ python -m kairos serve
 - **PSX Scan** — factor leaderboard over the whole exchange
 - **Portfolio** — annealed allocation with per-instrument metrics
 - **Paper Trading** — gated orders, account state, walk-forward validation, immutable journal
-- **Trade Like a Pro** — the autonomous desk: start/stop the autopilot, arm LIVE execution, broker-connection strip (MT5 + JS Global), kill switch, live signal board, positions and audit feed
+- **Trade Like a Pro** — the autonomous desk: start/stop the autopilot, arm LIVE execution, broker-connection strip (MT5 + JS Global), kill switch, live signal board, positions and audit feed. Every held position is actively managed — hard stops, targets, a trailing ratchet in R-multiples and venue reconciliation — and three circuit breakers (−3% day, 60% gross exposure, 4 straight losses) pause new entries while exits keep running
 - **Shareable live signals** — one click per signal: an Instagram-square 1080×1080 PNG card (`/api/signal-card?symbol=…`) plus a WhatsApp-ready caption copied to your clipboard; every card carries the not-investment-advice disclaimer
 - **News** — seven-feed macro/Pakistan radar
 - **System** — health, MT5 bridge, tradable universe browser

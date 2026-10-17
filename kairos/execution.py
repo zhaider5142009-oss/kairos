@@ -493,6 +493,30 @@ class Mt5Bridge:
         JOURNAL.log("MT5_CLOSE", {"ticket": p.ticket, "ok": ok})
         return ok
 
+    def modify_sl(self, ticket: int, sl: float | None = None,
+                  tp: float | None = None) -> bool:
+        """Ratchet a live position's SL/TP server-side (favourable moves only
+        are the caller's responsibility)."""
+        if not self.connected:
+            return False
+        mt5 = self._mt5
+        request: dict[str, Any] = {"action": mt5.TRADE_ACTION_SLTP,
+                                   "position": int(ticket)}
+        if sl is not None:
+            request["sl"] = float(sl)
+        if tp is not None:
+            request["tp"] = float(tp)
+        try:
+            result = mt5.order_send(request)
+            ok = result is not None and result.retcode == mt5.TRADE_RETCODE_DONE
+            JOURNAL.log("MT5_MODIFY", {"ticket": ticket, "sl": sl, "tp": tp,
+                                       "ok": ok})
+            return ok
+        except Exception as exc:
+            JOURNAL.log("MT5_MODIFY", {"ticket": ticket, "ok": False,
+                                       "error": str(exc)[:200]})
+            return False
+
     def benchmark_latency(self, symbol: str, n: int = 5) -> dict[str, Any]:
         """Round-trip quote latency over N symbol-select + tick fetches.
 
