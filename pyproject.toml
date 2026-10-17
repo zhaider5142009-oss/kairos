@@ -1,0 +1,72 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kairos"
+version = "2.0.0"
+description = "KAIROS — Knowledge-Augmented Intelligence for Returns & Optimization Systems: institutional-grade multi-asset (crypto, commodities, FX, indices, PSX) prediction, risk and paper-execution engine."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Haider" }]
+keywords = [
+    "quant", "forecasting", "crypto", "bitcoin", "trading", "machine-learning",
+    "portfolio-optimization", "var", "kelly", "backtesting", "psx", "fastapi",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "pyyaml>=6.0",
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "scipy>=1.11",
+    "statsmodels>=0.14",
+    "scikit-learn>=1.4",
+    "rich>=13.7",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "pydantic>=2.6",
+]
+
+[project.optional-dependencies]
+neural = ["torch>=2.2"]
+quantum = ["qiskit>=1.0"]
+mt5 = ["MetaTrader5>=5.0.45"]
+serve = ["httpx>=0.27"]
+test = ["pytest>=8.0", "httpx>=0.27"]
+all = [
+    "torch>=2.2",
+    "qiskit>=1.0",
+    "MetaTrader5>=5.0.45; platform_system == 'Windows'",
+]
+
+[project.scripts]
+kairos = "kairos.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/zhaider5142009-oss/kairos"
+Repository = "https://github.com/zhaider5142009-oss/kairos"
+Issues = "https://github.com/zhaider5142009-oss/kairos/issues"
+
+[tool.setuptools]
+packages = ["kairos", "kairos.api"]
+
+[tool.setuptools.package-data]
+"kairos.api" = ["ui.html"]
+"kairos" = ["wsl_scripts/*.py"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

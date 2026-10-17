@@ -1,8 +1,12 @@
 # KAIROS
 
+[![CI](https://github.com/zhaider5142009-oss/kairos/actions/workflows/ci.yml/badge.svg)](https://github.com/zhaider5142009-oss/kairos/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+
 **K**nowledge-**A**ugmented **I**ntelligence for **R**eturns & **O**ptimization **S**ystems — formerly *JARVIS v1/v1.5*, rebuilt from first principles as an institutional-grade market prediction and execution engine.
 
-KAIROS predicts commodities, FX, global indices, crypto and the Pakistan Stock Exchange (all 484 listed names + blue-chip dossiers), sizes positions with layered risk gates, and executes through paper, MT5, and JS Global bridges.
+KAIROS forecasts **crypto** (22 majors: BTC, ETH, SOL, BNB, XRP, ADA, DOGE, AVAX, LINK, DOT, LTC and more), commodities, FX, global indices and the Pakistan Stock Exchange (all 484 listed names + blue-chip dossiers), sizes positions with layered risk gates, and executes through paper, MT5, and JS Global bridges. A **100-instrument** tradable universe, all free and open source under MIT.
 
 ---
 
@@ -23,9 +27,18 @@ KAIROS predicts commodities, FX, global indices, crypto and the Pakistan Stock E
 ## Quick start
 
 ```bash
-pip install -r requirements.txt
+# clone, then install the package (editable) with core + test extras
+git clone https://github.com/zhaider5142009-oss/kairos.git && cd kairos
+pip install -e ".[test]"          # or: pip install -r requirements.txt
+
+# (optional) full battery: neural models, quantum, MT5
+pip install -e ".[all]"
+
+# or invoke the console script once installed
+kairos --help
 
 # one-shot predictions
+python -m kairos predict BTC ETH SOL          # crypto
 python -m kairos predict GOLD WTI EURUSD
 python -m kairos predict OGDC --council          # with LLM quant council
 
@@ -79,7 +92,7 @@ python -m kairos             CLI entry (predict/scan/portfolio/backtest/paper/mt
 launch_kairos.bat            one-click launcher (desktop shortcut target)
 config.yaml                  all keys + engine tunables (git-ignored)
 kairos/
-  config.py universe.py      config singleton · 80-instrument registry
+  config.py universe.py      config singleton · 100-instrument registry (22 crypto + commodities/FX/indices/PSX)
   data.py                    Yahoo v8 + TradingView PSX scanner + local PSX API + news + CSV store
   features.py                78 features · patterns · regimes · cross-sectional factors
   models_stat.py models_ml.py   statistical + ML + neural batteries
@@ -106,6 +119,17 @@ reports/                     saved JSON dossiers
 2. **Fail closed** — execution blocked unless every gate passes.
 3. **Prove it on paper first** — no live order until walk-forward + paper sessions are green.
 4. **Everything journaled** — append-only JSONL audit trail with idempotent client order IDs.
+
+## License
+
+Released under the [MIT License](LICENSE). Free to use, modify and redistribute
+with attribution. See [CONTRIBUTING.md](CONTRIBUTING.md) to get involved and
+[SECURITY.md](SECURITY.md) to report a vulnerability privately.
+
+> KAIROS is decision-support and paper-execution software, provided as is with
+> no warranty. It makes no guarantee of profitable or accurate forecasts.
+> Trading crypto, commodities, FX and equities carries substantial risk of
+> loss. Nothing here is financial advice.
 
 ## Lineage
 

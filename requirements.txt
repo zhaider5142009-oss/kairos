@@ -1,24 +1,11 @@
-# Core
 pyyaml>=6.0
 numpy>=1.26
 pandas>=2.1
 scipy>=1.11
-requests>=2.31
-rich>=13.7
-
-# ML / forecasting (CPU)
+statsmodels>=0.14
 scikit-learn>=1.4
-lightgbm>=4.3
 torch>=2.2        # CPU build is sufficient
-
-# API + UI
+rich>=13.7
 fastapi>=0.110
 uvicorn>=0.29
 pydantic>=2.6
-
-# Broker bridges (optional at runtime — imported lazily)
-MetaTrader5>=5.0.45
-
-# Optional extras
-qiskit>=1.0       # quantum coherence check; system works without it
-feedparser>=6.0   # news radar
