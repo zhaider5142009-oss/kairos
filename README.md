@@ -72,7 +72,7 @@ python -m kairos serve
 - **Paper Trading** — gated orders, account state, walk-forward validation, immutable journal
 - **Trade Like a Pro** — the autonomous desk: start/stop the autopilot, arm LIVE execution, broker-connection strip (MT5 + JS Global), kill switch, live signal board, positions and audit feed. Every held position is actively managed — hard stops, targets, a trailing ratchet in R-multiples and venue reconciliation — and three circuit breakers (−3% day, 60% gross exposure, 4 straight losses) pause new entries while exits keep running
 - **Shareable live signals** — one click per signal: an Instagram-square 1080×1080 PNG card (`/api/signal-card?symbol=…`) plus a WhatsApp-ready caption copied to your clipboard; every card carries the not-investment-advice disclaimer
-- **JS Global live book** — enter your real PSX holdings once; KAIROS reviews them through the engine (live price, P&L, call, recommended stop, status) and produces broker-ready SELL tickets awaiting your confirmation
+- **JS Global live book** — one click ("Sync from JS Global" / `kairos livebook --sync`) logs into your broker's Web Trade Cast **read-only** and imports your real holdings (quantity, average, pending sells, sold-out positions auto-released); KAIROS then reviews every position through the engine (live price, P&L, call, recommended stop, status) and produces broker-ready SELL tickets awaiting your confirmation
 - **News** — seven-feed macro/Pakistan radar
 - **System** — health, MT5 bridge, tradable universe browser
 
@@ -109,6 +109,7 @@ kairos/
   rules.py                   JARVIS v1 doctrine merged: risk-per-trade, R:R floor, ATR stops, wisdom corpus
   signalcard.py              shareable live signal cards: 1080×1080 PNG + WhatsApp caption
   livebook.py                your REAL JS Global holdings — engine verdicts + exit tickets
+  jsgsync.py                 read-only Web Trade Cast sync: login → import real portfolio
   backtest.py                walk-forward validation + paper sessions
   execution.py               OrderIntent → RiskGate → PaperBroker / Mt5Bridge / JsGlobalTicket + audit journal
   autopilot.py               autonomous loop: scan → verdicts → doctrine-sized orders → gated execution

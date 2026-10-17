@@ -338,6 +338,7 @@ tbody tr:hover td{background:#f9f9f9}
       <div style="flex:1;min-width:90px"><label>Qty (shares)</label><input id="lbqty" type="number" placeholder="1000"></div>
       <div style="flex:1;min-width:90px"><label>Avg price</label><input id="lbentry" type="number" step="0.01" placeholder="124.50"></div>
       <button class="btn small" id="lbadd" style="margin-bottom:1px">Add holding</button>
+      <button class="btn ghost small" id="lbsync" style="margin-bottom:1px" title="Log into Web Trade Cast (read-only) and import your real JS Global holdings">Sync from JS Global</button>
     </div>
     <div style="overflow-x:auto"><div id="lbtable"><span class="dim">add your real JS Global holdings — KAIROS will watch them with stops, targets and exit tickets</span></div></div>
   </div>
@@ -725,6 +726,16 @@ $('#lbadd').onclick=()=>{const s=$('#lbsym').value.trim(),q=+$('#lbqty').value,e
   lbPost({action:'add',symbol:s,qty:q,entry:e});$('#lbsym').value=$('#lbqty').value=$('#lbentry').value='';};
 function lbTicket(sym){if(confirm(`Create a broker-ready JS Global SELL ticket for ${sym}? Nothing executes until you place it in the app.`))lbPost({action:'ticket',symbol:sym},'Ticket created — confirm it in your JS Global app.');}
 function lbRemove(sym){if(confirm(`Stop watching ${sym}?`))lbPost({action:'remove',symbol:sym});}
+$('#lbsync').onclick=async()=>{const b=$('#lbsync');b.disabled=true;const old=b.textContent;b.textContent='Syncing…';
+  try{const r=await api('/api/livebook',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'sync'})});
+    const rp=r.report||{};const lines=[`Account: ${(rp.accounts||[]).join(', ')||'—'}`,
+      `Imported: ${(rp.imported||[]).map(i=>`${i.symbol} ${i.qty}@${num(i.avg)}${i.pending_sell?' ('+i.pending_sell+' pending sell)':''}`).join(', ')||'none'}`,
+      (rp.pending_orders||[]).length?`Pending at broker: ${rp.pending_orders.map(o=>`${o.scrip} ${o.side} ${o.qty}@${o.price}`).join(', ')}`:'',
+      (rp.released_sold||[]).length?`Released (sold at broker): ${rp.released_sold.join(', ')}`:'',
+      (rp.skipped_not_in_universe||[]).length?`Skipped (not in universe): ${rp.skipped_not_in_universe.join(', ')}`:''];
+    alert(lines.filter(Boolean).join('\n'));loadLivebook();
+  }catch(e){alert('JS Global sync failed: '+e.message);}
+  b.disabled=false;b.textContent=old;};
 async function autopilotCtl(body,msg){const el=$('#dapmsg');el.innerHTML='<span class="spinner"></span>working…';
   try{const r=await api('/api/autopilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     el.innerHTML=r.ok?`<span class="up">${esc(msg||'ok')}</span>`:`<span class="down">${esc(r.error||'failed')}</span>`;}

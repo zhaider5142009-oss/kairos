@@ -301,6 +301,9 @@ def livebook_post(req: LivebookReq):
         elif req.action == "stop":
             if not livebook.set_stop(req.symbol or "", req.stop):
                 raise ValueError("symbol not in the live book")
+        elif req.action == "sync":
+            from kairos import jsgsync
+            return _safe({"ok": True, "report": jsgsync.sync()})
         elif req.action == "ticket":
             return _safe({"ok": True,
                           "ticket": livebook.make_sell_ticket(req.symbol or "")})
@@ -308,6 +311,13 @@ def livebook_post(req: LivebookReq):
             raise ValueError(f"unknown action {req.action!r}")
     except ValueError as e:
         raise HTTPException(400, str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        from kairos.jsgsync import JsGlobalError
+        if isinstance(e, JsGlobalError):
+            raise HTTPException(502, str(e))
+        raise
     return _safe({"ok": True, "positions": livebook.review()})
 
 

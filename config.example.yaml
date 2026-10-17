@@ -67,6 +67,16 @@ apis:
     token: "YOUR-TOKEN"
     channel: "ibm_quantum_platform"
 
+# ---------------------------------------------------------------------------
+# JS Global Securities (PSX broker) web terminal — used READ-ONLY by
+# kairos/jsgsync.py to import your real holdings into the live book.
+# Put your actual credentials ONLY in the git-ignored config.yaml.
+# ---------------------------------------------------------------------------
+js_global:
+  portal_url: "https://wt.jsglobalonline.com"
+  login: "YOUR-ACCOUNT-NUMBER"
+  password: "YOUR-PASSWORD"
+
 data:
   yahoo:
     enabled: true

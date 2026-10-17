@@ -403,6 +403,25 @@ def cmd_livebook(args) -> int:
     if args.remove:
         console.print("[yellow]removed[/]" if livebook.remove(args.remove)
                       else "[red]not in the live book[/]")
+    if getattr(args, "sync", False):
+        from . import jsgsync
+        console.print("[bold blue]syncing from JS Global (Web Trade Cast)…[/]")
+        try:
+            rep = jsgsync.sync()
+        except jsgsync.JsGlobalError as e:
+            console.print(f"[red]sync failed:[/] {e}")
+            return 2
+        for i in rep["imported"]:
+            ps = f" ({i['pending_sell']:g} pending sell)" if i.get("pending_sell") else ""
+            console.print(f"[green]imported[/] {i['symbol']} "
+                          f"{i['qty']}@{i['avg']:,.2f}{ps}")
+        for o in rep["pending_orders"]:
+            console.print(f"[dim]broker pending order:[/] {o['scrip']} "
+                          f"{o['side']} {o['qty']}@{o['price']}")
+        for s in rep["skipped_not_in_universe"]:
+            console.print(f"[yellow]skipped (not in universe):[/] {s}")
+        for s in rep.get("released_sold", []):
+            console.print(f"[red]released (no longer at broker):[/] {s}")
     rows = livebook.review()
     if not rows:
         console.print("Live book is empty — add a holding: "
@@ -567,6 +586,8 @@ def main() -> int:
     sp.add_argument("--add", nargs=3, metavar=("SYMBOL", "QTY", "ENTRY"),
                     help="add a holding, e.g. --add OGDC 1000 124.50")
     sp.add_argument("--remove", metavar="SYMBOL")
+    sp.add_argument("--sync", action="store_true",
+                    help="log into Web Trade Cast (read-only) and import real holdings")
     sp.add_argument("--ticket", metavar="SYMBOL",
                     help="write a broker-ready JS Global SELL ticket")
     sp.set_defaults(fn=cmd_livebook)
