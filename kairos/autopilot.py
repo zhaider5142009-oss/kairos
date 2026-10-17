@@ -137,8 +137,8 @@ class Autopilot:
     # ------------------------------------------------------------- the loop
     def _loop(self) -> None:
         # first cycle shortly after start, then every interval
-        while not self._stop.wait(10 if self.st["cycles"] == 0
-                                  else self.st["interval_s"]):
+        delay = 15
+        while not self._stop.wait(delay):
             try:
                 self.cycle()
             except Exception as exc:
@@ -146,6 +146,7 @@ class Autopilot:
                     self.st["last_error"] = str(exc)[:400]
                     self._save()
                 JOURNAL.log("AUTOPILOT_ERROR", {"error": str(exc)[:400]})
+            delay = self.st["interval_s"]
 
     def cycle(self) -> dict[str, Any]:
         from .engine import ENGINE
