@@ -130,3 +130,12 @@ backtest:
   step_days: 1
   refit_every: 20
   start_capital: 1000000
+
+# MT5 live bridge — put your REAL credentials in config.yaml (git-ignored),
+# never here. The terminal must be installed; leave login empty to simply
+# attach to an already-signed-in terminal.
+mt5:
+  login: 0
+  password: ""
+  server: "JS-Markets-Demo"
+  terminal_path: "C:/Program Files/MetaTrader 5/terminal64.exe"

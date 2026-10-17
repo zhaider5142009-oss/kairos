@@ -290,6 +290,79 @@ def cmd_mt5(args) -> int:
     return 0
 
 
+def cmd_autopilot(args) -> int:
+    """Start/stop/status the autonomous scan-and-trade loop."""
+    from .autopilot import AUTOPILOT
+    from rich.panel import Panel
+    from rich.table import Table
+    console = _console()
+    what = args.what
+    if what == "start":
+        if args.symbols:
+            AUTOPILOT.configure(symbols=args.symbols, interval_s=args.interval)
+        out = AUTOPILOT.start(mode=args.mode, confirm_live=args.yes_live)
+        if not out.get("ok"):
+            console.print(Panel(f"[red]{out.get('error')}[/]", title="KAIROS AUTOPILOT"))
+            return 1
+        console.print(Panel(
+            f"[green]autopilot running[/] · mode [bold]{out['mode']}[/] · "
+            f"every {out['interval_s']}s\nwatchlist: {', '.join(out['symbols'])}"
+            + (f"\n[yellow]{out['note']}[/]" if out.get("note") else ""),
+            title="KAIROS AUTOPILOT"))
+        what = "status"
+    elif what == "stop":
+        AUTOPILOT.stop()
+        console.print("[yellow]autopilot stopped; live loop never survives a restart[/]")
+        return 0
+    elif what == "configure":
+        AUTOPILOT.configure(args.symbols, args.interval,
+                            args.threshold, args.max_trades)
+        console.print("[green]configuration saved[/]")
+    if what == "cycle":
+        r = AUTOPILOT.cycle()
+        console.print(f"[green]one cycle done[/] · trades={r['trades']} "
+                      f"signals={r['signals']}")
+        what = "status"
+    if what in ("status", "configure"):
+        st = AUTOPILOT.status()
+        mode = st["mode"] + (" [bold red]LIVE[/]" if st.get("armed_live") else " paper")
+        state = "[green]running[/]" if st["running"] else "[dim]idle[/]"
+        console.print(Panel(
+            f"state: {state} · mode: {mode} · cycles: {st['cycles']}\n"
+            f"last cycle: {st['last_cycle'] or '—'} · interval: {st['interval_s']}s\n"
+            f"entry threshold: {st['entry_threshold']} · "
+            f"kill switch: {'ENGAGED' if st['kill_switch'] else 'clear'}",
+            title="KAIROS AUTOPILOT"))
+        if st.get("signals"):
+            tbl = Table(box=box.ROUNDED)
+            for c in ("symbol", "price", "call", "score", "conf", "weight", "action"):
+                tbl.add_column(c, justify="right" if c not in ("symbol", "call") else "left")
+            for srow in st["signals"]:
+                sc = srow.get("score") or 0
+                col = "green" if sc > 0 else "red" if sc < 0 else "yellow"
+                tbl.add_row(srow["symbol"], f"{srow.get('price', 0):,.2f}",
+                            srow.get("direction", ""), f"[{col}]{sc:+.3f}[/]",
+                            f"{(srow.get('confidence') or 0) * 100:.0f}%",
+                            f"{(srow.get('weight') or 0) * 100:.1f}%",
+                            srow.get("action", ""))
+            console.print(tbl)
+        if st.get("actions"):
+            cons = Table(box=box.ROUNDED, title="recent actions")
+            cons.add_column("ts")
+            cons.add_column("symbol")
+            cons.add_column("action")
+            cons.add_column("detail")
+            for a in st["actions"][:10]:
+                cons.add_row(a.get("ts", ""), a.get("symbol", ""), a.get("action", ""),
+                             str(a.get("why") or a.get("coid") or ""))
+            console.print(cons)
+        acct = st.get("paper_account") or {}
+        console.print(f"paper equity: {acct.get('equity', 0):,.0f} · "
+                      f"day P&L: {acct.get('day_pnl', 0):+,.0f} · "
+                      f"positions: {len(st.get('paper_positions') or [])}")
+    return 0
+
+
 def cmd_feedback(args) -> int:
     """Resolve elapsed predictions and print the realized track record."""
     from rich.panel import Panel
@@ -390,6 +463,18 @@ def main() -> int:
     sp.add_argument("--symbols", nargs="*")
     sp.add_argument("--benchmark", action="store_true")
     sp.set_defaults(fn=cmd_mt5)
+
+    sp = sub.add_parser("autopilot", help="autonomous scan-and-trade loop")
+    sp.add_argument("what", nargs="?", default="status",
+                    choices=["start", "stop", "status", "configure", "cycle"])
+    sp.add_argument("--mode", default="paper", choices=["paper", "live"])
+    sp.add_argument("--symbols", nargs="*")
+    sp.add_argument("--interval", type=int)
+    sp.add_argument("--threshold", type=float)
+    sp.add_argument("--max-trades", type=int)
+    sp.add_argument("--yes-live", action="store_true",
+                    help="explicitly arm live MT5 execution (real money)")
+    sp.set_defaults(fn=cmd_autopilot)
 
     sp = sub.add_parser("feedback", help="resolve outcomes + realized track record")
     sp.set_defaults(fn=cmd_feedback)

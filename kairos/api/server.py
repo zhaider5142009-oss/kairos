@@ -180,10 +180,70 @@ def mt5(symbols: str = "XAUUSD,XAGUSD,EURUSD", benchmark: bool = False):
         for sym in [s.strip() for s in symbols.split(",") if s.strip()]:
             t = br.tick(sym)
             if t:
+                t["symbol"] = sym
                 out["ticks"].append(t)
         if benchmark:
             out["benchmark"] = br.benchmark_latency("XAUUSD", n=3)
     return out
+
+
+# ---------------------------------------------------------------- autopilot
+class AutopilotReq(BaseModel):
+    action: str = "status"          # status | start | stop | configure
+    mode: str = "paper"             # paper | live
+    confirm_live: bool = False
+    symbols: list[str] | None = None
+    interval_s: int | None = None
+    entry_threshold: float | None = None
+    max_trades_per_cycle: int | None = None
+
+
+@app.get("/api/autopilot")
+def autopilot_get():
+    from kairos.autopilot import AUTOPILOT
+    return _safe(AUTOPILOT.status())
+
+
+@app.post("/api/autopilot")
+def autopilot_post(req: AutopilotReq):
+    from kairos.autopilot import AUTOPILOT
+    from kairos.execution import JOURNAL, KILL
+    act = req.action.lower()
+    if act == "configure":
+        AUTOPILOT.configure(req.symbols, req.interval_s,
+                            req.entry_threshold, req.max_trades_per_cycle)
+        return _safe(AUTOPILOT.status())
+    if act == "start":
+        out = AUTOPILOT.start(mode=req.mode, confirm_live=req.confirm_live)
+        return _safe(out)
+    if act == "stop":
+        return _safe(AUTOPILOT.stop())
+    if act == "cycle":
+        return _safe(AUTOPILOT.cycle())
+    return _safe(AUTOPILOT.status())
+
+
+@app.post("/api/killswitch")
+def killswitch(engage: bool = True, reason: str = "api"):
+    from kairos.execution import JOURNAL, KILL
+    if engage:
+        KILL.engage(reason)
+        JOURNAL.log("KILL_SWITCH", {"by": "api", "reason": reason})
+        return {"ok": True, "engaged": True}
+    KILL.release()
+    return {"ok": True, "engaged": False}
+
+
+@app.get("/api/desk")
+def desk():
+    """One-call snapshot for the Pro Desk tab."""
+    from kairos.autopilot import AUTOPILOT
+    from kairos.execution import JOURNAL
+    st = AUTOPILOT.status()
+    st["journal"] = [j for j in JOURNAL.tail(40)
+                     if str(j.get("event", "")).startswith(("AUTOPILOT", "PAPER",
+                                                            "MT5_", "PSX_", "KILL"))]
+    return _safe(st)
 
 
 # ---------------------------------------------------------------- chat
