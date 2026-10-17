@@ -332,6 +332,17 @@ tbody tr:hover td{background:#f9f9f9}
   </div>
 
   <div class="card">
+    <div class="sectiontitle" style="margin-top:0">Your JS Global live book <span class="dim" id="lbmeta"></span></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px">
+      <div style="flex:1;min-width:110px"><label>Symbol</label><input id="lbsym" placeholder="e.g. OGDC"></div>
+      <div style="flex:1;min-width:90px"><label>Qty (shares)</label><input id="lbqty" type="number" placeholder="1000"></div>
+      <div style="flex:1;min-width:90px"><label>Avg price</label><input id="lbentry" type="number" step="0.01" placeholder="124.50"></div>
+      <button class="btn small" id="lbadd" style="margin-bottom:1px">Add holding</button>
+    </div>
+    <div style="overflow-x:auto"><div id="lbtable"><span class="dim">add your real JS Global holdings — KAIROS will watch them with stops, targets and exit tickets</span></div></div>
+  </div>
+
+  <div class="card">
     <div class="sectiontitle" style="margin-top:0">Live signal board <span class="dim" id="dmeta"></span></div>
     <div style="overflow-x:auto"><div id="dsignals"><span class="dim">press Start (or “Run one cycle”) — KAIROS will scan the watchlist, gate and act…</span></div></div>
   </div>
@@ -693,6 +704,27 @@ async function shareSignal(sym){
   try{const r=await api(url+'&caption=1');
     if(r&&r.caption)await navigator.clipboard.writeText(r.caption);}catch(e){}
 }
+let LB=[];
+async function loadLivebook(){
+  try{const r=await api('/api/livebook');if(!r||!r.ok)return;
+    LB=r.positions||[];
+    $('#lbmeta').textContent=LB.length?`${LB.length} holding(s) · unrealised ${num(LB.reduce((s,x)=>s+(x.pnl||0),0),0)}`:'';
+    $('#lbtable').innerHTML=LB.length?`<table><thead><tr><th>Symbol</th><th class="r">Qty</th><th class="r">Entry</th><th class="r">Last</th><th class="r">P&L</th><th class="c">Engine</th><th class="r">Stop</th><th>Status</th><th></th></tr></thead><tbody>${LB.map(x=>{
+      const st=x.status||'—';const sc=st.includes('STOP')||st.includes('EXIT')?'bad':st.includes('conviction')||st.includes('profit')?'ok':'neut';
+      const c=dirCode(x.direction);
+      return `<tr><td class="mono" style="cursor:pointer" onclick="predictGo('${esc(x.symbol)}')">${esc(x.symbol)}</td><td class="r mono">${num(x.qty,0)}</td><td class="r mono">${num(x.entry)}</td><td class="r mono">${num(x.last)}</td><td class="r mono ${x.pnl>=0?'up':'down'}">${num(x.pnl,0)}</td><td class="c ${c>0?'up':c<0?'down':'flat'}">${esc(x.direction||'—')}</td><td class="r mono">${num(x.stop??x.rec_stop)}</td><td><span class="tag ${sc}">${esc(st)}</span></td><td style="white-space:nowrap"><button class="btn ghost small" onclick="lbTicket('${esc(x.symbol)}')">Ticket sell</button> <button class="btn ghost small" onclick="lbRemove('${esc(x.symbol)}')">✕</button></td></tr>`}).join('')}</tbody></table>`:'<span class="dim">add your real JS Global holdings — KAIROS will watch them with stops, targets and exit tickets</span>';}
+  catch(e){}
+}
+async function lbPost(body,msg){
+  const r=await api('/api/livebook',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(r&&r.ok&&msg)alert(msg+(r.ticket?`\n\nTicket: ${r.ticket.ticket_id}\nSaved to: ${r.ticket.path||'data/psx_orders/'}`:''));
+  loadLivebook();
+}
+$('#lbadd').onclick=()=>{const s=$('#lbsym').value.trim(),q=+$('#lbqty').value,e=+$('#lbentry').value;
+  if(!s||!q||!e){alert('symbol, quantity and average price are all required');return}
+  lbPost({action:'add',symbol:s,qty:q,entry:e});$('#lbsym').value=$('#lbqty').value=$('#lbentry').value='';};
+function lbTicket(sym){if(confirm(`Create a broker-ready JS Global SELL ticket for ${sym}? Nothing executes until you place it in the app.`))lbPost({action:'ticket',symbol:sym},'Ticket created — confirm it in your JS Global app.');}
+function lbRemove(sym){if(confirm(`Stop watching ${sym}?`))lbPost({action:'remove',symbol:sym});}
 async function autopilotCtl(body,msg){const el=$('#dapmsg');el.innerHTML='<span class="spinner"></span>working…';
   try{const r=await api('/api/autopilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     el.innerHTML=r.ok?`<span class="up">${esc(msg||'ok')}</span>`:`<span class="down">${esc(r.error||'failed')}</span>`;}
@@ -713,8 +745,8 @@ $('#dkill').onclick=async()=>{try{const d=await api('/api/autopilot');
   await api(`/api/killswitch?engage=${!d.kill_switch}&reason=desk`,{method:'POST'});}catch(e){}loadDesk();};
 
 /* ---------- boot ---------- */
-loadHealth();loadUniverse().then(()=>{loadWatch()});loadPaperAcct();loadJournal();loadFeedback(false);loadDesk();
-setInterval(loadHealth,60000);setInterval(loadDesk,15000);
+loadHealth();loadUniverse().then(()=>{loadWatch()});loadPaperAcct();loadJournal();loadFeedback(false);loadDesk();loadLivebook();
+setInterval(loadHealth,60000);setInterval(loadDesk,15000);setInterval(loadLivebook,60000);
 </script>
 </body>
 </html>

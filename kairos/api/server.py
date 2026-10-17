@@ -274,6 +274,43 @@ def signal_card(symbol: str, caption: bool = False):
                         filename=f"kairos-{symbol.upper()}-signal.png")
 
 
+# ---------------------------------------------------------------- live book
+class LivebookReq(BaseModel):
+    action: str                 # add | remove | stop | ticket
+    symbol: str | None = None
+    qty: float | None = None
+    entry: float | None = None
+    stop: float | None = None
+
+
+@app.get("/api/livebook")
+def livebook_get(refresh: bool = False):
+    """Real JS Global holdings reviewed through the engine."""
+    from kairos import livebook
+    return _safe({"ok": True, "positions": livebook.review(force=refresh)})
+
+
+@app.post("/api/livebook")
+def livebook_post(req: LivebookReq):
+    from kairos import livebook
+    try:
+        if req.action == "add":
+            livebook.add(req.symbol or "", req.qty or 0, req.entry or 0)
+        elif req.action == "remove":
+            livebook.remove(req.symbol or "")
+        elif req.action == "stop":
+            if not livebook.set_stop(req.symbol or "", req.stop):
+                raise ValueError("symbol not in the live book")
+        elif req.action == "ticket":
+            return _safe({"ok": True,
+                          "ticket": livebook.make_sell_ticket(req.symbol or "")})
+        else:
+            raise ValueError(f"unknown action {req.action!r}")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _safe({"ok": True, "positions": livebook.review()})
+
+
 # ---------------------------------------------------------------- chat
 class ChatReq(BaseModel):
     message: str
@@ -325,6 +362,27 @@ def chat(req: ChatReq):
         return any(w in low for w in words)
 
     # portfolio intent before symbol detection (lists of tickers)
+    if has("my real", "js global", "live book", "livebook", "my stock account",
+           "my actual positions", "my holdings", "my positions"):
+        from kairos import livebook
+        rows = livebook.review()
+        if not rows:
+            return {"reply": "You haven't given me your JS Global positions yet. "
+                             "Open Trade Like a Pro → Your JS Global live book and "
+                             "add each holding (symbol, quantity, average price) — "
+                             "I'll watch them with stops, targets and exit tickets.",
+                    "card": None}
+        tot = sum(r.get("pnl") or 0 for r in rows)
+        lines = [f"YOUR JS GLOBAL BOOK — {len(rows)} position(s), "
+                 f"unrealised P&L {tot:+,.0f}:"]
+        for r in rows:
+            lines.append(
+                f"• {r['symbol']}: {r.get('status', '—')} · last "
+                f"{r.get('last', 0):,.2f} ({r.get('pnl_pct', 0):+.1f}%) · "
+                f"engine {r.get('direction', '—')} score "
+                f"{(r.get('score') or 0):+.3f}")
+        return {"reply": "\n".join(lines), "card": None}
+
     if has("portfolio", "allocate", "allocat", "diversif", "split my", "weights for"):
         syms = re.findall(r"\b[A-Z][A-Z0-9.]{1,6}\b", msg.upper())
         picked = [s for s in syms if resolve(s) is not None]

@@ -391,6 +391,41 @@ def cmd_rules(args) -> int:
     return 0
 
 
+def cmd_livebook(args) -> int:
+    """Watch the REAL JS Global holdings with engine verdicts + exit tickets."""
+    from rich.table import Table
+    from . import livebook
+    console = _console()
+    if args.add:
+        sym, qty, entry = args.add
+        livebook.add(sym, float(qty), float(entry))
+        console.print(f"[green]watching {sym.upper()}[/]")
+    if args.remove:
+        console.print("[yellow]removed[/]" if livebook.remove(args.remove)
+                      else "[red]not in the live book[/]")
+    rows = livebook.review()
+    if not rows:
+        console.print("Live book is empty — add a holding: "
+                      "[bold]kairos livebook --add OGDC 1000 124.50[/]")
+        return 0
+    tbl = Table(box=box.ROUNDED, title="JS GLOBAL LIVE BOOK")
+    for col in ("symbol", "qty", "entry", "last", "P&L", "call", "stop", "status"):
+        tbl.add_column(col)
+    for r in rows:
+        col = "green" if (r.get("pnl") or 0) >= 0 else "red"
+        tbl.add_row(r["symbol"], f"{r['qty']:,}", f"{r['entry']:,.2f}",
+                    f"{r.get('last', 0):,.2f}", f"[{col}]{r.get('pnl', 0):+,.0f}[/]",
+                    r.get("direction", "—"),
+                    f"{(r.get('stop') or r.get('rec_stop') or 0):,.2f}",
+                    r.get("status", "—"))
+    console.print(tbl)
+    if args.ticket:
+        t = livebook.make_sell_ticket(args.ticket)
+        console.print(f"[cyan]ticket {t['ticket_id']} written — confirm it in the "
+                      f"JS Global app[/]")
+    return 0
+
+
 def cmd_share(args) -> int:
     """Render a shareable live signal card (WhatsApp/Instagram)."""
     from rich.panel import Panel
@@ -526,6 +561,15 @@ def main() -> int:
     sp.add_argument("-o", "--out",
                     help="output PNG path (default: data/cards/SYMBOL.png)")
     sp.set_defaults(fn=cmd_share)
+
+    sp = sub.add_parser("livebook",
+                        help="watch your REAL JS Global holdings (verdicts + exit tickets)")
+    sp.add_argument("--add", nargs=3, metavar=("SYMBOL", "QTY", "ENTRY"),
+                    help="add a holding, e.g. --add OGDC 1000 124.50")
+    sp.add_argument("--remove", metavar="SYMBOL")
+    sp.add_argument("--ticket", metavar="SYMBOL",
+                    help="write a broker-ready JS Global SELL ticket")
+    sp.set_defaults(fn=cmd_livebook)
 
     sp = sub.add_parser("feedback", help="resolve outcomes + realized track record")
     sp.set_defaults(fn=cmd_feedback)
