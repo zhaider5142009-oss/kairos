@@ -100,7 +100,32 @@ tbody tr:hover td{background:#f4f8ff}
 .pulse{animation:pulse 2s infinite;color:var(--green)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 ::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:#c9d2e0;border-radius:5px}
-@media(max-width:700px){.verdict{gap:14px}.big{font-size:21px}header{gap:10px}}
+@media(max-width:700px){.verdict{gap:14px}.big{font-size:21px}header{gap:10px}.msg{max-width:92%}}
+/* ---------- chat console ---------- */
+.chatbox{display:flex;flex-direction:column;height:440px}
+#chatlog{flex:1;overflow-y:auto;padding:4px 2px 10px;display:flex;flex-direction:column;gap:14px;scroll-behavior:smooth}
+.msg{max-width:80%;padding:12px 16px;border-radius:18px;font-size:14.5px;line-height:1.55;
+  white-space:pre-wrap;word-wrap:break-word;animation:fade .25s}
+.msg.user{align-self:flex-end;background:linear-gradient(135deg,#1a6dff,#3f8cff);color:#fff;
+  border-bottom-right-radius:6px;box-shadow:var(--shadow)}
+.msg.bot{align-self:flex-start;background:var(--blue-soft);border:1px solid #d7e5ff;
+  border-bottom-left-radius:6px}
+.msg .who{display:block;font-size:10.5px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;
+  color:var(--faint);margin-bottom:5px}
+.chatcard{margin-top:10px;border-top:1px dashed #c9dbff;padding-top:9px}
+.ccrow{display:flex;justify-content:space-between;gap:18px;font-size:13px;padding:2.5px 0}
+.ccrow b{font-family:var(--mono)}
+.cclink{color:var(--blue);font-weight:600;font-size:13px;cursor:pointer;margin-top:7px;display:inline-block}
+.cclink:hover{text-decoration:underline}
+.typing{display:inline-flex;gap:4px;align-items:center;padding:4px 2px}
+.typing span{width:7px;height:7px;background:var(--faint);border-radius:50%;animation:bounce 1.2s infinite}
+.typing span:nth-child(2){animation-delay:.18s}.typing span:nth-child(3){animation-delay:.36s}
+@keyframes bounce{0%,60%,100%{transform:none}30%{transform:translateY(-5px)}}
+.chatinput{display:flex;gap:10px;align-items:flex-end;margin-top:14px}
+.chatinput textarea{flex:1;resize:none;height:50px;max-height:140px;background:#fff;
+  border:1px solid var(--line);border-radius:16px;padding:14px 18px;font-size:15px;
+  font-family:var(--sans);color:var(--txt);line-height:1.4}
+.chatinput textarea:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(26,109,255,.12)}
 </style>
 </head>
 <body>
@@ -128,10 +153,14 @@ tbody tr:hover td{background:#f4f8ff}
 
   <div class="grid g4" id="homekpi"></div>
 
-  <div class="card">
-    <div class="sectiontitle" style="margin-top:0">What do you want to know?</div>
-    <p class="dim" style="font-size:13px;margin-bottom:10px">One tap each — KAIROS runs the full engine (model battery → 100 strategies → fusion → risk) and answers in plain language.</p>
+  <div class="card" style="padding:18px 18px 14px">
+    <div class="sectiontitle" style="margin-top:0">Ask KAIROS</div>
+    <div class="chatbox"><div id="chatlog"></div></div>
     <div class="chips" id="quickasks"></div>
+    <div class="chatinput">
+      <textarea id="chatq" rows="1" placeholder="Ask anything — e.g. where is gold heading this week?"></textarea>
+      <button class="btn" id="chatsend" style="height:50px">Send</button>
+    </div>
   </div>
 
   <div class="grid g2">
@@ -328,10 +357,55 @@ async function loadUniverse(){
     const picks=['GOLD','WTI','EURUSD','BTC','SPX','KSE100','OGDC','LUCK','HBL','ENGRO'];
     $('#pchips').innerHTML=picks.map(p=>`<span class="chip" onclick="predictGo('${p}')">${p}</span>`).join('');
     $('#fochips').innerHTML=['GOLD,WTI,EURUSD,SPX','OGDC,HBL,LUCK,ENGRO,MCB','GOLD,SILVER,WTI,BRENT,NATGAS,COPPER','SPX,NDX,UKX,DAX,N225,HSI'].map(p=>`<span class="chip" onclick="$('#fosyms').value='${p}';optimizeGo()">${p.slice(0,34)}</span>`).join('');
-    $('#quickasks').innerHTML=[['Where is gold heading?','GOLD'],['Is WTI tradable now?','WTI'],['Euro vs dollar','EURUSD'],['Bitcoin this week','BTC'],['OGDC verdict','OGDC'],['LUCKY Cement','LUCK'],['HBL bank','HBL'],['KSE-100 index','KSE100']].map(([t,s])=>`<span class="chip" onclick="predictGo('${s}')">${t}</span>`).join('');
+    $('#quickasks').innerHTML=CHAT_STARTERS.map(t=>`<span class="chip" onclick="chatAsk(this.textContent)">${esc(t)}</span>`).join('');
   }catch(e){}
 }
 function predictGo(sym){$('#psym').value=sym;$$('#nav button')[1].click();runPredict()}
+
+/* ---------- chat console ---------- */
+const CHAT_STARTERS=['Where is gold heading this week?','Is WTI tradable right now?','Best Pakistani stocks?','Allocate 1M across GOLD WTI SPX','How good is your track record?'];
+function chatBubble(who,html,cls){
+  const d=document.createElement('div');d.className='msg '+cls;
+  d.innerHTML=`<span class="who">${who}</span>${html}`;
+  $('#chatlog').appendChild(d);$('#chatlog').scrollTop=$('#chatlog').scrollHeight;return d}
+function chatCard(d){
+  if(!d)return '';
+  if(d.kind==='predict'){
+    const c=dirCode(d.direction),col=c>0?'var(--green)':c<0?'var(--red)':'var(--yellow)';
+    return `<div class="chatcard">
+      <div class="ccrow"><span class="dim">Call</span><b style="color:${col}">${esc(d.direction)}</b></div>
+      <div class="ccrow"><span class="dim">Expected ${d.horizon_days}d return</span><b class="${c>0?'up':c<0?'down':'flat'}">${pct(d.expected_return)}</b></div>
+      <div class="ccrow"><span class="dim">P(up)</span><b>${(d.probability_up*100).toFixed(0)}%</b></div>
+      <div class="ccrow"><span class="dim">Confidence</span><b>${(d.confidence*100).toFixed(0)}%</b></div>
+      <div class="ccrow"><span class="dim">Suggested weight</span><b>${pct(d.weight,1)}</b></div>
+      <div class="ccrow"><span class="dim">Regime</span><b>${esc(d.regime||'')}</b></div>
+      <span class="cclink" onclick="predictGo('${esc(d.symbol)}')">Open full dossier →</span></div>`}
+  if(d.kind==='portfolio'){
+    const w=Object.entries(d.weights||{}).filter(([,v])=>v>0.001).sort((a,b)=>b[1]-a[1]).slice(0,6);
+    return `<div class="chatcard">${w.map(([s,v])=>`<div class="ccrow"><span class="dim">${esc(s)}</span><b>${(v*100).toFixed(1)}% · ${num(d.allocations[s],0)}</b></div>`).join('')}
+      <span class="cclink" onclick="$$('#nav button')[3].click()">Open portfolio builder →</span></div>`}
+  if(d.kind==='scan'){
+    return `<div class="chatcard">${(d.rows||[]).slice(0,5).map(t=>`<div class="ccrow"><span>${esc(t.name)} <span class="faint">${esc(t.sector||'')}</span></span><b>${num(t.composite_score,2)}</b></div>`).join('')}
+      <span class="cclink" onclick="$$('#nav button')[2].click()">Full PSX leaderboard →</span></div>`}
+  return ''}
+async function sendChat(text){
+  chatBubble('You',esc(text),'user');
+  const wait=chatBubble('KAIROS','<span class="typing"><span></span><span></span><span></span></span>','bot');
+  $('#chatq').value='';autogrow();$('#chatsend').disabled=true;
+  try{
+    const r=await api('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:text})});
+    wait.innerHTML=`<span class="who">KAIROS</span>${esc(r.reply||'No reply.')}${chatCard(r.data)}`;
+  }catch(e){wait.innerHTML=`<span class="who">KAIROS</span><span class="down">Could not reach the engine: ${esc(e.message)}</span>`}
+  $('#chatlog').scrollTop=$('#chatlog').scrollHeight;
+  $('#chatsend').disabled=false;$('#chatq').focus();
+}
+function chatAsk(t){t=(t||'').trim();if(t)sendChat(t)}
+function autogrow(){const t=$('#chatq');t.style.height='50px';t.style.height=Math.min(t.scrollHeight,140)+'px'}
+$('#chatsend').onclick=()=>sendChat($('#chatq').value);
+$('#chatq').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat($('#chatq').value)}});
+$('#chatq').addEventListener('input',autogrow);
+chatBubble('KAIROS','Hello — I\'m KAIROS. Ask me about any instrument ("where is gold this week?", "is OGDC a buy?"), say "best Pakistani stocks" to scan the PSX, "allocate 1M across GOLD WTI SPX" to build a portfolio, or ask how my track record is holding up. Every answer runs the full engine underneath.','bot');
 
 /* ---------- home watchlist ---------- */
 const WATCH=['GOLD','WTI','EURUSD','BTC','KSE100','OGDC'];

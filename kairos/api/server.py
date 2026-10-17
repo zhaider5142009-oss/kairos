@@ -13,7 +13,7 @@ from pydantic import BaseModel
 ROOT = Path(__file__).resolve().parent.parent
 
 from kairos.engine import ENGINE  # noqa: E402
-from kairos.universe import universe  # noqa: E402
+from kairos.universe import resolve, universe  # noqa: E402
 
 app = FastAPI(title="KAIROS Control Tower", version="2.0.0")
 
@@ -186,7 +186,180 @@ def mt5(symbols: str = "XAUUSD,XAGUSD,EURUSD", benchmark: bool = False):
     return out
 
 
-# ---------------------------------------------------------------- journal
+# ---------------------------------------------------------------- chat
+class ChatReq(BaseModel):
+    message: str
+
+
+def _find_instrument(msg: str, name_tokens: bool = True):
+    import re
+    up = msg.upper()
+    for w in re.findall(r"\b[A-Z][A-Z0-9.]{1,14}\b", up):
+        inst = resolve(w.strip("."))
+        if inst is not None:
+            return inst
+    if not name_tokens:
+        return None
+    for inst in universe():
+        toks = [t for t in re.split(r"[^A-Z0-9]+", (inst.name or "").upper())
+                if len(t) >= 5 and t not in ("FUTURES", "INDEX", "EXCHANGE")]
+        for t in toks:
+            if re.search(rf"\b{re.escape(t)}\b", up):
+                return inst
+    return None
+
+
+def _horizon_from(msg: str) -> int:
+    import re
+    m = re.search(r"(\d{1,2})\s*(day|d\b|week)", msg.lower())
+    if m:
+        n = int(m.group(1)) * (5 if m.group(2) == "week" else 1)
+        return max(1, min(21, n))
+    low = msg.lower()
+    if "today" in low or "tomorrow" in low or "overnight" in low:
+        return 1
+    if "week" in low or "month" in low:
+        return 5
+    return 5
+
+
+@app.post("/api/chat")
+def chat(req: ChatReq):
+    import re
+    msg = req.message.strip()
+    if not msg:
+        return {"ok": True, "reply": "Ask me anything — e.g. \"where is gold heading this week?\"",
+                "action": "help", "data": None}
+    low = msg.lower()
+    facts = None
+
+    def has(*words):
+        return any(w in low for w in words)
+
+    # portfolio intent before symbol detection (lists of tickers)
+    if has("portfolio", "allocate", "allocat", "diversif", "split my", "weights for"):
+        syms = re.findall(r"\b[A-Z][A-Z0-9.]{1,6}\b", msg.upper())
+        picked = [s for s in syms if resolve(s) is not None]
+        if len(picked) < 3:
+            picked = ["GOLD", "WTI", "EURUSD", "SPX", "OGDC", "HBL"]
+        r = ENGINE.portfolio(picked, capital=1_000_000.0)
+        if not r.get("ok"):
+            return {"ok": True, "reply": f"Portfolio engine could not run: {r.get('error')}",
+                    "action": "error", "data": None}
+        top_w = sorted(r["weights"].items(), key=lambda kv: -abs(kv[1]))[:6]
+        lines = "\n".join(f"• {s} — {w*100:.1f}% (PKR/USD {round(r['allocations'][s]):,})"
+                          for s, w in top_w if w > 0.001)
+        reply = (f"Here is the annealed allocation for {len(r['weights'])} names — "
+                 f"expected return {r['expected_return']*100:.2f}%, "
+                 f"Sharpe {r['sharpe']}:\n{lines}\n"
+                 "Open the Portfolio tab for the full profile.")
+        return _safe({"ok": True, "reply": reply, "action": "portfolio",
+                      "data": {"kind": "portfolio", "solver": r.get("solver"),
+                               "weights": r["weights"], "allocations": r["allocations"],
+                               "expected_return": r["expected_return"],
+                               "expected_vol": r["expected_vol"], "sharpe": r["sharpe"]}})
+
+    if has("track record", "hit rate", "accuracy", "how good are you", "how reliable"):
+        from kairos.feedback import track_record
+        tr = track_record()
+        if tr.get("resolved"):
+            reply = (f"So far {tr['resolved']} of my predictions have hit their horizon. "
+                     f"Directional hit rate {tr['hit_rate']*100:.1f}% "
+                     f"(strong signals {tr.get('strong_signal_hit_rate') or 0:.0%}). "
+                     f"Mean absolute return error {tr.get('mean_abs_error')}.")
+        else:
+            reply = ("I journal every prediction and grade myself once the horizon elapses — "
+                     "no outcomes have matured yet. Ask again in a few days.")
+        return {"ok": True, "reply": reply, "action": "feedback", "data": None}
+
+    if has("news", "headline", "what happened", "what's going on"):
+        r = news(limit=5)
+        items = r.get("items", [])
+        if not items:
+            return {"ok": True, "reply": "The news feeds are unreachable right now.",
+                    "action": "error", "data": None}
+        lines = "\n".join(f"• {i['title']} — {i['source']}" for i in items)
+        return {"ok": True, "reply": f"Top of the radar right now:\n{lines}",
+                "action": "news", "data": None}
+
+    inst = _find_instrument(msg, name_tokens=False)
+
+    if inst is None and has("scan", "stock", "top name", "which name",
+                            "momentum leader", "psx", "screen", "kse"):
+        r = scan(top=5)
+        top = r.get("top", [])
+        lines = "\n".join(
+            f"{i+1}. {t['name']} — composite {t['composite_score']:.2f}, "
+            f"1m momentum {(t['momentum_1m'] or 0):.2f}z"
+            for i, t in enumerate(top))
+        return _safe({"ok": True,
+                      "reply": f"PSX cross-section ({r.get('universe')} names scanned). "
+                               f"Today's strongest factor basket:\n{lines}\n"
+                               "Open PSX Scan for the full leaderboard.",
+                      "action": "scan", "data": {"kind": "scan", "rows": top}})
+
+    inst = inst or _find_instrument(msg)
+
+    if inst is None:
+        return {"ok": True,
+                "reply": ("I can predict any instrument (\"is OGDC a buy?\", \"where is gold "
+                          "this week\"), scan the PSX (\"best Pakistani stocks\"), build a "
+                          "portfolio (\"allocate 1M across GOLD WTI SPX\"), or check my track "
+                          "record. What would you like to know?"),
+                "action": "help", "data": None}
+
+    # ---- default: prediction for the detected instrument ----
+    horizon = _horizon_from(msg)
+    res = ENGINE.predict(inst.key, horizon=horizon, include_news=True)
+    if not res.get("ok"):
+        return {"ok": True, "reply": f"I couldn't run {inst.key}: {res.get('error')}",
+                "action": "error", "data": None}
+    s, rk = res["signal"], res["risk"]
+    d = s["direction"]
+    ev = res.get("event_risk") or {}
+    caveats = []
+    if ev.get("position_multiplier", 1.0) < 1.0:
+        caveats.append(f"{ev['next_event']} on {ev['next_date']} — I am sizing down ×"
+                       f"{ev['position_multiplier']}")
+    if res.get("kse_regime_multiplier", 1.0) < 1.0:
+        caveats.append("KSE-100 regime is cautious — PSX sizes cut")
+    facts = (f"{res['name']} ({res['symbol']}) at {res['price']:,.2f} {res['currency']}: "
+             f"call is {d}, expected return {(s['expected_return'] or 0)*100:+.2f}% over "
+             f"{s['horizon_days']} days, P(up) {(res['probability_up'] or 0)*100:.0f}%, "
+             f"confidence {(s['confidence'] or 0)*100:.0f}%, regime {res['regime']['regime']}, "
+             f"suggested position {(rk['suggested_weight'] or 0)*100:.1f}%.")
+    reply = facts + (" Note: " + "; ".join(caveats) + "." if caveats else "")
+
+    # optional LLM phrasing — keep the numbers, change only the voice
+    try:
+        from kairos.config import CFG
+        from kairos.llm import ROUTER
+        if CFG.apis.get("openrouter", {}).get("enabled", False):
+            model = CFG.apis.get("openrouter", {}).get("fast_model",
+                                                       "deepseek/deepseek-chat-v3-0324")
+            prompt = (f"You are KAIROS, a concise quant desk analyst. The user asked: "
+                      f"\"{msg}\"\nYour engine produced these exact numbers — do not "
+                      f"change or invent numbers, just answer in 2-4 natural sentences "
+                      f"with a clear verdict and the suggested sizing:\n{facts}\n"
+                      + ("Cautions: " + "; ".join(caveats) if caveats else ""))
+            r = ROUTER.chat(prompt, model=model, max_tokens=220, use_cache=False)
+            if r.ok and r.text:
+                reply = r.text.strip()
+    except Exception:
+        pass
+    return _safe({"ok": True, "reply": reply, "action": "predict",
+                  "data": {"kind": "predict", "symbol": res["symbol"],
+                           "name": res["name"], "price": res["price"],
+                           "direction": s["direction"], "score": s["score"],
+                           "confidence": s["confidence"],
+                           "expected_return": s["expected_return"],
+                           "probability_up": res["probability_up"],
+                           "horizon_days": s["horizon_days"],
+                           "weight": rk["suggested_weight"],
+                           "regime": res["regime"]["regime"]}})
+
+
+
 @app.get("/api/journal")
 def journal(last: int = 50):
     from kairos.config import CFG
