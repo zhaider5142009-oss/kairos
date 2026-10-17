@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Any
 
 from .config import CFG
-from .execution import (Fill, JOURNAL, KILL, JsGlobalTicket, Mt5Bridge,
+from .execution import (Fill, JOURNAL, KILL, JsGlobalTicket, get_mt5,
                         OrderIntent, PaperBroker, RiskGate)
 
 DEFAULT_WATCHLIST = ["GOLD", "WTI", "EURUSD", "BTC", "SPX"]
@@ -42,7 +42,7 @@ class Autopilot:
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self.gate = RiskGate()
-        self.mt5 = Mt5Bridge()
+        self.mt5 = get_mt5()
         self.jsg = JsGlobalTicket()
         self._posture: dict[str, Any] | None = None
         self.st = self._load()
@@ -76,9 +76,9 @@ class Autopilot:
     # ------------------------------------------------------------- controls
     def _mt5_connect(self) -> bool:
         m = CFG.section("mt5") or {}
-        return self.mt5.connect(login=m.get("login"), password=m.get("password"),
-                                server=m.get("server"),
-                                terminal_path=m.get("terminal_path"))
+        return self.mt5.attach(login=m.get("login"), password=m.get("password"),
+                               server=m.get("server"),
+                               terminal_path=m.get("terminal_path"))
 
     def configure(self, symbols: list[str] | None = None,
                   interval_s: int | None = None,
@@ -156,7 +156,7 @@ class Autopilot:
 
         st = self.st
         broker = PaperBroker()
-        live = st["mode"] == "live" and self.mt5.connected
+        live = st["mode"] == "live" and self.mt5.ensure()
         acct = (self.mt5.account() if live else None) or broker.account()
         pos_list = self.mt5.positions() if live else broker.open_positions()
         held = {p["symbol"].upper(): p for p in (pos_list or [])}
@@ -219,30 +219,41 @@ class Autopilot:
                         action = "AGREEMENT"
                         detail = f"only {agree:.0%} of models concur"
                     else:
-                        eq = float(acct["equity"] or 0)
-                        notional = min((rk["suggested_weight"] or 0) * eq,
-                                       0.15 * eq)
-                        bands = res.get("confidence_band") or {}
-                        sl0 = bands.get("p10") if score > 0 else bands.get("p90")
-                        tgt0 = (res.get("targets") or {}).get(f"{s['horizon_days']}d")
-                        if sl0 and eq > 0:
-                            ps = _R.position_size(eq, price, sl0)
-                            if ps.get("position_value"):
-                                notional = min(notional, float(ps["position_value"]))
-                        if notional > 10:
-                            qty = notional / price if not live else \
-                                round(max(0.01, notional / price / 100), 2)
-                            side = "BUY" if score > 0 else "SELL"
-                            act, detail = self._execute(inst, side, qty, price,
-                                                        res, broker, live,
-                                                        close=False)
-                            action = act
-                            trades += 1
-                            if act in ("OPENED", "TICKET"):
-                                st["held"][inst.key] = {
-                                    "started": _now(), "side": side,
-                                    "qty": qty, "entry": price,
-                                    "stop": sl0, "stop0": sl0, "target": tgt0}
+                        # FUGU conductor: probability-weighted edge must be real
+                        from . import fugu as _F
+                        verdict = _F.conduct(inst.key, res=res, posture=posture)
+                        st.setdefault("fugu", {})[inst.key] = {
+                            "action": verdict["action"], "edge_r": verdict["edge_r"],
+                            "conviction": verdict["conviction"], "p_hit": verdict["p_hit"],
+                            "reasons": verdict["reasons"][:2]}
+                        if verdict["action"] != "EXECUTE":
+                            action = "FUGU-PASS"
+                            detail = "; ".join(verdict["reasons"][:2])
+                        else:
+                            eq = float(acct["equity"] or 0)
+                            notional = min((rk["suggested_weight"] or 0) * eq,
+                                           0.15 * eq)
+                            bands = res.get("confidence_band") or {}
+                            sl0 = bands.get("p10") if score > 0 else bands.get("p90")
+                            tgt0 = (res.get("targets") or {}).get(f"{s['horizon_days']}d")
+                            if sl0 and eq > 0:
+                                ps = _R.position_size(eq, price, sl0)
+                                if ps.get("position_value"):
+                                    notional = min(notional, float(ps["position_value"]))
+                            if notional > 10:
+                                qty = notional / price if not live else \
+                                    round(max(0.01, notional / price / 100), 2)
+                                side = "BUY" if score > 0 else "SELL"
+                                act, detail = self._execute(inst, side, qty, price,
+                                                            res, broker, live,
+                                                            close=False)
+                                action = act
+                                trades += 1
+                                if act in ("OPENED", "TICKET"):
+                                    st["held"][inst.key] = {
+                                        "started": _now(), "side": side,
+                                        "qty": qty, "entry": price,
+                                        "stop": sl0, "stop0": sl0, "target": tgt0}
 
             rows.append({"symbol": res["symbol"], "name": res["name"],
                          "price": price, "direction": s["direction"],

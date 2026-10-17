@@ -172,10 +172,13 @@ def backtest(symbols: str, days: int = Query(60, ge=20, le=250)):
 # ---------------------------------------------------------------- mt5
 @app.get("/api/mt5")
 def mt5(symbols: str = "XAUUSD,XAGUSD,EURUSD", benchmark: bool = False):
-    from kairos.execution import Mt5Bridge
-    br = Mt5Bridge()
-    connected = br.connect()
-    out = {"ok": connected, "connected": connected, "ticks": []}
+    from kairos.execution import get_mt5
+    br = get_mt5()
+    connected = br.ensure()
+    out = {"ok": connected, "connected": connected, "ticks": [],
+           "error": "" if connected else br.last_error,
+           "attach_only": True,
+           "terminal_running": br._terminal_running()}
     if connected:
         for sym in [s.strip() for s in symbols.split(",") if s.strip()]:
             t = br.tick(sym)
@@ -319,6 +322,19 @@ def livebook_post(req: LivebookReq):
             raise HTTPException(502, str(e))
         raise
     return _safe({"ok": True, "positions": livebook.review()})
+
+
+# ---------------------------------------------------------------- fugu conductor
+@app.get("/api/fugu")
+def fugu_board():
+    from kairos import fugu
+    return _safe({"ok": True, "board": fugu.board()})
+
+
+@app.get("/api/fugu/{symbol}")
+def fugu_one(symbol: str):
+    from kairos import fugu
+    return _safe(fugu.conduct(symbol))
 
 
 # ---------------------------------------------------------------- chat

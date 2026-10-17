@@ -21,7 +21,8 @@ KAIROS forecasts **crypto** (22 majors: BTC, ETH, SOL, BNB, XRP, ADA, DOGE, AVAX
 | **Risk** | Historical/parametric/Cornish-Fisher VaR, CVaR, Kelly (capped), vol-targeted sizing, fail-closed risk gate |
 | **Portfolio** | Cardinality-constrained mean-variance via quantum-inspired parallel-tempering annealer + coherence check |
 | **LLM council** | Multi-model deliberation (OpenRouter) with median consensus — optional per prediction |
-| **Execution** | Paper broker (slippage + commission + immutable JSONL journal), MT5 bridge (commodities/FX), JS Global ticket desk (PSX, human-confirm) |
+| **Fugu conductor** | One fused verdict per instrument from all experts — ensemble score, model agreement, regime, realized calibration, doctrine R:R geometry, risk posture — emitting probability-weighted edge in R-multiples; the entry bar adapts automatically to KAIROS' own realized hit-rate |
+| **Execution** | Paper broker (slippage + commission + immutable JSONL journal), MT5 bridge (commodities/FX, attach-only — never launches or blocks the terminal), JS Global ticket desk (PSX, human-confirm), PMX futures scaffold (tickets-only, account-ready) |
 | **Validation** | Walk-forward backtests with hysteresis, cost hurdle, vol targeting; paper sessions with P&L verdicts |
 
 ## Quick start
@@ -54,8 +55,12 @@ python -m kairos backtest GOLD,SILVER,WTI,EURUSD --days 120
 # place one gated paper order
 python -m kairos paper GOLD --notional 10000
 
-# MT5 bridge check + order latency benchmark
+# MT5 bridge check + order latency benchmark (attaches to a running terminal only)
 python -m kairos mt5 --benchmark
+
+# Fugu conductor: fused multi-expert verdict + probability-weighted edge
+python -m kairos fugu            # whole board (autopilot watchlist)
+python -m kairos fugu GOLD       # one instrument in depth
 
 # the web control tower (or just double-click the KAIROS desktop shortcut)
 python -m kairos serve
@@ -70,7 +75,8 @@ python -m kairos serve
 - **PSX Scan** — factor leaderboard over the whole exchange
 - **Portfolio** — annealed allocation with per-instrument metrics
 - **Paper Trading** — gated orders, account state, walk-forward validation, immutable journal
-- **Trade Like a Pro** — the autonomous desk: start/stop the autopilot, arm LIVE execution, broker-connection strip (MT5 + JS Global), kill switch, live signal board, positions and audit feed. Every held position is actively managed — hard stops, targets, a trailing ratchet in R-multiples and venue reconciliation — and three circuit breakers (−3% day, 60% gross exposure, 4 straight losses) pause new entries while exits keep running
+- **Trade Like a Pro** — the autonomous desk: start/stop the autopilot, arm LIVE execution, broker-connection strip (MT5 + JS Global), kill switch, live signal board, positions and audit feed. Every held position is actively managed — hard stops, targets, a trailing ratchet in R-multiples and venue reconciliation — and three circuit breakers (−3% day, 60% gross exposure, 4 straight losses) pause new entries while exits keep running. Fresh entries additionally pass the **Fugu conductor** gate: no trade unless the fused verdict shows ≥0.15R probability-weighted edge and clears the adaptive conviction bar
+- **Fugu conductor panel** — live board of fused expert verdicts per instrument: direction, conviction, P(win), edge in R-multiples, R:R geometry and the exact reasons a call was taken or passed; refreshes every two minutes and is served at `/api/fugu`
 - **Shareable live signals** — one click per signal: an Instagram-square 1080×1080 PNG card (`/api/signal-card?symbol=…`) plus a WhatsApp-ready caption copied to your clipboard; every card carries the not-investment-advice disclaimer
 - **JS Global live book** — one click ("Sync from JS Global" / `kairos livebook --sync`) logs into your broker's Web Trade Cast **read-only** and imports your real holdings (quantity, average, pending sells, sold-out positions auto-released); KAIROS then reviews every position through the engine (live price, P&L, call, recommended stop, status) and produces broker-ready SELL tickets awaiting your confirmation
 - **News** — seven-feed macro/Pakistan radar
@@ -91,8 +97,8 @@ Copy `config.example.yaml` to `config.yaml` and fill in your keys (OpenRouter et
 ## Architecture
 
 ```
-python -m kairos             CLI entry (predict/scan/portfolio/backtest/paper/mt5/autopilot/rules/share/livebook/feedback/serve/…)
-launch_kairos.bat            one-click launcher (desktop shortcut target)
+python -m kairos             CLI entry (predict/scan/portfolio/backtest/paper/mt5/fugu/autopilot/rules/share/livebook/feedback/serve/…)
+launch_kairos.bat            one-click launcher (desktop shortcut target; icon in tools/kairos.ico)
 config.yaml                  all keys + engine tunables (git-ignored)
 kairos/
   config.py universe.py      config singleton · 100-instrument registry (22 crypto + commodities/FX/indices/PSX)
@@ -110,9 +116,11 @@ kairos/
   signalcard.py              shareable live signal cards: 1080×1080 PNG + WhatsApp caption
   livebook.py                your REAL JS Global holdings — engine verdicts + exit tickets
   jsgsync.py                 read-only Web Trade Cast sync: login → import real portfolio
+  fugu.py                    Fugu conductor: fused expert verdicts, calibrated P(win), edge in R, adaptive entry bar
+  pmx.py                     PMX (Pakistan Mercantile Exchange) futures scaffold — venue + human-confirmed tickets, account-ready
   backtest.py                walk-forward validation + paper sessions
-  execution.py               OrderIntent → RiskGate → PaperBroker / Mt5Bridge / JsGlobalTicket + audit journal
-  autopilot.py               autonomous loop: scan → verdicts → doctrine-sized orders → gated execution
+  execution.py               OrderIntent → RiskGate → PaperBroker / Mt5Bridge (attach-only) / JsGlobalTicket + audit journal
+  autopilot.py               autonomous loop: scan → verdicts → Fugu gate → doctrine-sized orders → gated execution
   wsl_bridge.py              Chronos/TimesFM/qlib subprocess bridge
   llm.py report.py cli.py    LLM council router · Rich terminal dossiers · command line
   api/server.py api/ui.html  FastAPI control tower + web UI

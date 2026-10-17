@@ -14,6 +14,7 @@ Design doctrine (institutional):
 from __future__ import annotations
 
 import json
+import sys
 import time
 import uuid
 from dataclasses import dataclass, field, asdict
@@ -301,9 +302,17 @@ MT5_SYMBOL_MAP = {
 
 
 class Mt5Bridge:
-    """Live MetaTrader 5 bridge. Auto-launches the terminal, polls account
-    state, places market orders with SL/TP, and reconciles positions.
+    """Live MetaTrader 5 bridge with ATTACH-ONLY semantics.
+
+    KAIROS never launches the terminal — the desktop MetaTrader 5 app is the
+    operator's own process. We attach to it only while `terminal64.exe` is
+    already running and signed in; otherwise every call fails closed with a
+    clear instruction. Reconnection is automatic but throttled, and a dead
+    link degrades state instead of crashing anything.
     Every failure fails CLOSED (no order is placed)."""
+
+    _ATTACH_COOLDOWN_S = 20.0
+    _last_attach_try = 0.0          # class-level: shared across instances
 
     def __init__(self) -> None:
         self._mt5: Any = None
@@ -311,8 +320,26 @@ class Mt5Bridge:
         self.last_error = ""
         self.last_order_latency_ms: float | None = None
 
-    def connect(self, login: int | None = None, password: str | None = None,
-                server: str | None = None, terminal_path: str | None = None) -> bool:
+    @staticmethod
+    def _terminal_running() -> bool:
+        if sys.platform != "win32":
+            return False
+        try:
+            import subprocess
+            out = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq terminal64.exe"],
+                capture_output=True, text=True, timeout=10)
+            return "terminal64.exe" in out.stdout.lower()
+        except Exception:
+            return False
+
+    def attach(self, login: int | None = None, password: str | None = None,
+               server: str | None = None, terminal_path: str | None = None) -> bool:
+        """Join an ALREADY-RUNNING terminal. Never spawns one."""
+        import time as _t
+        if _t.time() - Mt5Bridge._last_attach_try < Mt5Bridge._ATTACH_COOLDOWN_S:
+            return self.connected
+        Mt5Bridge._last_attach_try = _t.time()
         try:
             import MetaTrader5 as mt5
         except Exception as exc:
@@ -320,26 +347,48 @@ class Mt5Bridge:
             self.connected = False
             return False
         self._mt5 = mt5
+        if not self._terminal_running():
+            self.connected = False
+            self.last_error = ("MT5 terminal is not running — open MetaTrader 5, sign in "
+                               "to JS Markets and enable Algo Trading. KAIROS will attach "
+                               "automatically; it never launches the terminal itself.")
+            return False
         kwargs: dict[str, Any] = {}
-        if terminal_path:
-            kwargs["path"] = terminal_path
         if login and password and server:
             kwargs.update({"login": int(login), "password": password, "server": server})
         try:
             if not mt5.initialize(**kwargs):
-                # retry: launch terminal explicitly with portable fallback
-                if not mt5.initialize(path=terminal_path or
-                                      "C:/Program Files/MetaTrader 5/terminal64.exe"):
-                    self.last_error = f"MT5 initialize failed: {mt5.last_error()}"
-                    self.connected = False
-                    return False
+                self.last_error = f"MT5 attach failed: {mt5.last_error()}"
+                self.connected = False
+                return False
+            if mt5.account_info() is None:
+                self.last_error = ("MT5 terminal is running but NOT signed in — "
+                                   "log in to your JS Markets account in the terminal.")
+                self.connected = False
+                return False
+            first = not self.connected
             self.connected = True
-            JOURNAL.log("MT5_CONNECTED", {"info": self._account_raw()})
+            if first:
+                JOURNAL.log("MT5_ATTACHED", {"info": self._account_raw()})
             return True
         except Exception as exc:
             self.last_error = str(exc)
             self.connected = False
             return False
+
+    def ensure(self) -> bool:
+        """Heartbeat: verify the link, transparently re-attach when possible."""
+        if self.connected and self._account_raw() is not None:
+            return True
+        self.connected = False
+        m = CFG.section("mt5") or {}
+        return self.attach(login=m.get("login"), password=m.get("password"),
+                           server=m.get("server"), terminal_path=m.get("terminal_path"))
+
+    # legacy name — now attach-only, never launches the terminal
+    def connect(self, login=None, password=None, server=None, terminal_path=None) -> bool:
+        return self.attach(login=login, password=password, server=server,
+                           terminal_path=terminal_path)
 
     def _account_raw(self) -> dict[str, Any] | None:
         if not self.connected:
@@ -550,6 +599,17 @@ class Mt5Bridge:
             except Exception:
                 pass
         self.connected = False
+
+
+_MT5: Mt5Bridge | None = None
+
+
+def get_mt5() -> Mt5Bridge:
+    """Process-wide shared bridge so attach state/cooldown stay consistent."""
+    global _MT5
+    if _MT5 is None:
+        _MT5 = Mt5Bridge()
+    return _MT5
 
 
 # ---------------------------------------------------------------------------

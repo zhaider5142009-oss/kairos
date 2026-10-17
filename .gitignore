@@ -14,3 +14,4 @@ __pycache__/
 # Local junk
 Thumbs.db
 .DS_Store
+*.egg-info/

@@ -259,12 +259,12 @@ def cmd_paper(args) -> int:
 
 def cmd_mt5(args) -> int:
     """MT5 bridge connection + order latency benchmark."""
-    from .execution import Mt5Bridge
+    from .execution import get_mt5
     from rich.panel import Panel
     from rich.table import Table
     console = _console()
-    br = Mt5Bridge()
-    if not br.connect():
+    br = get_mt5()
+    if not br.ensure():
         console.print(Panel("[red]MT5 terminal unreachable — is MetaTrader 5 running "
                             "with algo trading enabled?[/]", title="KAIROS MT5"))
         return 1
@@ -445,6 +445,32 @@ def cmd_livebook(args) -> int:
     return 0
 
 
+def cmd_fugu(args) -> int:
+    """Fugu conductor: fused multi-expert verdicts with probability-weighted edge."""
+    from rich.table import Table
+    from . import fugu
+    console = _console()
+    rows = fugu.board([args.symbol.upper()] if args.symbol else None)
+    tbl = Table(box=box.ROUNDED, title="FUGU CONDUCTOR")
+    for col in ("symbol", "verdict", "call", "conviction", "bar", "p(win)",
+                "edge", "R:R", "why"):
+        tbl.add_column(col)
+    for r in rows:
+        col = "green" if r["edge_r"] > 0 else "red"
+        tbl.add_row(r["symbol"],
+                    f"[green]{r['action']}[/]" if r["action"] == "EXECUTE"
+                    else r["action"],
+                    r["direction"], f"{r['conviction']:.2f}", f"{r['threshold']:.2f}",
+                    f"{r['p_hit']:.0%}", f"[{col}]{r['edge_r']:+.2f}R[/]",
+                    f"{r['rr']:.1f}", "; ".join(r["reasons"][:2]))
+    console.print(tbl)
+    cal = rows[0]["calibration"] if rows else {}
+    console.print(f"[dim]calibration anchor: hit-rate {cal.get('hit_rate') or '—'} "
+                  f"over {cal.get('n_resolved') or 0} resolved calls · entry bar adapts "
+                  f"with realized accuracy[/]")
+    return 0
+
+
 def cmd_share(args) -> int:
     """Render a shareable live signal card (WhatsApp/Instagram)."""
     from rich.panel import Panel
@@ -580,6 +606,10 @@ def main() -> int:
     sp.add_argument("-o", "--out",
                     help="output PNG path (default: data/cards/SYMBOL.png)")
     sp.set_defaults(fn=cmd_share)
+
+    sp = sub.add_parser("fugu", help="Fugu conductor verdicts (fused experts + edge)")
+    sp.add_argument("symbol", nargs="?", help="one instrument, or the watchlist board")
+    sp.set_defaults(fn=cmd_fugu)
 
     sp = sub.add_parser("livebook",
                         help="watch your REAL JS Global holdings (verdicts + exit tickets)")

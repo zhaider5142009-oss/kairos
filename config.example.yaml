@@ -77,6 +77,12 @@ js_global:
   login: "YOUR-ACCOUNT-NUMBER"
   password: "YOUR-PASSWORD"
 
+# Pakistan Mercantile Exchange (futures) — fill when the account opens.
+# Empty values keep KAIROS in scaffold mode; tickets stay human-confirmed.
+pmx:
+  broker: ""
+  account: ""
+
 data:
   yahoo:
     enabled: true

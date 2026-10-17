@@ -344,6 +344,11 @@ tbody tr:hover td{background:#f9f9f9}
   </div>
 
   <div class="card">
+    <div class="sectiontitle" style="margin-top:0">Fugu conductor <span class="dim" id="fmeta"></span></div>
+    <div style="overflow-x:auto"><div id="fboard"><span class="dim">the command plane fuses ensemble, regime, calibration and doctrine into one probability-weighted verdict…</span></div></div>
+  </div>
+
+  <div class="card">
     <div class="sectiontitle" style="margin-top:0">Live signal board <span class="dim" id="dmeta"></span></div>
     <div style="overflow-x:auto"><div id="dsignals"><span class="dim">press Start (or “Run one cycle”) — KAIROS will scan the watchlist, gate and act…</span></div></div>
   </div>
@@ -669,8 +674,16 @@ $('#mt5go').onclick=async()=>{
 
 /* ---------- pro desk ---------- */
 function actTag(a,det){if(!a||a==='hold')return '<span class="tag neut">stood aside</span>';
-  const m={OPENED:'ok',CLOSED:'ok','LIVE-FILLED':'bad',TICKET:'warn',GATED:'warn',PLANCHECK:'warn',BLOCKED:'bad','LIVE-REJECT':'bad',BREAKER:'warn',AGREEMENT:'neut',SPREAD:'warn',TRAIL:'ok',RECONCILE:'warn','LIVE-UNVERIFIED':'bad',STOP:'bad',TARGET:'ok',FLIP:'warn',MATURE:'neut'};
+  const m={OPENED:'ok',CLOSED:'ok','LIVE-FILLED':'bad',TICKET:'warn',GATED:'warn',PLANCHECK:'warn',BLOCKED:'bad','LIVE-REJECT':'bad',BREAKER:'warn',AGREEMENT:'neut','FUGU-PASS':'neut',SPREAD:'warn',TRAIL:'ok',RECONCILE:'warn','LIVE-UNVERIFIED':'bad',STOP:'bad',TARGET:'ok',FLIP:'warn',MATURE:'neut'};
   return `<span class="tag ${m[a]||'neut'}">${esc(a)}</span> <span class="faint">${esc(String(det||''))}</span>`}
+async function loadFugu(){
+  try{const r=await api('/api/fugu');if(!r||!r.ok)return;const B=r.board||[];
+    $('#fmeta').textContent=B.length?`${B.length} instruments · experts fused per verdict`:'';
+    $('#fboard').innerHTML=B.length?`<table><thead><tr><th>Symbol</th><th class="c">Verdict</th><th class="c">Call</th><th class="r">Conviction</th><th class="r">Bar</th><th class="r">P(win)</th><th class="r">Edge</th><th class="r">R:R</th><th>Why</th></tr></thead><tbody>${B.map(x=>{
+      const n=Math.round((x.conviction||0)*10);const bar='▮'.repeat(n)+'▯'.repeat(10-n);
+      return `<tr><td class="mono" style="cursor:pointer" onclick="predictGo('${esc(x.symbol)}')">${esc(x.symbol)}</td><td class="c"><span class="tag ${x.action==='EXECUTE'?'ok':'neut'}">${esc(x.action)}</span></td><td class="c">${esc(x.direction)}</td><td class="r mono">${bar} ${(x.conviction*100).toFixed(0)}%</td><td class="r mono">${(x.threshold*100).toFixed(0)}%</td><td class="r mono">${(x.p_hit*100).toFixed(0)}%</td><td class="r mono ${x.edge_r>=0?'up':'down'}">${x.edge_r>=0?'+':''}${x.edge_r.toFixed(2)}R</td><td class="r mono">${x.rr.toFixed(1)}</td><td class="dim" style="font-size:11px">${esc((x.reasons||[]).slice(0,2).join(' · '))}</td></tr>`}).join('')}</tbody></table>`:'';
+  }catch(e){}
+}
 async function loadDesk(){
   try{
     const d=await api('/api/autopilot');
@@ -756,8 +769,8 @@ $('#dkill').onclick=async()=>{try{const d=await api('/api/autopilot');
   await api(`/api/killswitch?engage=${!d.kill_switch}&reason=desk`,{method:'POST'});}catch(e){}loadDesk();};
 
 /* ---------- boot ---------- */
-loadHealth();loadUniverse().then(()=>{loadWatch()});loadPaperAcct();loadJournal();loadFeedback(false);loadDesk();loadLivebook();
-setInterval(loadHealth,60000);setInterval(loadDesk,15000);setInterval(loadLivebook,60000);
+loadHealth();loadUniverse().then(()=>{loadWatch()});loadPaperAcct();loadJournal();loadFeedback(false);loadDesk();loadLivebook();loadFugu();
+setInterval(loadHealth,60000);setInterval(loadDesk,15000);setInterval(loadLivebook,60000);setInterval(loadFugu,120000);
 </script>
 </body>
 </html>
