@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 import warnings
@@ -16,7 +17,20 @@ from rich import box
 
 from .config import CFG
 
+# BLAS/OpenMP default to one thread per LOGICAL core; on a small box the fitting
+# storm then oversubscribes and a refit takes minutes instead of seconds.
+# Must be set before numpy/scipy/torch load, so it lives here at the entry point.
+_THREADS = str(min(4, os.cpu_count() or 1))
+for _var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+             "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+    os.environ.setdefault(_var, _THREADS)
+# joblib spawns loky workers that get fresh warning-filter state and printed
+# ~2900 sklearn UserWarnings into the daemon log during one ML stack. Setting
+# this now only affects the children — the parent's filters stay as below.
+os.environ.setdefault("PYTHONWARNINGS", "ignore::UserWarning")
+
 warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", message=".*propagate the scikit-learn configuration.*")
 warnings.filterwarnings("ignore", message=".*starting (autoregressive|MA) parameters.*")
 warnings.filterwarnings("ignore", message=".*failed to converge.*")
 warnings.filterwarnings("ignore", message=".*Maximum Likelihood optimization.*")
@@ -155,12 +169,57 @@ def cmd_watch(args) -> int:
             return 0
 
 
+def _rotating_stdout(path, max_bytes: int = 4_000_000, backups: int = 1):
+    """Own the daemon log from inside the process. cmd's `>>` redirect holds
+    the file handle open forever, so an external truncate only punches holes;
+    RotatingFileHandler rotates its own handle and the size really drops."""
+    import logging
+    from logging.handlers import RotatingFileHandler
+
+    handler = RotatingFileHandler(path, maxBytes=max_bytes, backupCount=backups,
+                                  encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", "%m-%d %H:%M:%S"))
+    box = logging.getLogger("kairos.stdout")
+    box.handlers = [handler]
+    box.setLevel(logging.INFO)
+    box.propagate = False
+
+    class _Writer:
+        encoding = "utf-8"
+
+        def __init__(self) -> None:
+            self._buf = ""
+
+        def write(self, text: str) -> int:
+            self._buf += text
+            while "\n" in self._buf:
+                line, self._buf = self._buf.split("\n", 1)
+                if line.strip():
+                    box.info(line)
+            return len(text)
+
+        def flush(self) -> None:
+            if self._buf.strip():
+                box.info(self._buf)
+                self._buf = ""
+
+        def isatty(self) -> bool:
+            return False
+
+    return _Writer()
+
+
 def cmd_serve(args) -> int:
     import uvicorn
     from .api.server import app
+    if args.logfile:
+        writer = _rotating_stdout(args.logfile)
+        sys.stdout = sys.stderr = writer
     console = _console()
     console.print(BANNER, style="bold blue")
     console.print(f"[bold]KAIROS control tower → http://127.0.0.1:{args.port}[/]")
+    if args.public_url:
+        console.print(f"[bold green]public → {args.public_url}[/]")
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
     return 0
 
@@ -635,6 +694,9 @@ def main() -> int:
     sp = sub.add_parser("serve", help="launch web control tower")
     sp.add_argument("--host", default="127.0.0.1")
     sp.add_argument("--port", type=int, default=8600)
+    sp.add_argument("--logfile", default=None,
+                    help="route stdout/stderr here with size-capped rotation (daemon mode)")
+    sp.add_argument("--public-url", default=None, help="print the tunnel URL on boot")
     sp.set_defaults(fn=cmd_serve)
 
     sp = sub.add_parser("symbols", help="list the tradable universe")

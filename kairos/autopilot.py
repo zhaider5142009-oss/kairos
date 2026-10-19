@@ -68,7 +68,8 @@ class Autopilot:
                 "symbols": list(DEFAULT_WATCHLIST), "interval_s": 300,
                 "entry_threshold": 0.18, "exit_threshold": 0.05,
                 "max_trades_per_cycle": 2, "horizon_days": 5,
-                "cycles": 0, "last_cycle": None, "last_error": None,
+                "cycles": 0, "last_cycle": None, "last_cycle_s": None,
+                "last_error": None,
                 "signals": [], "actions": [], "held": {}, "consec_losses": 0,
                 "equity_peak": 0.0, "peak_since": None,
                 "last_rotation": None, "rotated": []}
@@ -161,6 +162,7 @@ class Autopilot:
         # first cycle shortly after start, then every interval
         delay = 15
         while not self._stop.wait(delay):
+            interval = self.st["interval_s"]
             try:
                 self.cycle()
             except Exception as exc:
@@ -168,9 +170,15 @@ class Autopilot:
                     self.st["last_error"] = str(exc)[:400]
                     self._save()
                 JOURNAL.log("AUTOPILOT_ERROR", {"error": str(exc)[:400]})
-            delay = self.st["interval_s"]
+            # a cycle that outlived its own interval means this box is behind:
+            # skip a lap instead of hammering the CPU back-to-back
+            delay = interval * 2 if (self.st.get("last_cycle_s") or 0) > interval else interval
 
     def cycle(self) -> dict[str, Any]:
+        started = time.perf_counter()
+        return self._cycle(started)
+
+    def _cycle(self, started: float) -> dict[str, Any]:
         from . import rules as _R
         from .engine import ENGINE
         from .universe import resolve
@@ -298,6 +306,7 @@ class Autopilot:
         rows.sort(key=lambda r: -abs(r.get("score") or 0))
         with self._lock:
             st.update({"cycles": st["cycles"] + 1, "last_cycle": _now(),
+                       "last_cycle_s": round(time.perf_counter() - started, 1),
                        "signals": rows[:12]})
             self._save()
         # self-improvement pulse: resolve realized outcomes so Fugu's
@@ -698,7 +707,7 @@ class Autopilot:
         return {"ok": True, **{k: self.st[k] for k in
                 ("running", "mode", "armed_live", "symbols", "interval_s",
                  "entry_threshold", "max_trades_per_cycle", "horizon_days",
-                 "cycles", "last_cycle", "last_error", "signals", "actions",
+                 "cycles", "last_cycle", "last_cycle_s", "last_error", "signals", "actions",
                  "held", "consec_losses")},
                 "risk_posture": posture,
                 "kill_switch": KILL.engaged(),

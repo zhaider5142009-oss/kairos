@@ -105,11 +105,21 @@ watchdog — it keeps the control tower alive, mints a one-time access token to
 `data/kairos_token.txt`, and (if `tools/cloudflared.exe` is present) opens a
 free Cloudflare quick tunnel so the same tower is reachable from anywhere.
 `tools/mkstartup.ps1` registers it hidden in the Windows Startup folder, so
-every boot ends with a live KAIROS. On server boot the **paper autopilot
-auto-resumes** (`autopilot.auto_start_paper`) — the self-improvement loop
-never has to be re-armed by hand. Live mode still requires an explicit
-`confirm_live`, and PSX still issues human-confirmed tickets unless you turn
-every order key (see below).
+every boot ends with a live KAIROS. The tunnel is owned by
+`tools/keepalive.ps1`, which the watchdog calls every ~2 minutes: it asks the
+**published URL** whether the tower is really reachable (a quick tunnel process
+can sit alive for hours printing `Unauthorized: Tunnel not found`) and relaunches
+`cloudflared` when it isn't, then writes the fresh hostname to
+`data/tunnel_url.txt`. `/api/health` reports it as `public_url` and the desk
+shows it as a clickable card — the URL changes on every re-registration, which is
+the price of a free, account-less tunnel. The server writes its own log through
+`serve --logfile` (4 MB, one backup), so `data/serve.log` can no longer grow to
+gigabytes. On server boot the **paper autopilot auto-resumes**
+(`autopilot.auto_start_paper`) — the self-improvement loop never has to be
+re-armed by hand — and a cycle that outlives its own interval doubles the next
+wait instead of stacking runs on a small CPU. Live mode still requires an
+explicit `confirm_live`, and PSX still issues human-confirmed tickets unless you
+turn every order key (see below).
 
 **Remote access security:** when `KAIROS_TOKEN` is set, every `/api/` call
 (reads included — the live book carries real holdings) demands
@@ -191,6 +201,29 @@ kairos/
 data/                        store cache, journal, paper account, LLM cache
 reports/                     saved JSON dossiers
 ```
+
+### Performance on small hardware
+
+Measured on a 4-core / 8 GB desktop (2026-10-19), because the 24/7 box *is* the
+trading box:
+
+| cost | before | after |
+|---|---|---|
+| one full battery refit (stat+ML+neural, 730 bars) | ~45 s | ~45 s, **once per bar set** |
+| repeat cycle on unchanged daily bars | ~65 s/instrument | ~20 s/instrument (battery memoised) |
+| noise written to the daemon log per ML stack | ~2 900 warnings | 0 |
+| `data/serve.log` growth | unbounded (33 MB/day) | 4 MB + one backup |
+
+- `engine._battery()` memoises the refits on `(symbol, horizon, bar count,
+  last bar date, last close)` — a moved last close re-anchors, so cached levels
+  can never price a trade off a stale anchor. Bounded to 64 entries.
+- BLAS/OpenMP/torch threads are capped at 4 from `kairos/cli.py` **before**
+  numpy loads; oversubscription on 4 cores makes a refit minutes slower.
+- loky workers get `PYTHONWARNINGS=ignore::UserWarning` (they carry their own
+  filter state and flooded stdout).
+- `torch` stays lazy: boot is 131 MB, the first neural fit takes it to ~460 MB.
+- Scan-admitted PSX tickers persist to `data/psx_registered.json` and re-admit
+  at import — a restarted daemon can still analyse and exit yesterday's watchlist.
 
 ## Doctrine
 

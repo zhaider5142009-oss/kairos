@@ -441,11 +441,15 @@ async function loadHealth(){
     const dot=$('#healthdot span');
     dot.style.color=h.llm&&h.llm.ok?'var(--green)':'var(--yellow)';
     $('#healthtxt').textContent=h.llm&&h.llm.ok?`all systems nominal · ${h.universe_size} instruments`:'degraded mode — running';
+    const up=h.uptime_s==null?'—':`${Math.floor(h.uptime_s/3600)}h ${Math.floor(h.uptime_s%3600/60)}m`;
+    const pub=h.public_url?`<a href="${esc(h.public_url)}" target="_blank" rel="noopener" style="color:var(--cyan);font-size:14px;text-decoration:none">${esc(h.public_url.replace(/^https?:\/\//,''))}</a>`:'tunnel down';
     const cards=[['Market data',md.filter(x=>String(x[1]).match(/ok|up/i)).length+'/'+md.length,'ok'],
       ['LLM council',h.llm&&h.llm.ok?h.llm.provider+' · '+h.llm.models+' models':'offline','ok'],
       ['Foundation models',h.wsl.models_ready?'Chronos + TimesFM + qlib ready':h.wsl.available?'WSL ready — models not installed':'WSL offline','warn'],
-      ['Universe',h.universe_size+' instruments','ok']];
-    $('#homekpi').innerHTML=cards.map(c=>`<div class="card" style="padding:14px 18px;margin:0"><div class="dim" style="font-size:12px;text-transform:uppercase;letter-spacing:.5px">${c[0]}</div><div style="font-size:19px;font-weight:700;margin-top:4px">${esc(c[1])}</div><span class="tag ${c[2]}" style="margin-top:8px">${c[2]==='ok'?'operational':'attention'}</span></div>`).join('');
+      ['Universe',h.universe_size+' instruments','ok'],
+      ['Tower uptime',up,'ok'],
+      ['Public address',null,h.public_url?'ok':'warn',pub]];
+    $('#homekpi').innerHTML=cards.map(c=>`<div class="card" style="padding:14px 18px;margin:0"><div class="dim" style="font-size:12px;text-transform:uppercase;letter-spacing:.5px">${c[0]}</div><div style="font-size:19px;font-weight:700;margin-top:4px">${c[3]!==undefined?c[3]:esc(c[1])}</div><span class="tag ${c[2]}" style="margin-top:8px">${c[2]==='ok'?'operational':'attention'}</span></div>`).join('');
     $('#syshealth').innerHTML=[...md.map(([k,v])=>`<div class="kpi"><span class="dim">${esc(k)}</span><span class="${String(v).match(/ok|up/i)?'up':String(v).match(/down|error/i)?'down':'flat'}">${esc(v)}</span></div>`),
       `<div class="kpi"><span class="dim">llm router</span><span class="${h.llm&&h.llm.ok?'up':'down'}">${h.llm?esc(h.llm.provider||'down'):'down'}</span></div>`,
       `<div class="kpi"><span class="dim">wsl bridge</span><span class="${h.wsl.models_ready?'up':'flat'}">${h.wsl.models_ready?'models ready':'available'}</span></div>`].join('');
@@ -716,7 +720,7 @@ async function loadDesk(){
     $('#dmt5').innerHTML=d.mt5.connected?'<span class="up">connected</span>':'<span class="flat">not connected</span>';
     $('#dkillstate').innerHTML=d.kill_switch?'<span class="down">ENGAGED — execution blocked</span>':'<span class="up">clear</span>';
     $('#dkill').textContent=d.kill_switch?'Release kill switch':'Engage kill switch';
-    $('#dmeta').textContent=`cycles ${d.cycles} · last ${d.last_cycle||'—'} · entry ±${d.entry_threshold} · every ${d.interval_s}s${d.last_error?' · error: '+esc(d.last_error):''}`;
+    $('#dmeta').textContent=`cycles ${d.cycles} · last ${d.last_cycle||'—'} · ${d.last_cycle_s==null?'—':d.last_cycle_s+'s'} per cycle · entry ±${d.entry_threshold} · every ${d.interval_s}s${d.last_error?' · error: '+esc(d.last_error):''}`;
     if(d.signals&&d.signals.length)
       $('#dsignals').innerHTML=`<table><thead><tr><th>Instrument</th><th class="r">Price</th><th class="c">Call</th><th class="r">Score</th><th class="r">Exp</th><th class="r">P(up)</th><th class="r">Weight</th><th>Autopilot</th><th></th></tr></thead><tbody>${d.signals.map(s=>{
         if(s.error)return `<tr><td class="mono">${esc(s.symbol)}</td><td colspan="8" class="down">${esc(s.error)}</td></tr>`;

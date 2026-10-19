@@ -6,6 +6,7 @@ import json
 import os
 import secrets
 import sys
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -19,7 +20,8 @@ ROOT = Path(__file__).resolve().parent.parent
 from kairos.engine import ENGINE  # noqa: E402
 from kairos.universe import resolve, universe  # noqa: E402
 
-app = FastAPI(title="KAIROS Control Tower", version="2.3.0")
+app = FastAPI(title="KAIROS Control Tower", version="2.4.0")
+BOOT_TS = time.time()
 
 
 # ------------------------------------------------------------ remote deploy auth
@@ -94,7 +96,9 @@ def _safe(obj):
 def health():
     from kairos.health import system_health
     try:
-        return system_health()
+        out = system_health()
+        out["uptime_s"] = int(time.time() - BOOT_TS)
+        return out
     except Exception as exc:  # pragma: no cover
         return {"ok": False, "error": str(exc)}
 

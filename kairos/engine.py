@@ -43,6 +43,11 @@ class PredictionEngine:
         self._factors: pd.DataFrame | None = None
         self._news_cache: tuple[float, list] = (0.0, [])
         self._pred_cache: dict[tuple, tuple[float, dict]] = {}
+        # refitting stat+ML+neural IS the cost of a cycle (7-90s per instrument
+        # on this class of CPU); the batteries only change when a bar lands or
+        # the last close moves, so key them on exactly that and never recompute
+        # the same numbers twice.
+        self._battery_cache: dict[tuple, list[ModelForecast]] = {}
 
     # ------------------------------------------------------------- context
     def intermarket(self, force: bool = False) -> dict[str, pd.DataFrame]:
@@ -122,6 +127,30 @@ class PredictionEngine:
             record(res)
         return res
 
+    def _battery(self, instrument: Instrument, df: pd.DataFrame,
+                 horizon: int) -> list[ModelForecast]:
+        """stat + ML + neural refits, memoised on the exact bar set they ran on.
+        Forecasts are read-only inputs to fuse(), so sharing objects is safe."""
+        close = df["close"]
+        key = (instrument.key.upper(), int(horizon), len(df), str(df.index[-1]),
+               round(float(close.iloc[-1]), 6))
+        hit = self._battery_cache.get(key)
+        if hit is not None:
+            return list(hit)
+
+        forecasts: list[ModelForecast] = []
+        if CFG.engine.get("use_stat", True):
+            forecasts += run_statistical_battery(close, horizon)
+        if CFG.engine.get("use_ml", True):
+            forecasts += tree_stack_forecast(df, horizon)
+        if CFG.engine.get("use_neural", True):
+            forecasts += neural_battery(df, horizon)
+
+        while len(self._battery_cache) >= 64:      # first-in, first-out: old bars
+            self._battery_cache.pop(next(iter(self._battery_cache)))
+        self._battery_cache[key] = list(forecasts)
+        return list(forecasts)
+
     def _predict_uncached(self, symbol: str, horizon: int = 5, use_llm: bool = False,
                           use_wsl: bool = True, include_news: bool = True) -> dict[str, Any]:
         t0 = time.perf_counter()
@@ -144,13 +173,7 @@ class PredictionEngine:
         patterns = detect_patterns(df)
 
         # --- model battery ---------------------------------------------------
-        forecasts: list[ModelForecast] = []
-        if CFG.engine.get("use_stat", True):
-            forecasts += run_statistical_battery(close, horizon)
-        if CFG.engine.get("use_ml", True):
-            forecasts += tree_stack_forecast(df, horizon)
-        if CFG.engine.get("use_neural", True):
-            forecasts += neural_battery(df, horizon)
+        forecasts: list[ModelForecast] = self._battery(instrument, df, horizon)
         if use_wsl:
             series = [float(x) for x in close.tail(400).values]
             try:

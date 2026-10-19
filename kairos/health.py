@@ -19,6 +19,15 @@ from .wsl_bridge import WSL
 _STATE_OK = ("ok", "up", "degraded")
 
 
+def _public_url() -> str:
+    """Written by tools/keepalive.ps1 — the empty string means the tunnel is
+    down or still registering, which is exactly what the desk should show."""
+    try:
+        return (CFG.data_dir / "tunnel_url.txt").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
 def system_health() -> dict[str, Any]:
     from .engine import ENGINE
 
@@ -47,4 +56,5 @@ def system_health() -> dict[str, Any]:
             "data_online": data_ok,
             "llm": llm,
             "wsl": wsl,
+            "public_url": _public_url(),
             "universe_size": len(universe())}

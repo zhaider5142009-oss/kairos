@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kairos"
-version = "2.3.0"
+version = "2.4.0"
 description = "KAIROS — Knowledge-Augmented Intelligence for Returns & Optimization Systems: institutional-grade multi-asset (crypto, commodities, FX, indices, PSX) prediction, risk and paper-execution engine."
 readme = "README.md"
 requires-python = ">=3.10"

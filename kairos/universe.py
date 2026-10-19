@@ -6,6 +6,7 @@ metadata used by the factor engine (sector, currency, market).
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 
 
@@ -183,6 +184,9 @@ ALL: list[Instrument] = [PSX_INDEX, *PSX_BLUE_CHIPS, *COMMODITIES,
 _BY_KEY = {i.key.upper(): i for i in ALL}
 _BY_YAHOO = {i.yahoo.upper(): i for i in ALL if i.yahoo}
 _BY_TV = {(i.tv or "").upper(): i for i in ALL if i.tv}
+# the static list above is the floor; scan-admitted tickers live beside it and
+# must survive a daemon restart (see _registered_path)
+_SEED_KEYS = frozenset(i.key.upper() for i in ALL)
 
 
 def resolve(symbol: str) -> Instrument | None:
@@ -192,7 +196,7 @@ def resolve(symbol: str) -> Instrument | None:
 
 
 def register_psx(symbol: str, name: str | None = None,
-                 sector: str = "Unregistered") -> Instrument | None:
+                 sector: str = "Unregistered", _persist: bool = True) -> Instrument | None:
     """Admit a live scan-feed PSX ticker into the tradable registry at
     runtime. Returns None if the key collides with a non-PSX instrument."""
     key = symbol.strip().upper()
@@ -208,7 +212,58 @@ def register_psx(symbol: str, name: str | None = None,
         _BY_YAHOO[inst.yahoo.upper()] = inst
     if inst.tv:
         _BY_TV[inst.tv.upper()] = inst
+    if _persist:
+        _save_registered()
     return inst
+
+
+def _registered_path():
+    try:
+        from .config import CFG
+        return CFG.data_dir / "psx_registered.json"
+    except Exception:
+        return None
+
+
+def _save_registered() -> None:
+    path = _registered_path()
+    if path is None:
+        return
+    try:
+        rows = [{"symbol": i.key, "name": i.name, "sector": i.sector}
+                for i in ALL if i.key.upper() not in _SEED_KEYS]
+        # bounded: daily rotation would otherwise admit forever
+        path.write_text(json.dumps(rows[-40:], indent=1), encoding="utf-8")
+    except OSError:
+        pass  # losing the cache costs re-admission, never a trade
+
+
+def _restore_registered() -> None:
+    """Re-admit yesterday's scan leaders so a restarted daemon can still
+    analyse and exit the positions the watchlist points at."""
+    path = _registered_path()
+    if path is None or not path.exists():
+        return
+    try:
+        rows = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(rows, list):
+        return
+    n = 0
+    for row in rows:
+        try:
+            if register_psx(str(row["symbol"]), str(row.get("name") or ""),
+                            str(row.get("sector") or "Unregistered"),
+                            _persist=False) is not None:
+                n += 1
+        except (KeyError, TypeError, ValueError):
+            continue
+    if n:
+        _save_registered()
+
+
+_restore_registered()
 
 
 def keys() -> list[str]:
