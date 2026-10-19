@@ -12,7 +12,6 @@ honestly and the engine degrades gracefully.
 
 from __future__ import annotations
 
-import io
 import json
 import re
 import time
@@ -20,7 +19,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -241,18 +240,26 @@ class TradingViewClient:
 # Local operator PSX API (localhost:8000) — adaptive format parsing
 # ---------------------------------------------------------------------------
 class LocalPsxClient:
+    # An operator-run service on localhost:8000 that is usually not running.
+    # Windows does not refuse a closed local port quickly, so each call to a
+    # dead host waits out the full socket timeout — and every PSX symbol in a
+    # scan pays for it before the cache/TradingView fallback is reached.
+    DOWN_PENALTY_S = 900.0
+
     def __init__(self) -> None:
         cfg = CFG.apis.get("psx_local", {})
         self.base = cfg.get("base_url", "http://localhost:8000/api/stock").rstrip("/")
         self.enabled = bool(cfg.get("enabled", True))
+        self._down_until = 0.0
 
     def alive(self) -> bool:
-        if not self.enabled:
+        if not self.enabled or time.time() < self._down_until:
             return False
         try:
             _http_get(self.base + "/OGDC", timeout=4, retries=0)
             return True
         except Exception:
+            self._down_until = time.time() + self.DOWN_PENALTY_S
             return False
 
     @staticmethod
@@ -307,12 +314,14 @@ class LocalPsxClient:
         return df.reset_index(drop=True)
 
     def history(self, ticker: str) -> pd.DataFrame | None:
-        if not self.enabled:
+        if not self.enabled or time.time() < self._down_until:
             return None
         try:
-            raw = _http_get(f"{self.base}/{urllib.parse.quote(ticker)}", timeout=6, retries=1)
+            raw = _http_get(f"{self.base}/{urllib.parse.quote(ticker)}",
+                            timeout=3, retries=0)
             payload = json.loads(raw)
         except Exception:
+            self._down_until = time.time() + self.DOWN_PENALTY_S
             return None
         return self._extract_history(payload)
 

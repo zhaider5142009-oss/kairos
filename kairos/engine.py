@@ -20,7 +20,7 @@ import pandas as pd
 from .config import CFG
 from .data import MarketData
 from .calendar import risk_calendar
-from .ensemble import FusedSignal, fuse
+from .ensemble import fuse
 from .feedback import confidence_adjustment, record
 from .features import (compute_features, cross_sectional_factors, detect_patterns,
                        detect_regime)
@@ -28,7 +28,7 @@ from .kse_regime import kse_regime
 from .llm import ROUTER
 from .models_ml import neural_battery, tree_stack_forecast
 from .models_stat import ModelForecast, run_statistical_battery
-from .risk import compute_risk, portfolio_metrics, position_size
+from .risk import compute_risk, portfolio_metrics
 from .strategies import run_strategy_library
 from .universe import Instrument, resolve
 from .wsl_bridge import WSL
@@ -123,6 +123,7 @@ class PredictionEngine:
         t0 = time.perf_counter()
         res = self._predict_uncached(symbol, horizon, use_llm, use_wsl, include_news)
         if res.get("ok"):
+            res["predict_ms"] = int((time.perf_counter() - t0) * 1000)
             self._pred_cache[key] = (time.time(), res)
             record(res)
         return res

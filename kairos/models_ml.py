@@ -174,7 +174,7 @@ def _neural_forecast(df: pd.DataFrame, horizon: int, kind: str = "lstm") -> Mode
     loss_fn = nn.SmoothL1Loss()
     n_train = int(len(xs_t) * 0.8)
     best_val, best_state, patience, bad = float("inf"), None, 12, 0
-    for epoch in range(80):
+    for _ in range(80):
         net.train()
         opt.zero_grad()
         pred = net(xs_t[:n_train])

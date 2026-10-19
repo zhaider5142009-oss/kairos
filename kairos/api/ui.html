@@ -333,6 +333,7 @@ tbody tr:hover td{background:#f9f9f9}
 
   <div class="card">
     <div class="sectiontitle" style="margin-top:0">Your JS Global live book <span class="dim" id="lbmeta"></span></div>
+    <div class="dim" id="lbbook" style="margin:-4px 0 10px">real account: loading…</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px">
       <div style="flex:1;min-width:110px"><label>Symbol</label><input id="lbsym" placeholder="e.g. OGDC"></div>
       <div style="flex:1;min-width:90px"><label>Qty (shares)</label><input id="lbqty" type="number" placeholder="1000"></div>
@@ -362,7 +363,12 @@ tbody tr:hover td{background:#f9f9f9}
       <span class="dim" id="jobandinfo"></span>
     </div>
     <div style="overflow-x:auto"><div id="jopending"><span class="dim">no staged orders — staging is only enabled when <b>js_global.allow_orders</b> is true</span></div></div>
-    <div class="dim" style="margin-top:8px">Two keys must turn for real money: <b>allow_orders</b> (config/env) and the <b>trading PIN</b> (typed per order, never stored by KAIROS unless you put it in config). Staged orders expire after 15 minutes. The kill switch blocks everything.</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
+      <button class="btn small" id="jopinstore" title="Store the broker PIN in config.yaml so the autopilot can place PSX orders unattended">Store PIN for unattended live</button>
+      <button class="btn ghost small" id="jopinclear" title="Forget the stored PIN — the loop immediately goes back to human-confirmed tickets">Forget PIN</button>
+      <span class="dim" id="jopinhint"></span>
+    </div>
+    <div class="dim" style="margin-top:8px">Two keys must turn for real money: <b>allow_orders</b> (config/env) and the <b>trading PIN</b>. Typed per order it is never stored; stored once here it lets the autopilot act unattended — "Forget PIN" is the instant undo. Staged orders expire after 15 minutes. The kill switch blocks everything.</div>
   </div>
 
   <div class="card">
@@ -716,6 +722,7 @@ async function loadFugu(){
 async function loadDesk(){
   try{
     const d=await api('/api/autopilot');
+    APD=d;
     $('#drunstate').innerHTML=d.running?(d.armed_live?'<span class="tag bad">LIVE RUNNING</span>':'<span class="tag ok">PAPER RUNNING</span>'):'<span class="tag neut">idle</span>';
     $('#dmt5').innerHTML=d.mt5.connected?'<span class="up">connected</span>':'<span class="flat">not connected</span>';
     $('#dkillstate').innerHTML=d.kill_switch?'<span class="down">ENGAGED — execution blocked</span>':'<span class="up">clear</span>';
@@ -748,10 +755,29 @@ async function shareSignal(sym){
     if(r&&r.caption)await navigator.clipboard.writeText(r.caption);}catch(e){}
 }
 let LB=[];
+let APD=null;
+function lbBookHtml(){
+  const b=`<button class="btn ghost small" onclick="lbReal()">Read real account</button>`;
+  const psx=(APD&&APD.psx_live)||{};
+  const keys=`order keys ${psx.keys_on?'<span class="up">armed</span>':'<span class="flat">off</span>'}`;
+  const la=APD&&APD.live_account;
+  if(!la) return `sized on the paper book while the loop runs ${APD?esc(APD.mode):'paper'} · ${keys} · `+b;
+  return `risk book <span class="mono">${esc(la.venue||'')}</span>: equity Rs <b>${num(la.equity,0)}</b> · free cash Rs ${num(la.balance,0)} · day P&L <span class="${(la.day_pnl||0)>=0?'up':'down'}">${num(la.day_pnl,0)}</span> · ${keys} · `+b;
+}
+async function lbReal(){
+  const el=$('#lbbook');el.innerHTML='reading Web Trade Cast (read-only)…';
+  el.dataset.manual='1';
+  try{
+    const r=await api('/api/jsg/book?force=1');
+    el.innerHTML=`real account: equity Rs <b>${num(r.equity,0)}</b> = free cash Rs ${num(r.cash,0)} + holdings Rs ${num(r.holdings_value,0)} · ${(r.holdings||[]).map(h=>`${esc(h.symbol)} ${num(h.qty,0)}@${num(h.mtm)}`).join(' ')||'no holdings'} · <span class="dim">${esc(r.ts||'')}</span>`;
+    loadLivebook();
+  }catch(e){el.innerHTML=`<span class="down">real account unread: ${esc(e.message)}</span> — the loop fails closed on this, it never guesses`;}
+}
 async function loadLivebook(){
   try{const r=await api('/api/livebook');if(!r||!r.ok)return;
     LB=r.positions||[];
     $('#lbmeta').textContent=LB.length?`${LB.length} holding(s) · unrealised ${num(LB.reduce((s,x)=>s+(x.pnl||0),0),0)}`:'';
+    const bk=$('#lbbook');if(bk&&!bk.dataset.manual)bk.innerHTML=lbBookHtml();
     $('#lbtable').innerHTML=LB.length?`<table><thead><tr><th>Symbol</th><th class="r">Qty</th><th class="r">Entry</th><th class="r">Last</th><th class="r">P&L</th><th class="c">Engine</th><th class="r">Stop</th><th>Status</th><th></th></tr></thead><tbody>${LB.map(x=>{
       const st=x.status||'—';const sc=st.includes('STOP')||st.includes('EXIT')?'bad':st.includes('conviction')||st.includes('profit')?'ok':'neut';
       const c=dirCode(x.direction);
@@ -783,6 +809,8 @@ let JO=[];
 async function loadJsg(){
   try{const r=await api('/api/jsg/orders');if(!r)return;
     $('#jgsgate').innerHTML=jsgGateHtml(r);
+    $('#jopinhint').innerHTML=r.has_pin?'<span class="down">PIN on file: an armed autopilot places real orders unattended</span>'
+                                       :'<span class="up">no stored PIN: PSX orders stay human-confirmed tickets</span>';
     JO=r.pending||[];
     $('#jopending').innerHTML=JO.length?`<table><thead><tr><th>Staged</th><th>Symbol</th><th class="c">Side</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Notional</th><th>Type</th><th>Age</th><th></th></tr></thead><tbody>${JO.map(x=>
       `<tr><td class="mono">${esc(x.id)}</td><td class="mono">${esc(x.symbol)}</td><td class="c ${x.side==='BUY'?'up':'down'}">${esc(x.side)}</td><td class="r mono">${num(x.qty,0)}</td><td class="r mono">${num(x.price)}</td><td class="r mono">${num(x.qty*x.price,0)}</td><td class="mono">${esc(x.order_type)}</td><td class="dim mono">${jsgAge(x.t)}</td><td style="white-space:nowrap"><button class="btn small" onclick="jAck('${esc(x.id)}')">Ack with PIN</button> <button class="btn ghost small" onclick="jDrop('${esc(x.id)}')">Drop</button></td></tr>`).join('')}</tbody></table>`:'<span class="dim">no staged orders — staging is only enabled when <b>js_global.allow_orders</b> is true</span>';
@@ -832,6 +860,24 @@ async function jAck(id,useStored){
 }
 function jDrop(id){if(confirm(`Discard staged order ${id}? Nothing was sent to the broker.`))
   api('/api/jsg/orders/drop',{method:'POST',body:JSON.stringify({id})}).then(loadJsg).catch(e=>alert('Drop failed: '+e.message));}
+$('#jopinstore').onclick=async()=>{
+  const pin=prompt('Broker trading PIN (4-8 digits). Stored in your git-ignored config.yaml so the autopilot can place PSX orders unattended; KAIROS never logs or re-displays it:');
+  if(pin===null)return;
+  const p=pin.trim();
+  if(!/^[0-9]{4,8}$/.test(p)){alert('The PIN must be 4-8 digits');return}
+  if(!confirm('Store this PIN and allow unattended JS Global execution?\nWith allow_orders on, the armed autopilot will place REAL orders on your funded account without asking again.'))return;
+  try{const r=await api('/api/jsg/pin',{method:'POST',body:JSON.stringify({pin:p})});
+    alert(r.orders_enabled?'PIN stored — arm the autopilot live and it can place PSX orders.'
+          :'PIN stored, but allow_orders is still off, so nothing can reach the broker.');
+  }catch(e){alert('Could not store the PIN: '+e.message)}
+  loadJsg();
+};
+$('#jopinclear').onclick=async()=>{
+  if(!confirm('Forget the stored PIN? The autopilot drops back to human-confirmed exit tickets immediately.'))return;
+  try{await api('/api/jsg/pin',{method:'DELETE'});alert('PIN forgotten — unattended execution is off.');}
+  catch(e){alert('Could not forget the PIN: '+e.message)}
+  loadJsg();
+};
 function jFill(sym){
   const row=LB.find(x=>(x.symbol||'').toUpperCase()===String(sym).toUpperCase())||{};
   $('#josym').value=sym;$('#josite').value='SELL';

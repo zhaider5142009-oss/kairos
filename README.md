@@ -20,7 +20,7 @@ KAIROS forecasts **crypto** (22 majors: BTC, ETH, SOL, BNB, XRP, ADA, DOGE, AVAX
 | **Regime engine** | Hurst/ADX/vol-percentile regimes + KSE-100 bull/bear multiplier + FOMC/NFP/SBP-CPI event calendar |
 | **Risk** | Historical/parametric/Cornish-Fisher VaR, CVaR, Kelly (capped), vol-targeted sizing, fail-closed risk gate |
 | **Portfolio** | Cardinality-constrained mean-variance via quantum-inspired parallel-tempering annealer + coherence check |
-| **LLM council** | Multi-model deliberation (OpenRouter) with median consensus — optional per prediction |
+| **LLM council** | Multi-model deliberation across OpenRouter + direct Kimi/Moonshot, median consensus with dissent recorded — optional per prediction |
 | **Fugu conductor** | One fused verdict per instrument from all experts — ensemble score, model agreement, regime, realized calibration, doctrine R:R geometry, risk posture — emitting probability-weighted edge in R-multiples; the entry bar adapts automatically to KAIROS' own realized hit-rate |
 | **Execution** | Paper broker (true cash ledger, slippage + market-aware commission + immutable JSONL journal), MT5 bridge (commodities/FX, attach-only — never launches or blocks the terminal), JS Global bridge (PSX: read-only sync + **double-keyed order desk** — stage→ack with the broker PIN, human tickets by default), PMX futures scaffold (tickets-only, account-ready) |
 | **Validation** | Walk-forward backtests with hysteresis, cost hurdle, vol targeting; paper sessions with a proper cash ledger + PSX commission model; realized outcomes feed back every 12 cycles so the system's own hit-rate tunes its entry bar |
@@ -142,7 +142,7 @@ needed before real money moves, and none of them is a code change:
 | key | where | what it means |
 |---|---|---|
 | `js_global.allow_orders` | config.yaml or `JSG_ALLOW_ORDERS` | your standing yes to touch the broker at all |
-| the trading `PIN` | config.yaml `trading_pin` / `JSG_PIN`, or typed per order | the broker's own second factor |
+| the trading `PIN` | desk button **Store PIN for unattended live** (writes git-ignored `config.yaml`), `JSG_PIN`, or typed per order | the broker's own second factor — **Forget PIN** is the instant undo |
 | `autopilot.auto_place` | config.yaml | only for autonomous PSX fills; without it the loop still writes tickets |
 
 Flow: **stage → ack**. `kairos order OGDC --side SELL --qty 50 --price 124.50`

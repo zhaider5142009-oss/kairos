@@ -10,6 +10,7 @@ current directory when no config file is present.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -37,7 +38,7 @@ class Config:
         found = path or _find_config()
         self.path = found
         self._raw: dict[str, Any] = {}
-        if found is not None:
+        if found is not None and found.is_file():
             with open(found, "r", encoding="utf-8") as fh:
                 self._raw = yaml.safe_load(fh) or {}
         self.root = found.parent if found is not None else Path.cwd()
@@ -77,6 +78,56 @@ class Config:
 
     def openrouter_models(self) -> list[str]:
         return self.apis.get("openrouter", {}).get("council_models", [])
+
+    # -- writer -------------------------------------------------------------
+    def store_secret(self, section: str, key: str, value: Any) -> bool:
+        """Set one scalar inside a top-level block of the live config file.
+
+        Line surgery rather than a yaml round-trip: config.yaml carries the
+        operator's comments, and re-dumping it would silently erase them. The
+        value is written to disk and never logged, journalled or returned —
+        this is the only path a broker PIN should ever take.
+
+        Returns False when there is no config file to write to.
+        """
+        if self.path is None or not self.path.is_file():
+            return False
+        # json scalars are valid YAML: a quoted PIN keeps its leading zeros
+        text = (str(value).lower() if isinstance(value, bool)
+                else str(value) if isinstance(value, (int, float))
+                else json.dumps(str(value)))
+        lines = self.path.read_text(encoding="utf-8").splitlines()
+        try:
+            start = next(n for n, l in enumerate(lines)
+                         if l.rstrip() == f"{section}:")
+        except StopIteration:
+            if lines and lines[-1].strip():
+                lines.append("")
+            lines.append(f"{section}:")
+            lines.append(f"  {key}: {text}")
+        else:
+            end = start + 1
+            while end < len(lines) and (not lines[end].strip()
+                                        or lines[end].startswith((" ", "\t"))):
+                end += 1
+            hit = next((n for n in range(start + 1, end)
+                        if lines[n].strip().startswith(f"{key}:")), None)
+            if hit is not None:
+                indent = lines[hit][:len(lines[hit]) - len(lines[hit].lstrip())]
+                lines[hit] = f"{indent}{key}: {text}"
+            else:
+                at = end
+                while at > start + 1 and not lines[at - 1].strip():
+                    at -= 1
+                indent = (lines[start + 1][:len(lines[start + 1])
+                            - len(lines[start + 1].lstrip())]
+                          if end > start + 1 and lines[start + 1].strip() else "  ")
+                lines.insert(at, f"{indent}{key}: {text}")
+        tmp = self.path.with_suffix(".yaml.tmp")
+        tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        tmp.replace(self.path)
+        self._raw = yaml.safe_load(self.path.read_text(encoding="utf-8")) or {}
+        return True
 
     @classmethod
     def get(cls) -> "Config":

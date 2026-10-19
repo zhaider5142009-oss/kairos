@@ -50,7 +50,7 @@ class WslBridge:
         try:
             r = subprocess.run(
                 ["wsl", "-d", _distro(), "-e", "python3", "-c", "print('KAIROS_OK')"],
-                capture_output=True, text=True, timeout=30)
+                capture_output=True, text=True, timeout=30, check=False)
             ok = "KAIROS_OK" in (r.stdout or "")
         except Exception:
             ok = False
@@ -69,7 +69,7 @@ class WslBridge:
                  "'chronos': bool(u.find_spec('chronos')),"
                  "'timesfm': bool(u.find_spec('timesfm')),"
                  "'qlib': bool(u.find_spec('qlib'))}))"],
-                capture_output=True, text=True, timeout=60)
+                capture_output=True, text=True, timeout=60, check=False)
             return json.loads(r.stdout.strip().splitlines()[-1])
         except Exception:
             return {"chronos": False, "timesfm": False, "qlib": False}
@@ -89,9 +89,13 @@ class WslBridge:
         )
         try:
             r = subprocess.run(["wsl", "-d", _distro(), "-e", "bash", "-lc", cmds],
-                               capture_output=True, text=True, timeout=1800)
+                               capture_output=True, text=True, timeout=1800,
+                               check=False)
             out = (r.stdout or "")[-2000:] + (r.stderr or "")[-2000:]
-            return "SETUP COMPLETE\n" + out
+            # pip exits non-zero when a wheel fails. Reporting that as a
+            # finished install sends the user to predict with no models.
+            head = "SETUP COMPLETE" if r.returncode == 0 else f"SETUP FAILED (exit {r.returncode})"
+            return head + "\n" + out
         except Exception as exc:
             return f"SETUP FAILED: {exc}"
 
@@ -107,7 +111,7 @@ class WslBridge:
                 ["wsl", "-d", _distro(), "--cd", str(BRIDGE_DIR), "-e", "bash",
                  "-lc", f"{_venv()}/bin/python {BRIDGE_SCRIPT}"],
                 input=json.dumps(payload), capture_output=True, text=True,
-                timeout=240)
+                timeout=240, check=False)
             if r.returncode != 0:
                 return None
             line = (r.stdout or "").strip().splitlines()

@@ -10,6 +10,7 @@ Design notes:
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from .config import CFG
@@ -38,12 +39,21 @@ def system_health() -> dict[str, Any]:
         "psx-local": "ok" if src.psx_local else "down",
     }
 
+    from .llm import council_models, dead_seats
+
     or_api = CFG.apis.get("openrouter", {}) or {}
-    enabled = bool(or_api.get("enabled", False)) and bool(CFG.openrouter_keys())
-    models = len(CFG.openrouter_models())
-    llm = {"ok": enabled,
-           "provider": "openrouter" if enabled else "down",
-           "models": models}
+    kimi_api = CFG.apis.get("moonshot", {}) or {}
+    or_ok = bool(or_api.get("enabled", False)) and bool(CFG.openrouter_keys())
+    kimi_ok = bool(kimi_api.get("enabled", False)) and bool(
+        kimi_api.get("api_key") or os.environ.get("MOONSHOT_API_KEY")
+        or os.environ.get("KIMI_API_KEY"))
+    providers = [n for n, ok in (("openrouter", or_ok), ("kimi", kimi_ok)) if ok]
+    dead = dead_seats()
+    llm = {"ok": bool(providers),
+           "provider": " + ".join(providers) or "down",
+           "models": len(council_models()),
+           "kimi": kimi_ok,
+           "dead_seats": dead}
 
     ready = WSL.models_ready()
     wsl = {"available": WSL.wsl_available(),

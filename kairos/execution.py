@@ -345,9 +345,11 @@ class Mt5Bridge:
             return False
         try:
             import subprocess
+            # not check=True: tasklist exits 0 with "no tasks" in stdout, and
+            # the answer is the string test below, not the return code
             out = subprocess.run(
                 ["tasklist", "/FI", "IMAGENAME eq terminal64.exe"],
-                capture_output=True, text=True, timeout=10)
+                capture_output=True, text=True, timeout=10, check=False)
             return "terminal64.exe" in out.stdout.lower()
         except Exception:
             return False

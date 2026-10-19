@@ -18,7 +18,6 @@ import time
 from typing import Any
 
 from . import feedback
-from .config import CFG
 from .rules import check_plan, get_rule
 
 _board_cache: tuple[float, list[dict[str, Any]]] | None = None

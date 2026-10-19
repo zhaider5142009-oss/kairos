@@ -211,7 +211,18 @@ def ack(pending_id: str, pin: str | None = None) -> dict[str, Any]:
                             "the broker; check your order list before staging "
                             "it again") from exc
     _save([r for r in rows if r["id"] != pending_id])
+    _forget_book()
     return out
+
+
+def _forget_book() -> None:
+    """Cash and holdings just moved at the broker — the cached real book is
+    now a stale picture of a live account."""
+    try:
+        from . import jsgsync
+        jsgsync.invalidate_book()
+    except Exception:
+        pass
 
 
 def place_now(symbol: str, side: str, qty: float, price: float,
@@ -231,6 +242,7 @@ def cancel(order_no: str | int) -> dict[str, Any]:
     r = _net(_sess().post, c["url"] + "/Home/CancelOrder",
              data={"orignalorderno": str(order_no)}, timeout=20)
     resp = r.text[:300]
+    _forget_book()
     JOURNAL.log("JSG_CANCEL", {"order_no": str(order_no), "http": r.status_code,
                                "resp": resp})
     return {"ok": r.status_code == 200, "order_no": str(order_no),

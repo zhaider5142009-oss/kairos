@@ -30,12 +30,31 @@ apis:
       - "sk-or-v1-YOUR-KEY-1"
       - "sk-or-v1-YOUR-KEY-2"
       - "sk-or-v1-YOUR-KEY-3"
+    # Every slug below was checked against OpenRouter's live catalog on
+    # 2026-10-19. Vendor slugs do rot (meta-llm/llama-3.3-70b-instruct and
+    # deepseek/deepseek-r1 are both gone), so verify with `python -m kairos.cli
+    # llm-health` after changing this list — a dead seat quietly shrinks the
+    # council instead of failing loudly.
     council_models:
       - "deepseek/deepseek-chat-v3-0324"
-      - "meta-llm/llama-3.3-70b-instruct"
+      - "meta-llama/llama-4-scout"
       - "qwen/qwen-2.5-72b-instruct"
+      - "moonshotai/kimi-k3"
     fast_model: "deepseek/deepseek-chat-v3-0324"
-    deep_model: "deepseek/deepseek-r1"
+    deep_model: "deepseek/deepseek-r1-0528"
+    timeout_s: 90
+
+  # Kimi (Moonshot AI) — direct 262k-context reasoning models.
+  # Keys are region-bound: a global (platform.moonshot.ai) key is rejected by
+  # api.moonshot.cn and vice versa. Override with MOONSHOT_API_KEY / KIMI_API_KEY.
+  # Council entries are prefixed "kimi:" so they route here instead of OpenRouter.
+  moonshot:
+    enabled: false
+    base_url: "https://api.moonshot.ai/v1"
+    api_key: "YOUR-MOONSHOT-KEY"
+    model: "kimi-k2.6"
+    council_models:
+      - "kimi-k2.6"
     timeout_s: 90
 
   deepseek:
@@ -89,8 +108,10 @@ js_global:
   # false = every stage/ack/cancel refuses before any network call.
   allow_orders: false
   # KEY 2 — the broker's own second factor for PlaceOrder. Leave "" to type it
-  # per order on the desk; storing it here is what lets the armed autopilot
-  # place without you (only do that deliberately, and never commit it).
+  # per order on the desk; the desk button "Store PIN for unattended live"
+  # writes this line for you (never logged or echoed) and "Forget PIN" clears
+  # it. A stored PIN is what lets the armed autopilot place without you — only
+  # do that deliberately, and never commit it.
   trading_pin: ""
   order_account: ""              # account NUMBER, e.g. 53035; "" = first the
                                  # portal returns for this login

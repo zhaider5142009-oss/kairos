@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import secrets
-import sys
 import time
 from pathlib import Path
 
@@ -20,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 from kairos.engine import ENGINE  # noqa: E402
 from kairos.universe import resolve, universe  # noqa: E402
 
-app = FastAPI(title="KAIROS Control Tower", version="2.4.0")
+app = FastAPI(title="KAIROS Control Tower", version="2.5.0")
 BOOT_TS = time.time()
 
 
@@ -252,18 +251,30 @@ def autopilot_get():
 @app.post("/api/autopilot")
 def autopilot_post(req: AutopilotReq):
     from kairos.autopilot import AUTOPILOT
-    from kairos.execution import JOURNAL, KILL
+    from kairos.execution import JOURNAL
     act = req.action.lower()
     if act == "configure":
         AUTOPILOT.configure(req.symbols, req.interval_s,
                             req.entry_threshold, req.max_trades_per_cycle)
+        JOURNAL.log("AUTOPILOT_CONFIGURED", {"by": "api",
+                                             "symbols": req.symbols,
+                                             "interval_s": req.interval_s,
+                                             "entry_threshold": req.entry_threshold})
         return _safe(AUTOPILOT.status())
     if act == "start":
         out = AUTOPILOT.start(mode=req.mode, confirm_live=req.confirm_live)
+        # an arming ATTEMPT is itself an audit event, including the refused
+        # ones — whoever tried, and what stopped them
+        JOURNAL.log("AUTOPILOT_ARM_REQUEST", {"by": "api", "mode": req.mode,
+                                             "confirm_live": req.confirm_live,
+                                             "ok": bool(out.get("ok")),
+                                             "error": (out.get("error") or "")[:200]})
         return _safe(out)
     if act == "stop":
+        JOURNAL.log("AUTOPILOT_STOP_REQUEST", {"by": "api"})
         return _safe(AUTOPILOT.stop())
     if act == "cycle":
+        JOURNAL.log("AUTOPILOT_CYCLE_REQUEST", {"by": "api"})
         return _safe(AUTOPILOT.cycle())
     return _safe(AUTOPILOT.status())
 
@@ -276,6 +287,8 @@ def killswitch(engage: bool = True, reason: str = "api"):
         JOURNAL.log("KILL_SWITCH", {"by": "api", "reason": reason})
         return {"ok": True, "engaged": True}
     KILL.release()
+    # releasing the brake deserves the same record as stepping on it
+    JOURNAL.log("KILL_SWITCH_RELEASE", {"by": "api", "reason": reason})
     return {"ok": True, "engaged": False}
 
 
@@ -312,7 +325,7 @@ def signal_card(symbol: str, caption: bool = False):
     try:
         path, cap = signalcard.card_for(symbol)
     except Exception as e:
-        raise HTTPException(404, f"no signal for {symbol!r}: {e}")
+        raise HTTPException(404, f"no signal for {symbol!r}: {e}") from e
     if caption:
         return {"ok": True, "caption": cap}
     return FileResponse(path, media_type="image/png",
@@ -355,15 +368,29 @@ def livebook_post(req: LivebookReq):
         else:
             raise ValueError(f"unknown action {req.action!r}")
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     except HTTPException:
         raise
     except Exception as e:
         from kairos.jsgsync import JsGlobalError
         if isinstance(e, JsGlobalError):
-            raise HTTPException(502, str(e))
+            raise HTTPException(502, str(e)) from e
         raise
     return _safe({"ok": True, "positions": livebook.review()})
+
+
+@app.get("/api/jsg/book")
+def jsg_book(force: bool = False):
+    """The funded account as the broker sees it: free cash + MTM holdings.
+
+    Read-only, and the number the live risk posture is sized from — a portal
+    outage is a 502 here, never a zero.
+    """
+    from kairos import jsgsync
+    try:
+        return _safe(jsgsync.real_book(force=force))
+    except jsgsync.JsGlobalError as e:
+        raise HTTPException(502, str(e)) from e
 
 
 # ---------------------------------------------------------- JS Global orders
@@ -396,9 +423,46 @@ def _jsg_guard(fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
     except JsGlobalAuthError as e:
-        raise HTTPException(502, str(e))
+        raise HTTPException(502, str(e)) from e
     except JsGlobalError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
+
+
+class JsgPinReq(BaseModel):
+    pin: str
+
+
+@app.post("/api/jsg/pin")
+def jsg_pin_store(req: JsgPinReq):
+    """Save the broker's trading PIN so the autopilot can act unattended.
+
+    The value goes into git-ignored config.yaml and nowhere else: it is not
+    echoed, not returned, and only its length is journalled. Without a stored
+    PIN the loop stays a ticket generator — this is the keystroke that turns
+    it into an executor, so it is deliberately something a human does.
+    """
+    from kairos.config import CFG
+    from kairos.execution import JOURNAL
+    pin = (req.pin or "").strip()
+    if not (pin.isdigit() and 4 <= len(pin) <= 8):
+        raise HTTPException(400, "a trading PIN is 4-8 digits")
+    if not CFG.store_secret("js_global", "trading_pin", pin):
+        raise HTTPException(500, "no config.yaml to store the PIN in")
+    JOURNAL.log("JSG_PIN_STORED", {"chars": len(pin)})
+    from kairos import jsgtrade
+    return _safe({"ok": True, "has_pin": True,
+                  "orders_enabled": jsgtrade.enabled()})
+
+
+@app.delete("/api/jsg/pin")
+def jsg_pin_clear():
+    """Forget the stored PIN — instant return to human-confirmed tickets."""
+    from kairos.config import CFG
+    from kairos.execution import JOURNAL
+    if not CFG.store_secret("js_global", "trading_pin", ""):
+        raise HTTPException(500, "no config.yaml to clear")
+    JOURNAL.log("JSG_PIN_CLEARED", {})
+    return _safe({"ok": True, "has_pin": False})
 
 
 @app.get("/api/jsg/orders")

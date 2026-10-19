@@ -39,16 +39,24 @@ def _jsg_auto_ok() -> bool:
         return False
 
 
+def _psx_live_ready() -> bool:
+    """auto_place AND the broker-side keys: the only combination that makes a
+    PSX verdict a real order, so it is also what makes PSX a live venue."""
+    return bool((CFG.section("autopilot") or {}).get("auto_place")) and _jsg_auto_ok()
+
+
 class Autopilot:
     """A single supervised thread that repeatedly:
        scan watchlist -> engine verdicts -> size -> gate -> execute -> journal.
 
     mode:
       paper  — fills against live prices in the persistent PaperBroker book.
-      live   — MT5 instruments route to the live bridge (requires a connected
-               terminal + explicit confirm); PSX names become JS Global
-               tickets awaiting human confirmation, and only become real
-               orders when auto_place + allow_orders + the PIN are all on.
+      live   — each venue runs on its own bridge: MT5 needs a connected
+               terminal, PSX needs auto_place + allow_orders + the PIN. Either
+               one alone is enough to arm; arming requires an explicit
+               confirm, and a venue that drops mid-loop stops taking entries
+               there while the other keeps working. PSX flow without those
+               three keys stays a human-confirmed JS Global ticket.
     """
 
     def __init__(self) -> None:
@@ -60,6 +68,12 @@ class Autopilot:
         self.mt5 = get_mt5()
         self.jsg = JsGlobalTicket()
         self._posture: dict[str, Any] | None = None
+        # this cycle's live venue snapshots — never persisted, the real book
+        # carries account numbers
+        self._live_acct: dict[str, Any] | None = None
+        self._live_pos: list[dict[str, Any]] | None = None
+        self._psx_live: dict[str, Any] | None = None
+        self._psx_down = False
         self.st = self._load()
 
     # ------------------------------------------------------------- state io
@@ -72,7 +86,7 @@ class Autopilot:
                 "last_error": None,
                 "signals": [], "actions": [], "held": {}, "consec_losses": 0,
                 "equity_peak": 0.0, "peak_since": None,
-                "last_rotation": None, "rotated": []}
+                "last_rotation": None, "rotated": [], "psx_day_start": None}
 
     def _load(self) -> dict[str, Any]:
         st = self._defaults()
@@ -121,16 +135,20 @@ class Autopilot:
                 return {"ok": False, "error": "live mode requires confirm_live=true"}
             if KILL.engaged():
                 return {"ok": False, "error": "kill switch is engaged — cannot arm live"}
-            if not (self.mt5.connected or self._mt5_connect()):
+            mt5_up = self.mt5.connected or self._mt5_connect()
+            psx_up = _psx_live_ready()
+            if not (mt5_up or psx_up):
                 return {"ok": False,
-                        "error": f"MT5 terminal not reachable: {self.mt5.last_error} "
-                                 "— open MetaTrader 5, sign in to JS Markets and "
-                                 "enable Algo Trading"}
-            ap = bool((CFG.section("autopilot") or {}).get("auto_place"))
-            psx = ("PSX orders place automatically (allow_orders + PIN set)"
-                   if ap and _jsg_auto_ok() else
-                   "PSX stays ticket-only")
-            note = f"live armed — MT5 instruments execute real orders; {psx}"
+                        "error": "no live venue reachable — MT5: "
+                                 f"{self.mt5.last_error or 'not attached'} (open "
+                                 "MetaTrader 5, sign in to JS Markets, enable Algo "
+                                 "Trading) | JS Global: needs autopilot.auto_place "
+                                 "+ js_global.allow_orders + the trading PIN"}
+            venues = " + ".join(n for n, ok in (("MT5", mt5_up),
+                                                ("JS Global PSX", psx_up)) if ok)
+            note = (f"live armed on {venues}; risk posture runs on the real "
+                    "book and a venue that goes down mid-loop takes no new "
+                    "entries there")
         with self._lock:
             if self._thread and self._thread.is_alive():
                 return {"ok": False, "error": "autopilot already running"}
@@ -185,15 +203,23 @@ class Autopilot:
 
         st = self.st
         broker = PaperBroker()
-        live = st["mode"] == "live" and self.mt5.ensure()
-        acct = (self.mt5.account() if live else None) or broker.account()
-        pos_list = self.mt5.positions() if live else broker.open_positions()
+        want_live = st["mode"] == "live"
+        mt5_up = bool(self.mt5.ensure()) if want_live else False
+        psx_book = self._psx_book() if want_live else None
+        psx_up = psx_book is not None
+        live = want_live and (mt5_up or psx_up)
+        # live sizing/braking is REAL money only: never fall back to the
+        # paper book (Rs 1,000,000 of simulated equity would justify orders
+        # the funded account could not settle)
+        acct = self._live_account(mt5_up, psx_book) if live else broker.account()
+        pos_list = self._venue_positions(mt5_up, psx_book) if live \
+            else broker.open_positions()
+        self._live_acct, self._live_pos = (acct, pos_list) if live else (None, None)
+        self._psx_live = psx_book
         held = {p["symbol"].upper(): p for p in (pos_list or [])}
-        if live:
-            held.update(self._livebook_held())
         # the venue is the source of truth: drop managed entries it no
         # longer reports (manual close, broker-side stop hit, restart drift)
-        self._reconcile(held, live)
+        self._reconcile(held, live, mt5_up, psx_up)
         posture = self._risk_posture(acct, pos_list)
         with self._lock:
             self._posture = posture
@@ -418,38 +444,104 @@ class Autopilot:
         self.st["actions"] = self.st["actions"][:MAX_ACTIONS_KEPT]
 
     # ------------------------------------------------- reconciliation & posture
-    def _reconcile(self, held: dict[str, Any], live: bool) -> None:
+    def _reconcile(self, held: dict[str, Any], live: bool, mt5_up: bool = True,
+                   psx_up: bool = False) -> None:
         """Trust the venue over our memory: a managed entry the venue no
-        longer reports is dropped (manual close / broker-side stop hit)."""
+        longer reports is dropped (manual close / broker-side stop hit).
+
+        Only venues with a snapshot this cycle are authoritative — forgetting
+        a live trade because a terminal was briefly closed is worse than
+        keeping it.
+        """
         from .universe import resolve
         for key in list(self.st["held"].keys()):
             inst = resolve(key)
             is_psx = bool(inst) and inst.market.upper() in ("PSX", "KSE")
-            if is_psx and not live:
-                continue        # a paper ticket is a human artefact, not a state
+            if is_psx and not (live and psx_up):
+                continue        # ticket, paper entry or portal outage: not a state
+            if not is_psx and live and not mt5_up:
+                continue        # MT5 unreachable — keep the memory
             vsym = (self._venue_symbol(key, is_psx, live) or key).upper()
             if vsym not in held:
                 self.st["held"].pop(key, None)
                 self._act(key, "RECONCILE", "venue no longer holds it")
                 JOURNAL.log("AUTOPILOT_RECONCILE", {"symbol": key})
 
-    def _livebook_held(self) -> dict[str, Any]:
-        """The funded JS Global book, in venue position shape, so stops,
-        targets, trailing and exits apply to real holdings — not only to
-        whatever KAIROS itself opened. Source: jsgsync.sync()."""
-        from . import livebook
-        out: dict[str, Any] = {}
-        for sym, p in livebook.positions().items():
-            try:
-                qty = float(p.get("qty") or 0)
-                entry = float(p.get("entry") or 0)
-            except (TypeError, ValueError):
-                continue
-            if qty <= 0:
-                continue
-            out[sym.upper()] = {"symbol": sym.upper(), "side": "BUY",
-                                "qty": qty, "entry": entry, "last": entry,
-                                "pnl": 0.0, "venue": "JS_GLOBAL"}
+    def _psx_book(self) -> dict[str, Any] | None:
+        """The funded JS Global book, fresh, or None if the portal is down.
+
+        None must never be read as an empty account: an outage that looked
+        like zero equity would have let every circuit breaker pass.
+        """
+        from . import jsgsync
+        try:
+            book = jsgsync.real_book()
+        except Exception as exc:
+            if not getattr(self, "_psx_down", False):
+                self._psx_down = True
+                self._act("PSX", "VENUE-DOWN", str(exc)[:160])
+                JOURNAL.log("AUTOPILOT_VENUE_LOSS", {"venue": "JS_GLOBAL",
+                                                     "error": str(exc)[:200]})
+            return None
+        self._psx_down = False
+        return book
+
+    def _psx_day_pnl(self, book: dict[str, Any]) -> float:
+        """Today's move on the real PKR book.
+
+        The portal reports no day P&L, so it is measured against the first
+        equity snapshot of the calendar day. Deposits would read as profit —
+        the loop never funds the account, so that never happens here.
+        """
+        today = datetime.now().strftime("%Y-%m-%d")
+        eq = round(float(book.get("equity") or 0), 2)
+        snap = self.st.get("psx_day_start") or {}
+        if snap.get("date") != today:
+            self.st["psx_day_start"] = {"date": today, "equity": eq}
+            return 0.0
+        base = float(snap.get("equity") or 0)
+        return round(eq - base, 2) if base > 0 else 0.0
+
+    def _psx_part(self, book: dict[str, Any]) -> dict[str, Any]:
+        """The PKR book in account-snapshot shape (what the gates read)."""
+        return {"venue": "JS_GLOBAL", "balance": book["cash"],
+                "equity": book["equity"], "day_pnl": self._psx_day_pnl(book),
+                "open_positions": len(book["holdings"])}
+
+    def _live_account(self, mt5_up: bool,
+                      book: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Real-currency account snapshot across whichever live venues are up.
+
+        None when nothing is reachable — RiskGate and the doctrine check both
+        fail closed on None, which is the point.
+        """
+        parts: list[dict[str, Any]] = []
+        if mt5_up:
+            a = self.mt5.account()
+            if a:
+                parts.append(a)
+        if book:
+            parts.append(self._psx_part(book))
+        if not parts:
+            return None
+        if len(parts) == 1:
+            return parts[0]
+        return {"venue": "+".join(str(p.get("venue")) for p in parts),
+                "balance": round(sum(float(p.get("balance") or 0) for p in parts), 2),
+                "equity": round(sum(float(p.get("equity") or 0) for p in parts), 2),
+                "day_pnl": round(sum(float(p.get("day_pnl") or 0) for p in parts), 2),
+                "open_positions": sum(int(p.get("open_positions") or 0) for p in parts)}
+
+    def _venue_positions(self, mt5_up: bool,
+                         book: dict[str, Any] | None) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        if mt5_up:
+            out.extend(self.mt5.positions() or [])
+        for h in (book or {}).get("holdings", []):
+            out.append({"symbol": h["symbol"], "side": "BUY", "qty": h["qty"],
+                        "entry": h["avg"], "last": h["mtm"],
+                        "pnl": round((h["mtm"] - h["avg"]) * h["qty"], 2),
+                        "venue": "JS_GLOBAL"})
         return out
 
     def _risk_posture(self, acct: dict | None,
@@ -567,8 +659,19 @@ class Autopilot:
         venue = "PAPER"
         if live and not is_psx:
             venue = "MT5"
-        acc = (self.mt5.account() if venue == "MT5" else broker.account())
-        pos = (self.mt5.positions() if venue == "MT5" else broker.open_positions())
+        elif live and is_psx:
+            venue = "JS_GLOBAL"
+        if venue == "MT5":
+            acc, pos = self.mt5.account(), self.mt5.positions()
+        elif venue == "JS_GLOBAL":
+            # PKR sizing against the PKR book only. A USD MT5 equity figure
+            # (or the paper Rs 1,000,000) would misprice every risk check on
+            # a real order; with no book this fails closed at the gate.
+            b = getattr(self, "_psx_live", None)
+            acc = self._psx_part(b) if b else None
+            pos = self._venue_positions(False, b)
+        else:
+            acc, pos = broker.account(), broker.open_positions()
 
         # ---- doctrine plan check (opens only): R:R, risk-per-trade,
         # confidence, stop side. Exits must always be allowed.
@@ -664,6 +767,35 @@ class Autopilot:
         cfg = CFG.section("autopilot") or {}
         if not cfg.get("auto_place") or not jsgtrade.enabled():
             return None
+        if getattr(self, "_psx_down", False):
+            self._act(inst.key, "TICKET-ONLY", "JS Global portal unreachable this cycle")
+            return None
+        if side == "BUY":
+            book = getattr(self, "_psx_live", None) or {}
+            cash = float(book.get("cash") or 0)
+            need = qty * price * 1.005            # + commission headroom
+            if cash <= 0 or need > cash:
+                JOURNAL.log("AUTOPILOT_NO_CASH", {"symbol": inst.key,
+                                                  "need": round(need, 2),
+                                                  "cash": round(cash, 2)})
+                self._act(inst.key, "GATED", f"needs Rs {need:,.0f}, free cash "
+                                             f"Rs {cash:,.0f} — ticket only")
+                return None
+        else:
+            # a PKR cash account cannot sell what it does not own: an opening
+            # SELL is a short sale (blocked), a close may not exceed the
+            # settled quantity net of orders already resting at the broker.
+            book = getattr(self, "_psx_live", None) or {}
+            rows = [h for h in book.get("holdings", [])
+                    if h["symbol"] == inst.key.upper()]
+            free = sum(h["qty"] - h["pending_sell"] for h in rows)
+            if not close:
+                self._act(inst.key, "GATED", "PSX cash account cannot short")
+                return None
+            if free < qty:
+                self._act(inst.key, "GATED", f"only {free:.0f} {inst.key} sellable "
+                                             f"(asked {qty:.0f})")
+                return None
         try:
             out = jsgtrade.place_now(inst.key, side, qty, price, "LIMIT",
                                      note="autopilot" + ("-close" if close else ""))
@@ -708,11 +840,14 @@ class Autopilot:
                 ("running", "mode", "armed_live", "symbols", "interval_s",
                  "entry_threshold", "max_trades_per_cycle", "horizon_days",
                  "cycles", "last_cycle", "last_cycle_s", "last_error", "signals", "actions",
-                 "held", "consec_losses")},
+                 "held", "consec_losses", "psx_day_start")},
                 "risk_posture": posture,
                 "kill_switch": KILL.engaged(),
                 "mt5": {"connected": self.mt5.connected,
                         "error": self.mt5.last_error},
+                "psx_live": {"keys_on": _psx_live_ready(),
+                             "book_this_cycle": self._psx_live is not None},
+                "live_account": self._live_acct,
                 "paper_account": acct,
                 "paper_positions": pos}
 

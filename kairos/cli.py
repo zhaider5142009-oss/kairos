@@ -148,7 +148,7 @@ def cmd_watch(args) -> int:
             try:
                 r = ENGINE.predict(sym, horizon=args.horizon, include_news=False)
             except Exception as exc:
-                tbl.add_row(sym, "-", f"[red]ERR[/]", str(exc)[:40], "", "", "")
+                tbl.add_row(sym, "-", "[red]ERR[/]", str(exc)[:40], "", "", "")
                 continue
             if not r.get("ok"):
                 tbl.add_row(sym, "-", "[dim]no data[/]", "", "", "", "")
@@ -254,6 +254,9 @@ def cmd_health(args) -> int:
     llm = h["llm"]
     tbl.add_row("llm-router", f"[{'green' if llm['ok'] else 'yellow'}]"
                 f"{llm['provider']} ({llm['models']} council models)[/]")
+    if llm.get("dead_seats"):
+        tbl.add_row("llm-seats", "[red]retired at the vendor: "
+                    + ", ".join(llm["dead_seats"]) + "[/]")
     wsl = h["wsl"]
     if wsl["models_ready"]:
         cell = "[green]models ready[/]"

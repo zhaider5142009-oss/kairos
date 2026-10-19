@@ -31,8 +31,13 @@ from .config import CFG
 
 SESSION_TTL_S = 600.0
 _TIMEOUT = 25
+# a live cycle reads the real book more than once (posture + each order); the
+# portal is the same session either way, so serve repeats from a short cache
+_BOOK_TTL = 45.0
 _lock = threading.Lock()
 _session: tuple[float, "requests.Session"] | None = None
+_book: dict[str, Any] | None = None
+_book_ts = 0.0
 
 
 class JsGlobalError(RuntimeError):
@@ -209,12 +214,80 @@ def open_positions(account_no: str, account_name: str) -> list[dict[str, Any]]:
     return rows
 
 
-def ledger_balance(account_name: str) -> float | None:
+def ledger_balance(account_no: str) -> float | None:
+    """Free cash in PKR.
+
+    GetAccountBalance keys on the account NUMBER. Passing the holder name
+    returns "0.0" instead of an error, which would silently look like an
+    empty wallet, so callers must never use a name here.
+    """
     try:
-        v = _get("/Home/GetAccountBalance", {"account": account_name})
+        v = _get("/Home/GetAccountBalance", {"account": account_no})
         return float(str(v).replace(",", "")) if v is not None else None
     except Exception:
         return None
+
+
+def real_book(force: bool = False) -> dict[str, Any]:
+    """The REAL account in one read-only shot: free cash + MTM holdings.
+
+    The live risk posture runs on these numbers. It must never fall back to
+    an estimate: a transport or login failure raises and the caller stops
+    trading that venue.
+    """
+    global _book, _book_ts
+    with _lock:
+        if _book is not None and not force and time.time() - _book_ts < _BOOK_TTL:
+            return dict(_book)
+    accs = accounts()
+    if not accs:
+        raise JsGlobalAuthError("no accounts returned after login")
+    holdings: list[dict[str, Any]] = []
+    cash_total = 0.0
+    names: list[str] = []
+    for acc in accs:
+        no = str(acc.get("accountNo") or "")
+        names.append(str(acc.get("accountName") or no))
+        if not no:
+            continue
+        bal = ledger_balance(no)
+        if bal is None:
+            raise JsGlobalError(f"balance unavailable for account {no}")
+        cash_total += bal
+        for r in open_positions(no, str(acc.get("accountName") or no)):
+            qty = float(r.get("qty") or 0)
+            if qty <= 0:
+                continue
+            mtm = _num(r.get("mtm")) or float(r.get("avg") or 0)
+            holdings.append({"symbol": r["symbol"], "qty": qty,
+                             "avg": float(r.get("avg") or 0), "mtm": mtm,
+                             "value": round(mtm * qty, 2),
+                             "pending_sell": float(r.get("pending_sell") or 0),
+                             "account": no})
+    book_value = round(sum(h["value"] for h in holdings), 2)
+    out = {"ok": True, "venue": "JS_GLOBAL", "accounts": names,
+           "cash": round(cash_total, 2), "holdings_value": book_value,
+           "equity": round(cash_total + book_value, 2),
+           "equity_basis": "free cash + mark-to-market holdings",
+           "holdings": holdings, "ts": time.strftime("%Y-%m-%d %H:%M:%S")}
+    with _lock:
+        _book, _book_ts = out, time.time()
+    return dict(out)
+
+
+def _num(v: Any) -> float | None:
+    try:
+        return float(str(v).replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def invalidate_book() -> None:
+    """Forget the cached real book — call after anything that moves cash."""
+    global _book, _book_ts
+    with _lock:
+        _book = None
+        _book_ts = 0.0
 
 
 def pending_orders(account: str) -> list[dict[str, Any]]:
@@ -232,10 +305,11 @@ def sync(force: bool = False) -> dict[str, Any]:
     from . import livebook
     from .universe import resolve
 
-    global _session
+    global _session, _book
     if force:
         with _lock:
             _session = None
+            _book = None
 
     accs = accounts()
     if not accs:
@@ -248,7 +322,7 @@ def sync(force: bool = False) -> dict[str, Any]:
     for acc in accs:
         no = str(acc.get("accountNo") or "")
         name = str(acc.get("accountName") or no)
-        bal = ledger_balance(name)
+        bal = ledger_balance(no)
         rows = sorted(open_positions(no, name),
                       key=lambda r: 0 if r["source"] == "collateral" else 1)
         rows_all.extend(rows)

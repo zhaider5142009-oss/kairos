@@ -3,6 +3,8 @@ detection, and cross-sectional factor computation. Pure numpy/pandas — no TA-L
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 
@@ -273,7 +275,6 @@ def detect_patterns(df: pd.DataFrame) -> list[str]:
     body1 = abs(c1 - o1)
     rng1 = h1 - l1 or 1e-12
     body2 = abs(c2 - o2)
-    rng2 = h[-2] - l[-2] or 1e-12
     pats: list[str] = []
     if body1 / rng1 < 0.1:
         pats.append("doji")
@@ -367,7 +368,6 @@ REGIMES = ("Bull-Quiet", "Bull-Volatile", "Bear-Quiet", "Bear-Volatile", "Range"
 
 def detect_regime(df: pd.DataFrame) -> dict[str, Any]:
     c = df["close"]
-    feat = {}
     hurst = _hurst(c)
     ret = c.pct_change().fillna(0.0)
     vol20 = float(ret.rolling(20, min_periods=5).std().iloc[-1] or 0.0) * np.sqrt(252)
