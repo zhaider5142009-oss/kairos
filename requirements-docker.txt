@@ -9,3 +9,4 @@ fastapi>=0.110
 uvicorn>=0.29
 pydantic>=2.6
 httpx>=0.27
+requests>=2.31        # JS Global bridge (sync + order desk)

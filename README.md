@@ -22,7 +22,7 @@ KAIROS forecasts **crypto** (22 majors: BTC, ETH, SOL, BNB, XRP, ADA, DOGE, AVAX
 | **Portfolio** | Cardinality-constrained mean-variance via quantum-inspired parallel-tempering annealer + coherence check |
 | **LLM council** | Multi-model deliberation (OpenRouter) with median consensus — optional per prediction |
 | **Fugu conductor** | One fused verdict per instrument from all experts — ensemble score, model agreement, regime, realized calibration, doctrine R:R geometry, risk posture — emitting probability-weighted edge in R-multiples; the entry bar adapts automatically to KAIROS' own realized hit-rate |
-| **Execution** | Paper broker (slippage + commission + immutable JSONL journal), MT5 bridge (commodities/FX, attach-only — never launches or blocks the terminal), JS Global ticket desk (PSX, human-confirm), PMX futures scaffold (tickets-only, account-ready) |
+| **Execution** | Paper broker (true cash ledger, slippage + market-aware commission + immutable JSONL journal), MT5 bridge (commodities/FX, attach-only — never launches or blocks the terminal), JS Global bridge (PSX: read-only sync + **double-keyed order desk** — stage→ack with the broker PIN, human tickets by default), PMX futures scaffold (tickets-only, account-ready) |
 | **Validation** | Walk-forward backtests with hysteresis, cost hurdle, vol targeting; paper sessions with a proper cash ledger + PSX commission model; realized outcomes feed back every 12 cycles so the system's own hit-rate tunes its entry bar |
 
 ## Quick start
@@ -55,6 +55,12 @@ python -m kairos backtest GOLD,SILVER,WTI,EURUSD --days 120
 # place one gated paper order
 python -m kairos paper GOLD --notional 10000
 
+# JS Global orders (PSX) — stage first, then ack with the broker's own PIN.
+# Staging itself refuses until js_global.allow_orders is true.
+python -m kairos order OGDC --side SELL --qty 50 --price 124.50
+python -m kairos order --ack <staged-id>      # prompts for the PIN, never echoes it
+python -m kairos order --list                 # gate status + what is pending
+
 # MT5 bridge check + order latency benchmark (attaches to a running terminal only)
 python -m kairos mt5 --benchmark
 
@@ -78,7 +84,9 @@ python -m kairos serve
 - **Trade Like a Pro** — the autonomous desk: start/stop the autopilot, arm LIVE execution, broker-connection strip (MT5 + JS Global), kill switch, live signal board, positions and audit feed. Every held position is actively managed — hard stops, targets, a trailing ratchet in R-multiples and venue reconciliation — and four circuit breakers (−3% day, 60% gross exposure, 4 straight losses, 8% cross-day drawdown from the equity peak) pause new entries while exits keep running. The watchlist itself rotates daily onto the PSX cross-sectional factor leaders — auto-admitted to the registry and screened for price floor and traded volume before they're ever tradable. Fresh entries additionally pass the **Fugu conductor** gate: no trade unless the fused verdict shows ≥0.15R probability-weighted edge and clears the adaptive conviction bar
 - **Fugu conductor panel** — live board of fused expert verdicts per instrument: direction, conviction, P(win), edge in R-multiples, R:R geometry and the exact reasons a call was taken or passed; refreshes every two minutes and is served at `/api/fugu`
 - **Shareable live signals** — one click per signal: an Instagram-square 1080×1080 PNG card (`/api/signal-card?symbol=…`) plus a WhatsApp-ready caption copied to your clipboard; every card carries the not-investment-advice disclaimer
-- **JS Global live book** — one click ("Sync from JS Global" / `kairos livebook --sync`) logs into your broker's Web Trade Cast **read-only** and imports your real holdings (quantity, average, pending sells, sold-out positions auto-released); KAIROS then reviews every position through the engine (live price, P&L, call, recommended stop, status) and produces broker-ready SELL tickets awaiting your confirmation
+- **JS Global live book** — one click ("Sync from JS Global" / `kairos livebook --sync`) logs into your broker's Web Trade Cast **read-only** and imports your real holdings (quantity, average, pending sells, sold-out positions auto-released); KAIROS then reviews every position through the engine (live price, P&L, call, recommended stop, status) and produces broker-ready SELL tickets awaiting your confirmation. In LIVE mode that same synced book is treated as a real venue position set, so stops, targets and trailing ratchets apply to your actual holdings
+
+- **JS Global order desk** — the double-keyed stage→ack panel under the live book: fill symbol/side/qty/price, stage it, then release it to the broker by typing the trading PIN (or check *execute now* to use a stored one). Shows gate status, the broker's own price band per scrip, staged orders with age, and can cancel a live order by number. Disabled entirely while `allow_orders` is false — staging just refuses
 - **News** — seven-feed macro/Pakistan radar
 - **System** — health, MT5 bridge, tradable universe browser
 
@@ -100,7 +108,8 @@ free Cloudflare quick tunnel so the same tower is reachable from anywhere.
 every boot ends with a live KAIROS. On server boot the **paper autopilot
 auto-resumes** (`autopilot.auto_start_paper`) — the self-improvement loop
 never has to be re-armed by hand. Live mode still requires an explicit
-`confirm_live`, and PSX still issues human-confirmed tickets.
+`confirm_live`, and PSX still issues human-confirmed tickets unless you turn
+every order key (see below).
 
 **Remote access security:** when `KAIROS_TOKEN` is set, every `/api/` call
 (reads included — the live book carries real holdings) demands
@@ -113,6 +122,36 @@ carries **no** `config.yaml` (so no broker/LLM secrets ever leave your PC) and
 runs the full paper loop + desk with a generated `KAIROS_TOKEN`. Free tier
 sleeps after inactivity; the PC daemon is the permanent engine.
 
+### Placing JS Global orders from a server
+
+`kairos/jsgtrade.py` speaks the broker's own Web Trade Cast order API
+(`PlaceOrder` / `CancelOrder`, plus the per-scrip upper-cap / lower-lock band
+it publishes). It is **double-keyed by design** — three independent acts are
+needed before real money moves, and none of them is a code change:
+
+| key | where | what it means |
+|---|---|---|
+| `js_global.allow_orders` | config.yaml or `JSG_ALLOW_ORDERS` | your standing yes to touch the broker at all |
+| the trading `PIN` | config.yaml `trading_pin` / `JSG_PIN`, or typed per order | the broker's own second factor |
+| `autopilot.auto_place` | config.yaml | only for autonomous PSX fills; without it the loop still writes tickets |
+
+Flow: **stage → ack**. `kairos order OGDC --side SELL --qty 50 --price 124.50`
+(or the desk's *JS Global order desk* card) records a pending order in
+`data/jsg_pending.json` with a 15-minute TTL and no network call. Nothing
+reaches the broker until it is acked — by you typing the PIN, or by an armed
+autopilot holding a stored PIN. Every order passes the kill switch, the
+per-order notional cap and the broker's price band first; a POST that dies in
+transit discards the staged copy instead of risking a duplicate.
+
+A headless deploy carries the same values as env secrets (`JSG_PORTAL`,
+`JSG_LOGIN`, `JSG_PASSWORD`, `JSG_PIN`, `JSG_ALLOW_ORDERS`,
+`JSG_ORDER_ACCOUNT`) so no `config.yaml` has to exist on the server. **Know
+the tradeoff:** storing a PIN anywhere — Render secrets included — means that
+server can move money without you. Keep `allow_orders: false` and
+`auto_place: false` on any machine you don't physically control, keep the
+per-order notional cap small, and remember that the kill switch blocks
+staging, acking and cancelling alike.
+
 ## Configuration
 
 Copy `config.example.yaml` to `config.yaml` and fill in your keys (OpenRouter etc.). The file is git-ignored — **never commit real keys**.
@@ -120,7 +159,7 @@ Copy `config.example.yaml` to `config.yaml` and fill in your keys (OpenRouter et
 ## Architecture
 
 ```
-python -m kairos             CLI entry (predict/scan/portfolio/backtest/paper/mt5/fugu/autopilot/rules/share/livebook/feedback/serve/…)
+python -m kairos             CLI entry (predict/scan/portfolio/backtest/paper/mt5/fugu/autopilot/rules/share/livebook/order/feedback/serve/…)
 launch_kairos.bat            one-click launcher (desktop shortcut target; icon in tools/kairos.ico)
 config.yaml                  all keys + engine tunables (git-ignored)
 kairos/
@@ -139,6 +178,7 @@ kairos/
   signalcard.py              shareable live signal cards: 1080×1080 PNG + WhatsApp caption
   livebook.py                your REAL JS Global holdings — engine verdicts + exit tickets
   jsgsync.py                 read-only Web Trade Cast sync: login → import real portfolio
+  jsgtrade.py                double-keyed order desk: stage → ack → PlaceOrder/CancelOrder, broker price band + notional cap
   fugu.py                    Fugu conductor: fused expert verdicts, calibrated P(win), edge in R, adaptive entry bar
   pmx.py                     PMX (Pakistan Mercantile Exchange) futures scaffold — venue + human-confirmed tickets, account-ready
   backtest.py                walk-forward validation + paper sessions
@@ -158,6 +198,7 @@ reports/                     saved JSON dossiers
 2. **Fail closed** — execution blocked unless every gate passes.
 3. **Prove it on paper first** — no live order until walk-forward + paper sessions are green.
 4. **Everything journaled** — append-only JSONL audit trail with idempotent client order IDs.
+5. **Real money turns more than one key** — a PSX order needs `allow_orders` **and** the broker PIN **and**, for autonomy, `auto_place`; tickets are the default, a PIN is never logged or echoed, and an order whose POST died in transit is discarded rather than re-sent.
 
 ## License
 

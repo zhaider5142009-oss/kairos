@@ -445,6 +445,78 @@ def cmd_livebook(args) -> int:
     return 0
 
 
+def cmd_order(args) -> int:
+    """JS Global orders — stage first, then ack with the broker's own PIN."""
+    import getpass
+    from . import jsgtrade
+    from .jsgsync import JsGlobalError
+    console = _console()
+
+    def fail(msg: str) -> int:
+        console.print(f"[red]{msg}[/]")
+        return 2
+
+    try:
+        if args.list or not any((args.symbol, args.ack, args.drop,
+                                 args.cancel, args.band)):
+            st = jsgtrade.state()
+            console.print(f"[bold]JS Global order desk[/]  "
+                          f"allow_orders=[cyan]{st.get('allow_orders')}[/]  "
+                          f"stored PIN=[cyan]{bool(st.get('has_pin'))}[/]  "
+                          f"kill switch=[cyan]{st.get('kill_switch')}[/]  "
+                          f"max notional={float(st.get('max_order_notional') or 0):,.0f}")
+            rows = jsgtrade.pending()
+            if not rows:
+                console.print("nothing staged — stage with: "
+                              "[bold]kairos order OGDC --side SELL --qty 50 "
+                              "--price 124.50[/]")
+            for r in rows:
+                console.print(f"[yellow]{r['id']}[/] {r['ts']} {r['symbol']} "
+                              f"{r['side']} {r['qty']}@{r['price']} "
+                              f"{r['order_type']} {r['market']} — ack with: "
+                              f"[bold]kairos order --ack {r['id']}[/]")
+            return 0
+        if args.band:
+            b = jsgtrade.band(args.band, args.market)
+            console.print(b if b.get("known") else
+                          f"[yellow]no broker band returned for {args.band}[/]")
+            return 0
+        if args.cancel:
+            out = jsgtrade.cancel(args.cancel)
+            console.print(f"[{'green' if out['ok'] else 'red'}]cancel[/] "
+                          f"{out['response'][:200]}")
+            return 0 if out["ok"] else 2
+        if args.drop:
+            jsgtrade.drop(args.drop)
+            console.print(f"[yellow]dropped[/] staged order {args.drop} "
+                          "— nothing reached the broker")
+            return 0
+        if args.ack:
+            pin = args.pin or getpass.getpass("Trading PIN: ")
+            out = jsgtrade.ack(args.ack, pin)
+        else:
+            if not args.symbol or not args.qty or not args.price:
+                return fail("need SYMBOL --qty N --price P")
+            row = jsgtrade.stage(args.symbol, args.side, args.qty, args.price,
+                                 args.order_type, args.market, note="cli")
+            console.print(f"[cyan]staged[/] {row['id']} {row['symbol']} "
+                          f"{row['side']} {row['qty']}@{row['price']} "
+                          f"{row['order_type']} {row['market']}")
+            if not args.now:
+                console.print("nothing sent yet — "
+                              f"[bold]kairos order --ack {row['id']}[/]")
+                return 0
+            out = jsgtrade.ack(row["id"])      # stored PIN path
+        tag = "green" if out["ok"] else "red"
+        console.print(f"[{tag}]{'ACCEPTED' if out['ok'] else 'NOT ACCEPTED'}[/] "
+                      f"{out['symbol']} {out['side']} {out['qty']}@{out['price']} "
+                      f"order_no={out.get('order_no')} acct={out.get('account')}")
+        console.print(f"[dim]{out['response'][:200]}[/]")
+        return 0 if out["ok"] else 2
+    except JsGlobalError as e:
+        return fail(str(e))
+
+
 def cmd_fugu(args) -> int:
     """Fugu conductor: fused multi-expert verdicts with probability-weighted edge."""
     from rich.table import Table
@@ -621,6 +693,31 @@ def main() -> int:
     sp.add_argument("--ticket", metavar="SYMBOL",
                     help="write a broker-ready JS Global SELL ticket")
     sp.set_defaults(fn=cmd_livebook)
+
+    sp = sub.add_parser("order",
+                        help="JS Global orders: stage, ack with the broker PIN, "
+                             "cancel (real money — needs allow_orders + PIN)")
+    sp.add_argument("symbol", nargs="?", help="scrip to stage, e.g. OGDC")
+    sp.add_argument("--side", default="BUY", choices=["BUY", "SELL", "SHORT"])
+    sp.add_argument("--qty", type=int, default=0, help="whole shares")
+    sp.add_argument("--price", type=float, default=0.0, help="PKR limit price")
+    sp.add_argument("--type", dest="order_type", default="LIMIT",
+                    choices=["LIMIT", "MARKET", "STOP_LOSS", "FOK", "MIT"])
+    sp.add_argument("--market", default=None,
+                    help="PSX segment (default: js_global.market, i.e. REG)")
+    sp.add_argument("--now", action="store_true",
+                    help="ack straight away using the PIN stored in config")
+    sp.add_argument("--ack", metavar="ID", help="release a staged order")
+    sp.add_argument("--drop", metavar="ID", help="discard a staged order")
+    sp.add_argument("--cancel", metavar="ORDER_NO",
+                    help="cancel an order already live at the broker")
+    sp.add_argument("--band", metavar="SYMBOL",
+                    help="show the broker's upper cap / lower lock for a scrip")
+    sp.add_argument("--pin", default=None,
+                    help="trading PIN (omit to be prompted — keeps it out of "
+                         "your shell history)")
+    sp.add_argument("--list", action="store_true", help="gate status + staged orders")
+    sp.set_defaults(fn=cmd_order)
 
     sp = sub.add_parser("feedback", help="resolve outcomes + realized track record")
     sp.set_defaults(fn=cmd_feedback)

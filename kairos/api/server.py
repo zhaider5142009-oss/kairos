@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 from kairos.engine import ENGINE  # noqa: E402
 from kairos.universe import resolve, universe  # noqa: E402
 
-app = FastAPI(title="KAIROS Control Tower", version="2.1.0")
+app = FastAPI(title="KAIROS Control Tower", version="2.3.0")
 
 
 # ------------------------------------------------------------ remote deploy auth
@@ -360,6 +360,81 @@ def livebook_post(req: LivebookReq):
             raise HTTPException(502, str(e))
         raise
     return _safe({"ok": True, "positions": livebook.review()})
+
+
+# ---------------------------------------------------------- JS Global orders
+# Real money moves only through these four keys turning:
+#   js_global.allow_orders (standing yes)  +  the trading PIN (per order)
+#   + the kill switch clear               +  the broker's own price band
+# A PIN is accepted on input and never echoed, logged or journalled.
+
+class JsgPlaceReq(BaseModel):
+    symbol: str
+    side: str                     # BUY | SELL | SHORT
+    qty: int
+    price: float
+    order_type: str = "LIMIT"     # LIMIT | MARKET | STOP_LOSS | FOK | MIT
+    market: str | None = None
+    note: str = "desk"
+
+
+class JsgIdReq(BaseModel):
+    id: str
+    pin: str | None = None
+
+
+class JsgCancelReq(BaseModel):
+    order_no: str
+
+
+def _jsg_guard(fn, *args, **kwargs):
+    from kairos.jsgsync import JsGlobalAuthError, JsGlobalError
+    try:
+        return fn(*args, **kwargs)
+    except JsGlobalAuthError as e:
+        raise HTTPException(502, str(e))
+    except JsGlobalError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/jsg/orders")
+def jsg_orders(band_symbol: str | None = None, market: str | None = None):
+    """Gate status, staged orders and (optionally) a scrip's broker price band."""
+    from kairos import jsgtrade
+    out = _safe(jsgtrade.state())
+    out["pending"] = jsgtrade.pending()
+    if band_symbol:
+        out["band"] = _jsg_guard(jsgtrade.band, band_symbol, market)
+    return out
+
+
+@app.post("/api/jsg/orders")
+def jsg_stage(req: JsgPlaceReq):
+    """Stage a JS Global order. Nothing reaches the broker until it is acked."""
+    from kairos import jsgtrade
+    return _jsg_guard(jsgtrade.stage, req.symbol, req.side, req.qty, req.price,
+                      req.order_type, req.market, req.note)
+
+
+@app.post("/api/jsg/orders/ack")
+def jsg_ack(req: JsgIdReq):
+    """Release a staged order to the broker — THIS EXECUTES REAL MONEY."""
+    from kairos import jsgtrade
+    res = _jsg_guard(jsgtrade.ack, req.id, req.pin)
+    return {k: v for k, v in res.items() if k != "pin"}
+
+
+@app.post("/api/jsg/orders/drop")
+def jsg_drop(req: JsgIdReq):
+    from kairos import jsgtrade
+    return _jsg_guard(jsgtrade.drop, req.id)
+
+
+@app.post("/api/jsg/orders/cancel")
+def jsg_cancel(req: JsgCancelReq):
+    """Cancel a LIVE broker order by its number."""
+    from kairos import jsgtrade
+    return _jsg_guard(jsgtrade.cancel, req.order_no)
 
 
 # ---------------------------------------------------------------- fugu conductor

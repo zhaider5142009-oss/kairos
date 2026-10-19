@@ -1,4 +1,4 @@
-Version: "2.0.0"
+Version: "2.3.0"
 Codename: "Institutional"
 
 app:
@@ -68,14 +68,34 @@ apis:
     channel: "ibm_quantum_platform"
 
 # ---------------------------------------------------------------------------
-# JS Global Securities (PSX broker) web terminal — used READ-ONLY by
-# kairos/jsgsync.py to import your real holdings into the live book.
-# Put your actual credentials ONLY in the git-ignored config.yaml.
+# JS Global Securities (PSX broker) web terminal.
+#   kairos/jsgsync.py  reads the real book (READ-ONLY endpoints only)
+#   kairos/jsgtrade.py places orders — but ONLY if you turn both keys below.
+# Put real credentials ONLY in the git-ignored config.yaml, never here.
+#
+# Headless deploys carry the same values as environment variables instead of
+# a config.yaml at all (the Docker image ships without one):
+#   JSG_PORTAL / JSG_LOGIN / JSG_PASSWORD     — bridge login
+#   JSG_PIN                                   — trading PIN (enables auto-place)
+#   JSG_ALLOW_ORDERS=1                        — the standing "orders allowed" key
+#   JSG_ORDER_ACCOUNT                         — account NUMBER the order is for
 # ---------------------------------------------------------------------------
 js_global:
   portal_url: "https://wt.jsglobalonline.com"
   login: "YOUR-ACCOUNT-NUMBER"
   password: "YOUR-PASSWORD"
+
+  # KEY 1 — standing permission for KAIROS to touch the broker at all.
+  # false = every stage/ack/cancel refuses before any network call.
+  allow_orders: false
+  # KEY 2 — the broker's own second factor for PlaceOrder. Leave "" to type it
+  # per order on the desk; storing it here is what lets the armed autopilot
+  # place without you (only do that deliberately, and never commit it).
+  trading_pin: ""
+  order_account: ""              # account NUMBER, e.g. 53035; "" = first the
+                                 # portal returns for this login
+  market: "REG"                  # REG | FUT | ODL | SIF | SQR | FSR
+  max_order_notional: 250000     # PKR ceiling per single order (staging rejects above)
 
 # Pakistan Mercantile Exchange (futures) — fill when the account opens.
 # Empty values keep KAIROS in scaffold mode; tickets stay human-confirmed.
@@ -186,6 +206,12 @@ autopilot:
                                      # automatically; LIVE never self-arms (needs confirm)
   psx_auto_watch: true               # daily: rotate top-6 factor leaders from the
                                      # PSX cross-sectional scan into the watchlist
+  auto_place: false                  # KEY 3 for autonomous PSX money. true ONLY when
+                                     # mode=live AND js_global.allow_orders AND a
+                                     # trading_pin is on file — then PSX orders go
+                                     # straight to the broker instead of becoming
+                                     # tickets you confirm. Any failure degrades
+                                     # back to a ticket; nothing ever re-acks.
 
 # public exposure (deployment): set env KAIROS_TOKEN on the server process;
 # every POST/PUT/DELETE then demands X-KAIROS-Token. Reads stay public.

@@ -3,7 +3,9 @@
 Doctrine: paper is the default, live must be armed explicitly, everything
 is fail-closed and journaled. The loop never trusts a stale bridge — before
 every order it re-reads account and positions, honours RiskGate and the
-kill switch, and PSX flow always remains a human-confirmed JS Global ticket.
+kill switch, and PSX flow is a human-confirmed JS Global ticket unless the
+operator turns every order key (autopilot.auto_place + js_global.allow_orders
++ the broker PIN).
 """
 
 from __future__ import annotations
@@ -28,6 +30,15 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+def _jsg_auto_ok() -> bool:
+    """allow_orders AND a stored PIN — the two broker-side order keys."""
+    try:
+        from . import jsgtrade
+        return jsgtrade.enabled()
+    except Exception:
+        return False
+
+
 class Autopilot:
     """A single supervised thread that repeatedly:
        scan watchlist -> engine verdicts -> size -> gate -> execute -> journal.
@@ -35,8 +46,9 @@ class Autopilot:
     mode:
       paper  — fills against live prices in the persistent PaperBroker book.
       live   — MT5 instruments route to the live bridge (requires a connected
-               terminal + explicit confirm); PSX names ALWAYS become JS Global
-               tickets awaiting human confirmation, never silent fills.
+               terminal + explicit confirm); PSX names become JS Global
+               tickets awaiting human confirmation, and only become real
+               orders when auto_place + allow_orders + the PIN are all on.
     """
 
     def __init__(self) -> None:
@@ -113,7 +125,11 @@ class Autopilot:
                         "error": f"MT5 terminal not reachable: {self.mt5.last_error} "
                                  "— open MetaTrader 5, sign in to JS Markets and "
                                  "enable Algo Trading"}
-            note = "live armed — MT5 instruments execute real orders; PSX stays ticket-only"
+            ap = bool((CFG.section("autopilot") or {}).get("auto_place"))
+            psx = ("PSX orders place automatically (allow_orders + PIN set)"
+                   if ap and _jsg_auto_ok() else
+                   "PSX stays ticket-only")
+            note = f"live armed — MT5 instruments execute real orders; {psx}"
         with self._lock:
             if self._thread and self._thread.is_alive():
                 return {"ok": False, "error": "autopilot already running"}
@@ -165,6 +181,8 @@ class Autopilot:
         acct = (self.mt5.account() if live else None) or broker.account()
         pos_list = self.mt5.positions() if live else broker.open_positions()
         held = {p["symbol"].upper(): p for p in (pos_list or [])}
+        if live:
+            held.update(self._livebook_held())
         # the venue is the source of truth: drop managed entries it no
         # longer reports (manual close, broker-side stop hit, restart drift)
         self._reconcile(held, live)
@@ -204,7 +222,7 @@ class Autopilot:
                     act, _d = self._execute(inst, side, qty, price, res,
                                             broker, live, close=True)
                     action, trades = act, trades + 1
-                    if act in ("CLOSED", "LIVE-FILLED"):
+                    if act in ("CLOSED", "LIVE-FILLED", "PLACED"):
                         self._book_close(inst.key, hp, hb, price, reason)
                         detail = f"{reason} exit"
 
@@ -248,15 +266,21 @@ class Autopilot:
                                 if ps.get("position_value"):
                                     notional = min(notional, float(ps["position_value"]))
                             if notional > 10:
-                                qty = notional / price if not live else \
-                                    round(max(0.01, notional / price / 100), 2)
+                                if live and not is_psx:
+                                    # MT5 quotes CFDs in lots, not shares
+                                    qty = round(max(0.01,
+                                                    notional / price / 100), 2)
+                                elif live:
+                                    qty = int(notional // price)   # PSX shares
+                                else:
+                                    qty = notional / price
                                 side = "BUY" if score > 0 else "SELL"
                                 act, detail = self._execute(inst, side, qty, price,
                                                             res, broker, live,
                                                             close=False)
                                 action = act
                                 trades += 1
-                                if act in ("OPENED", "TICKET"):
+                                if act in ("OPENED", "TICKET", "PLACED"):
                                     st["held"][inst.key] = {
                                         "started": _now(), "side": side,
                                         "qty": qty, "entry": price,
@@ -391,13 +415,33 @@ class Autopilot:
         from .universe import resolve
         for key in list(self.st["held"].keys()):
             inst = resolve(key)
-            if inst and inst.market.upper() in ("PSX", "KSE"):
-                continue          # PSX flow is tickets, never venue positions
-            vsym = (self._venue_symbol(key, False, live) or key).upper()
+            is_psx = bool(inst) and inst.market.upper() in ("PSX", "KSE")
+            if is_psx and not live:
+                continue        # a paper ticket is a human artefact, not a state
+            vsym = (self._venue_symbol(key, is_psx, live) or key).upper()
             if vsym not in held:
                 self.st["held"].pop(key, None)
                 self._act(key, "RECONCILE", "venue no longer holds it")
                 JOURNAL.log("AUTOPILOT_RECONCILE", {"symbol": key})
+
+    def _livebook_held(self) -> dict[str, Any]:
+        """The funded JS Global book, in venue position shape, so stops,
+        targets, trailing and exits apply to real holdings — not only to
+        whatever KAIROS itself opened. Source: jsgsync.sync()."""
+        from . import livebook
+        out: dict[str, Any] = {}
+        for sym, p in livebook.positions().items():
+            try:
+                qty = float(p.get("qty") or 0)
+                entry = float(p.get("entry") or 0)
+            except (TypeError, ValueError):
+                continue
+            if qty <= 0:
+                continue
+            out[sym.upper()] = {"symbol": sym.upper(), "side": "BUY",
+                                "qty": qty, "entry": entry, "last": entry,
+                                "pnl": 0.0, "venue": "JS_GLOBAL"}
+        return out
 
     def _risk_posture(self, acct: dict | None,
                       pos_list: list | None) -> dict[str, Any]:
@@ -572,6 +616,9 @@ class Autopilot:
                                 {"coid": intent.client_order_id,
                                  "symbol": fill.symbol})
         elif is_psx and live:
+            placed = self._psx_auto_place(inst, side, qty, price, intent, close)
+            if placed:
+                return placed
             ticket = self.jsg.build_ticket(intent)
             act = "TICKET"
             fill = None
@@ -593,6 +640,46 @@ class Autopilot:
                     {"coid": intent.client_order_id, "symbol": inst.key,
                      "side": side, "qty": qty, "price": price, "venue": venue})
         return act, (fill.broker_order_id if isinstance(fill, Fill) else "")
+
+    def _psx_auto_place(self, inst, side: str, qty: float, price: float,
+                        intent: OrderIntent, close: bool) -> tuple[str, str] | None:
+        """The opt-in real-money PSX path. Returns (action, detail), or None to
+        fall back to a human-confirmed ticket.
+
+        Three separate deliberate acts must all be turned:
+          autopilot.auto_place  +  js_global.allow_orders  +  the broker PIN.
+        Anything unusual — a broker refusal, an unread answer, a timeout —
+        degrades to a ticket instead of retrying into a duplicate order.
+        """
+        from . import jsgtrade
+        cfg = CFG.section("autopilot") or {}
+        if not cfg.get("auto_place") or not jsgtrade.enabled():
+            return None
+        try:
+            out = jsgtrade.place_now(inst.key, side, qty, price, "LIMIT",
+                                     note="autopilot" + ("-close" if close else ""))
+        except Exception as exc:
+            JOURNAL.log("AUTOPILOT_PLACE_FAIL", {"symbol": inst.key,
+                                                 "error": str(exc)[:200]})
+            self._act(inst.key, "PLACE-FAIL", str(exc)[:160])
+            return None
+        if not out.get("ok"):
+            self._act(inst.key, "PLACE-REJECT", (out.get("response") or "")[:160])
+            JOURNAL.log("AUTOPILOT_PLACE_REJECT",
+                        {"symbol": inst.key, "resp": (out.get("response") or "")[:200]})
+            return None
+        detail = f"order {out.get('order_no') or 'accepted'} at {out.get('account')}"
+        self.st["actions"].insert(0, {"ts": _now(), "symbol": inst.key,
+                                      "action": "PLACED", "side": side,
+                                      "qty": qty, "price": price, "why": detail})
+        self.st["actions"] = self.st["actions"][:MAX_ACTIONS_KEPT]
+        JOURNAL.log("AUTOPILOT_PLACED", {"coid": intent.client_order_id,
+                                         "symbol": inst.key, "side": side,
+                                         "qty": qty, "price": price,
+                                         "order_no": out.get("order_no"),
+                                         "account": out.get("account"),
+                                         "close": close})
+        return "PLACED", detail
 
     def _mt5_close_one(self, symbol: str) -> None:
         try:

@@ -7,10 +7,11 @@ real portfolio, and imports net holdings into the live book so the engine
 can review them like any other position.
 
 Hard rules:
-  * Only read endpoints are ever called (GetUserData, GetOpenPosition,
-    GetCollaterals, GetPortfolioHoldings, GetAccountBalance, GetActivityLog).
-    PlaceOrder/CancelOrder are deliberately NOT wired — PSX execution stays
-    on human-confirmed JS Global tickets (see livebook.make_sell_ticket).
+  * Only read endpoints are ever called here (GetUserData, GetOpenPosition,
+    GetCollaterals, GetPortfolioHoldings, GetAccountBalance, GetActivityLog,
+    GetUpperLowerCap). Order placement lives in kairos/jsgtrade.py, which is
+    double-keyed (js_global.allow_orders AND the trading PIN) and never
+    reaches the broker unless the operator turned both keys.
   * Exactly ONE login attempt per sync call; on failure we surface the error
     instead of risking an account lockout.
   * Credentials never appear in code, logs, git or returned payloads.
@@ -18,6 +19,7 @@ Hard rules:
 
 from __future__ import annotations
 
+import os
 import re
 import threading
 import time
@@ -42,11 +44,32 @@ class JsGlobalAuthError(JsGlobalError):
 
 
 def _conf() -> dict[str, Any]:
-    sec = CFG.section("js_global") or {}
-    url, login, pw = sec.get("portal_url"), str(sec.get("login") or ""), str(sec.get("password") or "")
-    if not (url and login and pw):
-        raise JsGlobalAuthError("js_global.login/password not set in config.yaml")
-    return {"url": url.rstrip("/"), "login": login, "password": pw}
+    """js_global config, with environment overrides for headless deploys.
+
+    A free cloud server carries no config.yaml, so the whole bridge is
+    drivable from secrets: JSG_PORTAL / JSG_LOGIN / JSG_PASSWORD and, for the
+    order path, JSG_PIN / JSG_ALLOW_ORDERS / JSG_ORDER_ACCOUNT.
+    """
+    sec = dict(CFG.section("js_global") or {})
+    env = os.environ
+    url = str(env.get("JSG_PORTAL") or sec.get("portal_url")
+              or "https://wt.jsglobalonline.com").rstrip("/")
+    login = str(env.get("JSG_LOGIN") or sec.get("login") or "")
+    pw = str(env.get("JSG_PASSWORD") or sec.get("password") or "")
+    if not (login and pw):
+        raise JsGlobalAuthError("js_global.login/password not set "
+                                "(config.yaml or JSG_LOGIN/JSG_PASSWORD)")
+    allow = env.get("JSG_ALLOW_ORDERS", sec.get("allow_orders", False))
+    if isinstance(allow, str):
+        allow = allow.strip().lower() in ("1", "true", "yes", "on")
+    return {"url": url, "login": login, "password": pw,
+            "portal_url": url,
+            "allow_orders": bool(allow),
+            "trading_pin": str(env.get("JSG_PIN") or sec.get("trading_pin") or ""),
+            "order_account": str(env.get("JSG_ORDER_ACCOUNT")
+                                 or sec.get("order_account") or ""),
+            "market": str(sec.get("market") or "REG").upper(),
+            "max_order_notional": float(sec.get("max_order_notional") or 250_000)}
 
 
 def _digit_boxes(html: str) -> list[int]:
@@ -58,12 +81,24 @@ def _digit_boxes(html: str) -> list[int]:
     return sorted(boxes)
 
 
+def _net(fn, *a, **kw):
+    """Translate a transport failure into one honest JsGlobalError.
+
+    Never retries: a second login attempt against this portal risks an
+    account lockout, and a retried PlaceOrder risks a duplicate real order.
+    """
+    try:
+        return fn(*a, **kw)
+    except requests.RequestException as exc:
+        raise JsGlobalError(f"portal unreachable: {type(exc).__name__}") from exc
+
+
 def _login(c: dict[str, Any]) -> requests.Session:
     s = requests.Session()
     s.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
                       "X-Requested-With": "XMLHttpRequest",
                       "Accept": "application/json, text/javascript, */*; q=0.01"})
-    r = s.get(c["url"], timeout=_TIMEOUT)
+    r = _net(s.get, c["url"], timeout=_TIMEOUT)
     pw = c["password"]
     data: dict[str, str] = {"UserName": c["login"]}
     for i in _digit_boxes(r.text):
@@ -73,8 +108,8 @@ def _login(c: dict[str, Any]) -> requests.Session:
         data[f"Digit{i}"] = pw[i - 1]
     if len(data) == 1:
         raise JsGlobalError("login form parse failed (no password boxes found)")
-    s.post(c["url"] + "/Home/_Login", data=data, timeout=_TIMEOUT)
-    s.get(c["url"] + "/Home/Index", timeout=_TIMEOUT)
+    _net(s.post, c["url"] + "/Home/_Login", data=data, timeout=_TIMEOUT)
+    _net(s.get, c["url"] + "/Home/Index", timeout=_TIMEOUT)
     if not _accounts(s):
         raise JsGlobalAuthError("login rejected — check js_global credentials in config.yaml")
     return s
@@ -94,7 +129,7 @@ def _sess() -> requests.Session:
 def _get(path: str, params: dict | None = None) -> Any:
     global _session
     s = _sess()
-    r = s.get(_conf()["url"] + path, params=params or {}, timeout=_TIMEOUT)
+    r = _net(s.get, _conf()["url"] + path, params=params or {}, timeout=_TIMEOUT)
     if r.status_code in (401, 403) or "UserName" in r.text[:2000] and "Digit1" in r.text[:2000]:
         with _lock:
             _session = None
@@ -110,12 +145,20 @@ def _get(path: str, params: dict | None = None) -> Any:
 
 
 def _accounts(s: requests.Session) -> list[dict[str, Any]]:
+    """Accounts behind the current session; [] when the portal refuses them.
+
+    A transport failure is NOT swallowed here — otherwise an outage would be
+    reported as "login rejected" and the operator would rotate good
+    credentials for no reason.
+    """
     try:
-        r = s.get(_conf()["url"] + "/Home/GetUserData", timeout=_TIMEOUT)
-        j = r.json()
-        return j if isinstance(j, list) else []
+        j = _net(s.get, _conf()["url"] + "/Home/GetUserData",
+                 timeout=_TIMEOUT).json()
+    except JsGlobalError:
+        raise
     except Exception:
         return []
+    return j if isinstance(j, list) else []
 
 
 def accounts() -> list[dict[str, Any]]:

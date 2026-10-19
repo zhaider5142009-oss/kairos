@@ -9,3 +9,18 @@ services:
     envVars:
       - key: KAIROS_TOKEN        # gates every POST/PUT/DELETE; reads stay public
         generateValue: true
+      # The JS Global bridge is drivable from secrets instead of config.yaml.
+      # Only add these on a server you control: with JSG_ALLOW_ORDERS=1 and a
+      # JSG_PIN present, this host can place REAL orders on your PSX account.
+      # - key: JSG_PORTAL          # default https://wt.jsglobalonline.com
+      #   value: "https://wt.jsglobalonline.com"
+      # - key: JSG_LOGIN           # account number
+      #   value: ""
+      # - key: JSG_PASSWORD
+      #   value: ""
+      # - key: JSG_PIN             # broker second factor — money-moving secret
+      #   value: ""
+      # - key: JSG_ALLOW_ORDERS    # "" / unset = orders refused (fail-closed)
+      #   value: ""
+      # - key: JSG_ORDER_ACCOUNT   # account NUMBER the orders are placed for
+      #   value: ""

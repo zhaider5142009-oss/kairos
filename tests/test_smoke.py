@@ -18,8 +18,20 @@ def test_version_is_string():
 
 
 def test_universe_is_populated():
-    assert len(universe.ALL) == 100
+    # the curated seed is 100; scan-driven PSX rotation can add more
+    assert len(universe.ALL) >= 100
     assert len(universe.CRYPTO) == 22
+
+
+def test_register_psx_is_idempotent_and_collision_safe():
+    n = len(universe.ALL)
+    assert universe.register_psx("ZZTEST", name="Test Mill") is not None
+    assert len(universe.ALL) == n + 1
+    assert universe.register_psx("ZZTEST") is not None   # already PSX: reuse
+    assert len(universe.ALL) == n + 1
+    assert universe.resolve("ZZTEST").yahoo == "ZZTEST.KA"
+    assert universe.register_psx("BTC") is None          # crypto key collision
+    assert len(universe.ALL) == n + 1
 
 
 def test_universe_has_expected_crypto():

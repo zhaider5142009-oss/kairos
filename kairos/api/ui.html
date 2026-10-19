@@ -344,6 +344,28 @@ tbody tr:hover td{background:#f9f9f9}
   </div>
 
   <div class="card">
+    <div class="sectiontitle" style="margin-top:0">JS Global order desk <span class="dim" id="jsgmeta"></span></div>
+    <div id="jgsgate" style="margin-bottom:10px"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px">
+      <div style="flex:1;min-width:100px"><label>Symbol</label><input id="josym" placeholder="e.g. OGDC"></div>
+      <div style="flex:0 0 110px"><label>Side</label><select id="josite"><option value="BUY">BUY</option><option value="SELL">SELL</option><option value="SHORT">SHORT</option></select></div>
+      <div style="flex:1;min-width:90px"><label>Qty (shares)</label><input id="joqty" type="number" step="1" placeholder="100"></div>
+      <div style="flex:1;min-width:90px"><label>Price (PKR)</label><input id="joprice" type="number" step="0.01" placeholder="124.50"></div>
+      <div style="flex:0 0 130px"><label>Order type</label><select id="jotype"><option value="LIMIT">Limit</option><option value="MARKET">Market</option><option value="STOP_LOSS">Stop loss</option><option value="FOK">FOK</option><option value="MIT">MIT</option></select></div>
+      <div style="flex:0 0 90px"><label>Market</label><select id="jomkt"><option>REG</option><option>FUT</option><option>ODL</option><option>SIF</option><option>SQR</option><option>FSR</option></select></div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+      <button class="btn small" id="jostage" title="Stage the order — nothing reaches the broker until you ack it with the PIN">Stage order</button>
+      <button class="btn ghost small" id="joband" title="Ask the broker for this scrip's upper cap / lower lock before staging">Check price band</button>
+      <button class="btn ghost small" id="jocancel" title="Cancel an order that is already live at the broker" onclick="jCancelLive()">Cancel broker order</button>
+      <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="joauto"> execute now (uses the stored PIN)</label>
+      <span class="dim" id="jobandinfo"></span>
+    </div>
+    <div style="overflow-x:auto"><div id="jopending"><span class="dim">no staged orders — staging is only enabled when <b>js_global.allow_orders</b> is true</span></div></div>
+    <div class="dim" style="margin-top:8px">Two keys must turn for real money: <b>allow_orders</b> (config/env) and the <b>trading PIN</b> (typed per order, never stored by KAIROS unless you put it in config). Staged orders expire after 15 minutes. The kill switch blocks everything.</div>
+  </div>
+
+  <div class="card">
     <div class="sectiontitle" style="margin-top:0">Fugu conductor <span class="dim" id="fmeta"></span></div>
     <div style="overflow-x:auto"><div id="fboard"><span class="dim">the command plane fuses ensemble, regime, calibration and doctrine into one probability-weighted verdict…</span></div></div>
   </div>
@@ -729,7 +751,7 @@ async function loadLivebook(){
     $('#lbtable').innerHTML=LB.length?`<table><thead><tr><th>Symbol</th><th class="r">Qty</th><th class="r">Entry</th><th class="r">Last</th><th class="r">P&L</th><th class="c">Engine</th><th class="r">Stop</th><th>Status</th><th></th></tr></thead><tbody>${LB.map(x=>{
       const st=x.status||'—';const sc=st.includes('STOP')||st.includes('EXIT')?'bad':st.includes('conviction')||st.includes('profit')?'ok':'neut';
       const c=dirCode(x.direction);
-      return `<tr><td class="mono" style="cursor:pointer" onclick="predictGo('${esc(x.symbol)}')">${esc(x.symbol)}</td><td class="r mono">${num(x.qty,0)}</td><td class="r mono">${num(x.entry)}</td><td class="r mono">${num(x.last)}</td><td class="r mono ${x.pnl>=0?'up':'down'}">${num(x.pnl,0)}</td><td class="c ${c>0?'up':c<0?'down':'flat'}">${esc(x.direction||'—')}</td><td class="r mono">${num(x.stop??x.rec_stop)}</td><td><span class="tag ${sc}">${esc(st)}</span></td><td style="white-space:nowrap"><button class="btn ghost small" onclick="lbTicket('${esc(x.symbol)}')">Ticket sell</button> <button class="btn ghost small" onclick="lbRemove('${esc(x.symbol)}')">✕</button></td></tr>`}).join('')}</tbody></table>`:'<span class="dim">add your real JS Global holdings — KAIROS will watch them with stops, targets and exit tickets</span>';}
+      return `<tr><td class="mono" style="cursor:pointer" onclick="predictGo('${esc(x.symbol)}')">${esc(x.symbol)}</td><td class="r mono">${num(x.qty,0)}</td><td class="r mono">${num(x.entry)}</td><td class="r mono">${num(x.last)}</td><td class="r mono ${x.pnl>=0?'up':'down'}">${num(x.pnl,0)}</td><td class="c ${c>0?'up':c<0?'down':'flat'}">${esc(x.direction||'—')}</td><td class="r mono">${num(x.stop??x.rec_stop)}</td><td><span class="tag ${sc}">${esc(st)}</span></td><td style="white-space:nowrap"><button class="btn ghost small" onclick="lbTicket('${esc(x.symbol)}')">Ticket sell</button> <button class="btn ghost small" onclick="jFill('${esc(x.symbol)}')">Stage sell</button> <button class="btn ghost small" onclick="lbRemove('${esc(x.symbol)}')">✕</button></td></tr>`}).join('')}</tbody></table>`:'<span class="dim">add your real JS Global holdings — KAIROS will watch them with stops, targets and exit tickets</span>';}
   catch(e){}
 }
 async function lbPost(body,msg){
@@ -752,6 +774,84 @@ $('#lbsync').onclick=async()=>{const b=$('#lbsync');b.disabled=true;const old=b.
     alert(lines.filter(Boolean).join('\n'));loadLivebook();
   }catch(e){alert('JS Global sync failed: '+e.message);}
   b.disabled=false;b.textContent=old;};
+/* ---------- JS Global order desk (real money, double-keyed) ---------- */
+let JO=[];
+async function loadJsg(){
+  try{const r=await api('/api/jsg/orders');if(!r)return;
+    $('#jgsgate').innerHTML=jsgGateHtml(r);
+    JO=r.pending||[];
+    $('#jopending').innerHTML=JO.length?`<table><thead><tr><th>Staged</th><th>Symbol</th><th class="c">Side</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Notional</th><th>Type</th><th>Age</th><th></th></tr></thead><tbody>${JO.map(x=>
+      `<tr><td class="mono">${esc(x.id)}</td><td class="mono">${esc(x.symbol)}</td><td class="c ${x.side==='BUY'?'up':'down'}">${esc(x.side)}</td><td class="r mono">${num(x.qty,0)}</td><td class="r mono">${num(x.price)}</td><td class="r mono">${num(x.qty*x.price,0)}</td><td class="mono">${esc(x.order_type)}</td><td class="dim mono">${jsgAge(x.t)}</td><td style="white-space:nowrap"><button class="btn small" onclick="jAck('${esc(x.id)}')">Ack with PIN</button> <button class="btn ghost small" onclick="jDrop('${esc(x.id)}')">Drop</button></td></tr>`).join('')}</tbody></table>`:'<span class="dim">no staged orders — staging is only enabled when <b>js_global.allow_orders</b> is true</span>';
+  }catch(e){$('#jgsgate').innerHTML=`<span class="down">order desk unreachable: ${esc(e.message)}</span>`}
+}
+function jsgGateHtml(s){
+  const pill=(txt,cls)=>`<span class="tag ${cls}">${txt}</span>`;
+  const bits=[];
+  bits.push(s.configured?pill('broker configured','ok'):pill('broker not configured','bad'));
+  bits.push(s.allow_orders?pill('allow_orders ON','bad'):pill('allow_orders off','neut'));
+  bits.push(s.has_pin?pill('PIN on file','neut'):pill('no stored PIN','ok'));
+  bits.push(s.kill_switch?pill('KILL SWITCH ENGAGED','bad'):pill('kill switch clear','ok'));
+  if(s.order_account)bits.push(pill('account '+esc(String(s.order_account)),'neut'));
+  return bits.join(' ')+' <span class="dim">max per order '+num(s.max_order_notional,0)+'</span>';
+}
+function jsgAge(t){const s=Math.max(0,Math.floor(Date.now()/1000-(t||0)));return s<60?s+'s':Math.floor(s/60)+'m';}
+async function jPost(body){
+  const r=await api('/api/jsg/orders',{method:'POST',body:JSON.stringify(body)});
+  loadJsg();return r;
+}
+$('#jostage').onclick=async()=>{
+  const sym=$('#josym').value.trim(),qty=+$('#joqty').value,price=+$('#joprice').value;
+  if(!sym||!qty||!price){alert('symbol, quantity and price are all required');return}
+  const auto=$('#joauto').checked;
+  const body={symbol:sym,side:$('#josite').value,qty,price,order_type:$('#jotype').value,
+              market:$('#jomkt').value,note:'desk'};
+  try{
+    const row=await jPost(body);
+    if(auto){await jAck(row.id,true);}
+    else alert(`Staged ${row.symbol} ${row.side} ${row.qty} @ ${row.price} (id ${row.id}).\nNothing has reached the broker yet — press Ack with PIN to execute.`);
+  }catch(e){alert('Stage refused: '+e.message)}
+};
+async function jAck(id,useStored){
+  let pin=null;
+  if(!useStored){
+    pin=prompt('Trading PIN for this order (the broker\'s own second factor). Sent once, never stored or logged by KAIROS:');
+    if(pin===null)return;
+  }
+  const how=useStored?'using the PIN stored in your config':'with the PIN you just typed';
+  if(!confirm(`Send ${id} to JS Global now, ${how}? This is a REAL order on your funded account.`))return;
+  try{
+    const r=await api('/api/jsg/orders/ack',{method:'POST',body:JSON.stringify({id,pin})});
+    alert(r.ok?`Accepted by the broker${r.order_no?' · order no '+r.order_no:''}\n${(r.response||'').slice(0,120)}`
+              :`Broker did NOT accept it: ${(r.response||'').slice(0,160)}\nCheck your order list before retrying.`);
+  }catch(e){alert('Ack failed: '+e.message)}
+  loadJsg();
+}
+function jDrop(id){if(confirm(`Discard staged order ${id}? Nothing was sent to the broker.`))
+  api('/api/jsg/orders/drop',{method:'POST',body:JSON.stringify({id})}).then(loadJsg).catch(e=>alert('Drop failed: '+e.message));}
+function jFill(sym){
+  const row=LB.find(x=>(x.symbol||'').toUpperCase()===String(sym).toUpperCase())||{};
+  $('#josym').value=sym;$('#josite').value='SELL';
+  $('#joqty').value=Math.floor(row.qty||0)||'';$('#joprice').value=row.last||row.entry||'';
+  $('#jobandinfo').textContent='';
+  $('#josym').scrollIntoView({behavior:'smooth',block:'center'});
+}
+$('#joband').onclick=async()=>{
+  const sym=$('#josym').value.trim();if(!sym){alert('type a symbol first');return}
+  $('#jobandinfo').textContent='checking…';
+  try{const r=await api('/api/jsg/orders?band_symbol='+encodeURIComponent(sym)+'&market='+$('#jomkt').value);
+    const b=r.band||{};
+    $('#jobandinfo').textContent=b.known?`${sym} ${b.market}: band ${num(b.lower_lock)} – ${num(b.upper_cap)}`
+                                        :`${sym} ${b.market||''}: no broker band returned`;
+  }catch(e){$('#jobandinfo').textContent='band lookup failed: '+e.message}
+};
+async function jCancelLive(){
+  const no=prompt('Broker order number to cancel:');if(!no)return;
+  try{const r=await api('/api/jsg/orders/cancel',{method:'POST',body:JSON.stringify({order_no:no})});
+    alert((r.ok?'Cancel sent · ':'Cancel NOT confirmed · ')+(r.response||''));}
+  catch(e){alert('Cancel failed: '+e.message)}
+}
+setInterval(()=>{if(!document.hidden)loadJsg()},45000);
+loadJsg();
 async function autopilotCtl(body,msg){const el=$('#dapmsg');el.innerHTML='<span class="spinner"></span>working…';
   try{const r=await api('/api/autopilot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     el.innerHTML=r.ok?`<span class="up">${esc(msg||'ok')}</span>`:`<span class="down">${esc(r.error||'failed')}</span>`;}
