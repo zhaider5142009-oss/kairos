@@ -44,7 +44,9 @@ def _calibration() -> dict[str, Any]:
     tr = feedback.track_record() or {}
     return {"hit_rate": tr.get("hit_rate"),
             "strong_hit_rate": tr.get("strong_signal_hit_rate"),
-            "n_resolved": tr.get("resolved", 0)}
+            # the bar self-tunes on realised CALLS, not on HOLDs that happened
+            # to be resolved — non-directional rows carry no accuracy signal
+            "n_resolved": tr.get("directional_resolved", tr.get("resolved", 0))}
 
 
 def _adaptive_threshold(base: float, cal: dict[str, Any]) -> float:
