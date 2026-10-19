@@ -169,3 +169,23 @@ rules:
   min_model_agreement: 0.55          # require 55% of models to concur
   max_spread_pct: 0.60               # live MT5 entry crossing-cost guard
   trail_after_r_multiples: 1         # start ratcheting the stop at +1R
+  max_equity_drawdown_pct: 8.0       # cross-day peak guard: pause entries
+                                     # when equity is 8%+ under its all-time peak
+  psx_min_price: 5.0                 # PSX microstructure screen: no penny scrips
+  psx_min_adv_shares: 50000          # PSX 20d avg volume floor (illiquid = tickets die)
+
+# paper venue economics
+paper:
+  commission_bps: 8.0                # global non-PSX commission, bps of notional
+  psx_commission_bps: 20.0           # PSX all-in (brokerage+GFSS+SECP+PSX+CDC) —
+                                     # tune to your JS Global slab
+
+# autopilot behavior
+autopilot:
+  auto_start_paper: true             # server boot (incl. deployed) resumes the PAPER loop
+                                     # automatically; LIVE never self-arms (needs confirm)
+  psx_auto_watch: true               # daily: rotate top-6 factor leaders from the
+                                     # PSX cross-sectional scan into the watchlist
+
+# public exposure (deployment): set env KAIROS_TOKEN on the server process;
+# every POST/PUT/DELETE then demands X-KAIROS-Token. Reads stay public.

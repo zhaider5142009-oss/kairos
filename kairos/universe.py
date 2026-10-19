@@ -191,6 +191,26 @@ def resolve(symbol: str) -> Instrument | None:
     return _BY_KEY.get(s) or _BY_YAHOO.get(s) or _BY_TV.get(f"PSX:{s}")
 
 
+def register_psx(symbol: str, name: str | None = None,
+                 sector: str = "Unregistered") -> Instrument | None:
+    """Admit a live scan-feed PSX ticker into the tradable registry at
+    runtime. Returns None if the key collides with a non-PSX instrument."""
+    key = symbol.strip().upper()
+    if not key:
+        return None
+    existing = resolve(key)
+    if existing is not None:
+        return existing if existing.market == "PSX" else None
+    inst = _psx(key, name or key, sector)
+    ALL.append(inst)
+    _BY_KEY[key] = inst
+    if inst.yahoo:
+        _BY_YAHOO[inst.yahoo.upper()] = inst
+    if inst.tv:
+        _BY_TV[inst.tv.upper()] = inst
+    return inst
+
+
 def keys() -> list[str]:
     return list(_BY_KEY.keys())
 

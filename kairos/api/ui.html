@@ -400,7 +400,10 @@ const dirTag=v=>{const d=dirCode(v);return d>0?'<span class="tag bull">▲ BULLI
 const esc=t=>String(t??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let UNIVERSE=[];
 
-async function api(path,opts){const r=await fetch(path,opts);const j=await r.json().catch(()=>({ok:false,error:'bad response'}));if(!r.ok&&!j.ok)throw new Error(j.error||j.detail||('HTTP '+r.status));return j}
+async function api(path,opts){opts=opts||{};const m=(opts.method||'GET').toUpperCase();opts.headers=Object.assign({},opts.headers||{});if(m!=='GET')opts.headers['Content-Type']='application/json';const saved=localStorage.getItem('kairos_token')||'';if(saved)opts.headers['X-KAIROS-Token']=saved;
+let r=await fetch(path,opts);let j=await r.json().catch(()=>({ok:false,error:'bad response'}));
+if(r.status===401){const t=prompt('KAIROS access token (value of KAIROS_TOKEN on this server):');if(t&&t.trim()){opts.headers['X-KAIROS-Token']=t.trim();localStorage.setItem('kairos_token',t.trim());r=await fetch(path,opts);j=await r.json().catch(()=>({ok:false,error:'bad response'}));}if(r.status===401)throw new Error('unauthorized — wrong or missing token');}
+if(!r.ok&&!j.ok)throw new Error(j.error||j.detail||('HTTP '+r.status));return j}
 
 /* ---------- nav ---------- */
 $$('#nav button').forEach(b=>b.onclick=()=>{

@@ -221,8 +221,25 @@ class PaperBroker:
             self._save()
 
     # -- order -----------------------------------------------------------------
+    def _fee_bps(self, symbol: str) -> float:
+        """Commission model, config-tunable. PSX cash gets a higher default
+        because brokerage + GFSS + SECP + PSX + CDC levies stack ~0.2% all-in;
+        keep it conservative until the broker's exact slab is configured."""
+        p = CFG.section("paper") or {}
+        try:
+            from .universe import resolve
+            inst = resolve(symbol)
+            if inst and inst.market.upper() in ("PSX", "KSE"):
+                return float(p.get("psx_commission_bps", 20.0))
+        except Exception:
+            pass
+        return float(p.get("commission_bps", 8.0))
+
     def submit(self, intent: OrderIntent, fill_price: float,
-               slippage_bps: float = 5.0, commission_bps: float = 8.0) -> Fill | None:
+               slippage_bps: float = 5.0,
+               commission_bps: float | None = None) -> Fill | None:
+        if commission_bps is None:
+            commission_bps = self._fee_bps(intent.symbol)
         slip = fill_price * slippage_bps / 10_000
         price = fill_price + slip if intent.side == "BUY" else fill_price - slip
         commission = price * intent.quantity * commission_bps / 10_000
@@ -243,7 +260,9 @@ class PaperBroker:
             pos["qty"] += qty
             if abs(pos["qty"]) < 1e-9:
                 del self.positions[intent.symbol]
-        self.cash -= commission
+        # proper cash ledger: buys consume notional, sells return it, so
+        # equity = cash + Σ qty·last stays a true mark-to-market number
+        self.cash -= price * qty + commission
         self.realized_pnl += realized - commission
         self.day_pnl += realized - commission
         fill = Fill(intent.client_order_id, f"paper-{int(time.time() * 1000)}",

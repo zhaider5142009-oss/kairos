@@ -23,7 +23,7 @@ KAIROS forecasts **crypto** (22 majors: BTC, ETH, SOL, BNB, XRP, ADA, DOGE, AVAX
 | **LLM council** | Multi-model deliberation (OpenRouter) with median consensus — optional per prediction |
 | **Fugu conductor** | One fused verdict per instrument from all experts — ensemble score, model agreement, regime, realized calibration, doctrine R:R geometry, risk posture — emitting probability-weighted edge in R-multiples; the entry bar adapts automatically to KAIROS' own realized hit-rate |
 | **Execution** | Paper broker (slippage + commission + immutable JSONL journal), MT5 bridge (commodities/FX, attach-only — never launches or blocks the terminal), JS Global ticket desk (PSX, human-confirm), PMX futures scaffold (tickets-only, account-ready) |
-| **Validation** | Walk-forward backtests with hysteresis, cost hurdle, vol targeting; paper sessions with P&L verdicts |
+| **Validation** | Walk-forward backtests with hysteresis, cost hurdle, vol targeting; paper sessions with a proper cash ledger + PSX commission model; realized outcomes feed back every 12 cycles so the system's own hit-rate tunes its entry bar |
 
 ## Quick start
 
@@ -75,7 +75,7 @@ python -m kairos serve
 - **PSX Scan** — factor leaderboard over the whole exchange
 - **Portfolio** — annealed allocation with per-instrument metrics
 - **Paper Trading** — gated orders, account state, walk-forward validation, immutable journal
-- **Trade Like a Pro** — the autonomous desk: start/stop the autopilot, arm LIVE execution, broker-connection strip (MT5 + JS Global), kill switch, live signal board, positions and audit feed. Every held position is actively managed — hard stops, targets, a trailing ratchet in R-multiples and venue reconciliation — and three circuit breakers (−3% day, 60% gross exposure, 4 straight losses) pause new entries while exits keep running. Fresh entries additionally pass the **Fugu conductor** gate: no trade unless the fused verdict shows ≥0.15R probability-weighted edge and clears the adaptive conviction bar
+- **Trade Like a Pro** — the autonomous desk: start/stop the autopilot, arm LIVE execution, broker-connection strip (MT5 + JS Global), kill switch, live signal board, positions and audit feed. Every held position is actively managed — hard stops, targets, a trailing ratchet in R-multiples and venue reconciliation — and four circuit breakers (−3% day, 60% gross exposure, 4 straight losses, 8% cross-day drawdown from the equity peak) pause new entries while exits keep running. The watchlist itself rotates daily onto the PSX cross-sectional factor leaders — auto-admitted to the registry and screened for price floor and traded volume before they're ever tradable. Fresh entries additionally pass the **Fugu conductor** gate: no trade unless the fused verdict shows ≥0.15R probability-weighted edge and clears the adaptive conviction bar
 - **Fugu conductor panel** — live board of fused expert verdicts per instrument: direction, conviction, P(win), edge in R-multiples, R:R geometry and the exact reasons a call was taken or passed; refreshes every two minutes and is served at `/api/fugu`
 - **Shareable live signals** — one click per signal: an Instagram-square 1080×1080 PNG card (`/api/signal-card?symbol=…`) plus a WhatsApp-ready caption copied to your clipboard; every card carries the not-investment-advice disclaimer
 - **JS Global live book** — one click ("Sync from JS Global" / `kairos livebook --sync`) logs into your broker's Web Trade Cast **read-only** and imports your real holdings (quantity, average, pending sells, sold-out positions auto-released); KAIROS then reviews every position through the engine (live price, P&L, call, recommended stop, status) and produces broker-ready SELL tickets awaiting your confirmation
@@ -89,6 +89,29 @@ python -m kairos setup-wsl     # installs Chronos-Bolt, TimesFM-2.5, qlib into W
 ```
 
 Everything degrades gracefully — KAIROS runs fully without WSL, without the LLM council, and with any single data source down.
+
+## Always-on & deployment
+
+**On your PC (the trading brain):** `tools/kairos-daemon.bat` is a 30-second
+watchdog — it keeps the control tower alive, mints a one-time access token to
+`data/kairos_token.txt`, and (if `tools/cloudflared.exe` is present) opens a
+free Cloudflare quick tunnel so the same tower is reachable from anywhere.
+`tools/mkstartup.ps1` registers it hidden in the Windows Startup folder, so
+every boot ends with a live KAIROS. On server boot the **paper autopilot
+auto-resumes** (`autopilot.auto_start_paper`) — the self-improvement loop
+never has to be re-armed by hand. Live mode still requires an explicit
+`confirm_live`, and PSX still issues human-confirmed tickets.
+
+**Remote access security:** when `KAIROS_TOKEN` is set, every `/api/` call
+(reads included — the live book carries real holdings) demands
+`X-KAIROS-Token`; the browser desk prompts once and remembers it.
+`KAIROS_AUTH=writes` relaxes reads to public if you prefer a shared dashboard.
+
+**Free hosted mirror (Render):** `render.yaml` + `Dockerfile` are ready —
+connect the repo on render.com (free plan), it builds with core deps only,
+carries **no** `config.yaml` (so no broker/LLM secrets ever leave your PC) and
+runs the full paper loop + desk with a generated `KAIROS_TOKEN`. Free tier
+sleeps after inactivity; the PC daemon is the permanent engine.
 
 ## Configuration
 

@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import threading
 import time
+
+import numpy as np
+import pandas as pd
 from datetime import datetime
 from typing import Any
 
@@ -54,7 +57,9 @@ class Autopilot:
                 "entry_threshold": 0.18, "exit_threshold": 0.05,
                 "max_trades_per_cycle": 2, "horizon_days": 5,
                 "cycles": 0, "last_cycle": None, "last_error": None,
-                "signals": [], "actions": [], "held": {}, "consec_losses": 0}
+                "signals": [], "actions": [], "held": {}, "consec_losses": 0,
+                "equity_peak": 0.0, "peak_since": None,
+                "last_rotation": None, "rotated": []}
 
     def _load(self) -> dict[str, Any]:
         st = self._defaults()
@@ -208,6 +213,8 @@ class Autopilot:
                     trades < st["max_trades_per_cycle"]:
                 if posture["block_entries"]:
                     action, detail = "BREAKER", posture["blockers"][0]
+                elif is_psx and (liq := self._psx_liquid(inst)):
+                    action, detail = "LIQUIDITY", liq
                 else:
                     # model-agreement gate: the battery must broadly concur
                     models = res.get("models") or []
@@ -269,7 +276,96 @@ class Autopilot:
             st.update({"cycles": st["cycles"] + 1, "last_cycle": _now(),
                        "signals": rows[:12]})
             self._save()
+        # self-improvement pulse: resolve realized outcomes so Fugu's
+        # calibration anchor and the adaptive entry bar keep tracking truth
+        if st["cycles"] % 12 == 0:
+            try:
+                from . import feedback as _FB
+                n = _FB.resolve_outcomes(ENGINE.md)
+                if n:
+                    JOURNAL.log("FEEDBACK_RESOLVED", {"newly_resolved": n})
+            except Exception:
+                pass
+        self._maybe_rotate_psx()
         return {"trades": trades, "signals": len(rows)}
+
+    # ------------------------------------------------------- PSX sophistication
+    def _psx_liquid(self, inst) -> str | None:
+        """Microstructure screen: reject illiquid or penny PSX scrips — on the
+        real exchange these are the names where tickets die unfilled or get
+        hit by price bands. Returns a rejection reason, or None if tradable."""
+        from . import rules as _R
+        from .engine import ENGINE
+        try:
+            df = ENGINE.md.history(inst)
+        except Exception:
+            return None
+        if df is None or len(df) < 20:
+            return "insufficient PSX trading history"
+        px = float(df["close"].iloc[-1])
+        min_px = float(_R.get_rule("psx_min_price", 5.0))
+        if px < min_px:
+            return f"price {px:.2f} under Rs {min_px:.0f} — penny-scrip risk"
+        if "volume" in df.columns:
+            v = pd.to_numeric(df["volume"], errors="coerce").tail(20).mean()
+            min_v = float(_R.get_rule("psx_min_adv_shares", 50000))
+            if v is not None and not np.isnan(float(v)) and float(v) < min_v:
+                return f"20d volume {float(v):,.0f}/day under {min_v:,.0f}"
+        return None
+
+    def _maybe_rotate_psx(self) -> None:
+        """Daily scan-driven watchlist refresh: the cross-sectional factor
+        leaders join the autopilot's own symbol set (and are swapped out when
+        they fall off, unless a position is open)."""
+        ap = CFG.section("autopilot") or {}
+        if not ap.get("psx_auto_watch", True):
+            return
+        st = self.st
+        last = st.get("last_rotation")
+        if last and self._age_days(last) < 1.0:
+            return
+        try:
+            from .engine import ENGINE
+            scan = ENGINE.scan(top=15)
+        except Exception:
+            return
+        if not scan.get("ok"):
+            return
+        from . import rules as _R
+        from .universe import register_psx
+        min_px = float(_R.get_rule("psx_min_price", 5.0))
+        min_v = float(_R.get_rule("psx_min_adv_shares", 50000))
+        fresh: list[str] = []
+        for row in scan.get("top") or []:
+            sym = str(row.get("name") or "").upper().strip()
+            if not sym or sym in fresh:
+                continue
+            try:
+                px = float(row.get("close") or 0)
+                vol = float(row.get("volume") or 0)
+            except (TypeError, ValueError):
+                continue
+            if px < min_px:                      # penny-scrip screen
+                continue
+            if vol and vol < min_v:              # liquidity screen
+                continue
+            if register_psx(sym, str(row.get("sector") or "")) is None:
+                continue                         # collides with a non-PSX key
+            fresh.append(sym)
+            if len(fresh) == 6:
+                break
+        if not fresh:
+            return
+        rotated = set(st.get("rotated") or [])
+        keep = [s for s in st["symbols"]
+                if s not in rotated or s in st["held"]]
+        st["symbols"] = keep + [s for s in fresh[:6] if s not in keep]
+        st["rotated"] = fresh[:6]
+        st["last_rotation"] = _now()
+        self._act("WATCHLIST", "ROTATE", "PSX factor leaders: "
+                  + ", ".join(fresh[:6]))
+        JOURNAL.log("AUTOPILOT_ROTATION", {"added": fresh[:6]})
+        self._save()
 
     # ------------------------------------------------------------- execution
     def _venue_symbol(self, key: str, is_psx: bool, live: bool) -> str:
@@ -324,9 +420,25 @@ class Autopilot:
                             f"{r['max_total_exposure_pct']}% cap")
         if consec >= int(r["max_consecutive_losses"]):
             blockers.append(f"{consec} consecutive losses — cooling off entries")
+        # cross-day equity drawdown guard (merged from JARVIS v1
+        # profit_engine.DrawdownGuard): persistent peak tracker, de-risk after
+        # a multi-day trough even when each individual day looked fine.
+        peak = float(self.st.get("equity_peak") or 0)
+        dd_pct = 0.0
+        if eq > 0:
+            if eq > peak:
+                self.st["equity_peak"] = round(eq, 2)
+                self.st["peak_since"] = _now()
+            elif peak > 0:
+                dd_pct = (1 - eq / peak) * 100
+                if dd_pct > float(_R.get_rule("max_equity_drawdown_pct", 8.0)):
+                    blockers.append(f"equity {dd_pct:.1f}% under peak "
+                                    f"{peak:,.0f} — drawdown guard active")
         return {"equity": eq, "day_pnl": day,
                 "exposure_pct": round(exposure_pct, 1),
                 "consec_losses": consec, "n_positions": len(pos_list or []),
+                "equity_peak": round(max(peak, eq), 2),
+                "dd_from_peak_pct": round(dd_pct, 2),
                 "block_entries": bool(blockers), "blockers": blockers}
 
     # ------------------------------------------------------ position management

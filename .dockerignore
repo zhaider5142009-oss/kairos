@@ -1,0 +1,10 @@
+config.yaml
+data/
+reports/
+kairos.egg-info/
+.git/
+__pycache__/
+*.pyc
+tests/
+.venv/
+wandb/

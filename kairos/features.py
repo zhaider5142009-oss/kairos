@@ -449,6 +449,7 @@ def cross_sectional_factors(snapshot: pd.DataFrame) -> pd.DataFrame:
         tv_rec = zsc(-rec) if rec.notna().sum() > 5 else None
 
     out = pd.DataFrame({"name": df.get("name"), "close": df.get("close"),
+                        "volume": df.get("volume"),
                         "sector": df.get("sector"),
                         "momentum_1m": mom1m, "momentum_3m": mom3m,
                         "momentum_12_1": mom12_1, "value": value,

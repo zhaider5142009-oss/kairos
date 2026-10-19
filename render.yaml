@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: kairos-tower
+    env: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: KAIROS_TOKEN        # gates every POST/PUT/DELETE; reads stay public
+        generateValue: true

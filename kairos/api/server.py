@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import secrets
 import sys
 from pathlib import Path
 
@@ -10,12 +12,48 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
+from kairos.config import CFG  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 
 from kairos.engine import ENGINE  # noqa: E402
 from kairos.universe import resolve, universe  # noqa: E402
 
-app = FastAPI(title="KAIROS Control Tower", version="2.0.0")
+app = FastAPI(title="KAIROS Control Tower", version="2.1.0")
+
+
+# ------------------------------------------------------------ remote deploy auth
+# When KAIROS_TOKEN is set, the whole API locks (reads too — the live book
+# carries real holdings) except /api/health. KAIROS_AUTH=writes relaxes GETs
+# to public. Locally, leave the token unset for a fully open desk.
+AUTH_TOKEN = os.environ.get("KAIROS_TOKEN", "")
+AUTH_MODE = os.environ.get("KAIROS_AUTH", "all").lower()
+
+
+@app.middleware("http")
+async def _token_gate(request, call_next):
+    if AUTH_TOKEN and request.url.path != "/api/health":
+        mutating = request.method in ("POST", "PUT", "DELETE", "PATCH")
+        gated_read = (AUTH_MODE == "all"
+                      and request.url.path.startswith("/api/"))
+        if mutating or gated_read:
+            tok = (request.headers.get("x-kairos-token")
+                   or request.query_params.get("token") or "")
+            if not secrets.compare_digest(tok, AUTH_TOKEN):
+                return JSONResponse(status_code=401,
+                                    content={"ok": False, "error": "unauthorized"})
+    return await call_next(request)
+
+
+@app.on_event("startup")
+def _auto_resume():  # paper only, by doctrine — live never resurrects itself
+    ap = (CFG.section("autopilot") or {}) if hasattr(CFG, "section") else {}
+    if ap.get("auto_start_paper", True):
+        try:
+            from kairos.autopilot import AUTOPILOT
+            AUTOPILOT.start("paper")
+        except Exception:
+            pass
 
 
 @app.exception_handler(Exception)

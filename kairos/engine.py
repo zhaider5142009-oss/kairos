@@ -344,7 +344,8 @@ Respond ONLY with a JSON object:
         if snap.empty:
             return {"ok": False, "error": "PSX snapshot unavailable (TradingView down?)"}
         factors = self._factors = cross_sectional_factors(snap)
-        cols = [c for c in ("name", "close", "sector", "momentum_1m", "momentum_3m",
+        cols = [c for c in ("name", "close", "volume", "sector", "momentum_1m",
+                            "momentum_3m",
                             "value", "quality", "low_vol", "composite_score", "rank")
                 if c in factors.columns]
         top_df = factors[cols].head(top)
