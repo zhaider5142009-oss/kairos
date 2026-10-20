@@ -23,7 +23,9 @@ return against the direction claimed. Neither depends on today's config. The fir
 that repair had a hole of its own, and it is the reason the label is matched on a substring:
 it matched `BUY` exactly, while the ensemble's vocabulary is `STRONG BUY / BUY / HOLD / SELL /
 STRONG SELL`, so the strongest band — exactly the one the strong-signal rate is measured on —
-was filed as a loss it had actually won.
+was filed as a loss it had actually won. And the write path had the same coupling all along:
+`directional` and `correct` are stamped at resolution time and read back for the life of the
+record, so they now come from the row's own claim too, with the band only a fallback.
 """
 
 from __future__ import annotations
@@ -251,6 +253,36 @@ def test_a_row_with_no_label_at_all_falls_back_to_the_score(journal,
     tr = F.track_record()
     assert tr["directional_resolved"] == 1
     assert tr["hit_rate"] == 1.0          # up claimed, up delivered
+
+
+def test_resolution_writes_the_claim_not_todays_band(journal, monkeypatch):
+    """Same rule at write time as at read time.
+
+    `directional` and `correct` are stamped once and read back forever, so if
+    the stamp came from whatever threshold is configured that day, tuning the
+    gate tomorrow would choose which of today's snapshots ever counted — the
+    landmine one step earlier in the pipeline.
+    """
+    monkeypatch.setattr(F, "_direction_threshold", lambda: 0.60)
+    _write(journal, [_row(symbol="OGDC", score=0.4, exp=0.03),
+                     _row(symbol="HUBC", score=0.02, exp=0.0)])
+    F.resolve_outcomes(_Md(_bars(30, drift=0.004)))
+    out = _resolved(journal)
+    buy, hold = [r for r in out if r["symbol"] == "OGDC"][0], \
+                [r for r in out if r["symbol"] == "HUBC"][0]
+    assert buy["directional"] is True        # labelled BUY: the claim stands
+    assert buy["correct"] is True            # ...and it came in
+    assert hold["directional"] is False      # labelled HOLD: never a call
+
+
+def test_a_tightened_gate_cannot_un_make_a_call(journal, monkeypatch):
+    """The desk gate is tunable; a claim already recorded is not retracted by it."""
+    monkeypatch.setattr(F, "_direction_threshold", lambda: 0.90)
+    _write(journal, [_row(symbol="LUCK", score=0.42, exp=0.03)])
+    F.resolve_outcomes(_Md(_bars(30, drift=0.004)))
+    tr = F.track_record()
+    assert tr["directional_resolved"] == 1
+    assert tr["hit_rate"] == 1.0
 
 
 def test_no_evidence_does_not_inflate_confidence(journal, monkeypatch):

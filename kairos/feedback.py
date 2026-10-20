@@ -95,12 +95,20 @@ def resolve_outcomes(md, lookback_days: int = 90) -> int:
             # read as a perfect prediction.
             continue
         realized = float(df["close"].iloc[i1] / df["close"].iloc[i0] - 1)
-        directional = abs(e["score"]) > thr
-        pred_dir = 1 if e["score"] > thr else -1 if e["score"] < -thr else 0
-        correct = bool(pred_dir != 0 and np.sign(e["score"]) == np.sign(realized))
+        # Judge the row on the claim it carries, not on the band configured
+        # today. `directional` and `correct` are read back for the rest of the
+        # record's life, so deciding them from a threshold the operator can
+        # still move would let next week's tuning choose which of this week's
+        # snapshots ever counted — and the gate the desk actually trades
+        # against is a separate runtime value that this config key does not
+        # even track. The band is a fallback for rows with no label on them.
+        side = _claimed_side(e)
+        if side is None:
+            side = 1 if e["score"] > thr else -1 if e["score"] < -thr else 0
         err = abs(realized - e["expected_return"])
         e.update(resolved=True, realized_return=round(realized, 5),
-                 directional=directional, correct=correct, abs_err=round(err, 5))
+                 directional=side != 0, correct=bool(side) and side * realized > 0,
+                 abs_err=round(err, 5))
         newly += 1
     if newly:
         atomic_write(JOURNAL, "\n".join(json.dumps(e) for e in lines) + "\n")
