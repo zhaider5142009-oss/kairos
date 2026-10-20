@@ -6,7 +6,7 @@ _Rebuilt from the on-disk journals by `tools/make_track_record.py`. Unaudited. N
 
 | measure | value |
 |---|---|
-| predictions journaled | 869 |
+| predictions journaled | 890 |
 | horizons matured | 140 |
 | of which directional calls | 0 |
 | of which non-trades (HOLD) | 140 |
@@ -44,8 +44,8 @@ _Backtests are not returns. They include costs but not every market impact, and 
 
 ## 3. Live paper book
 
-- Capital Rs 1,000,000 · equity Rs 999,992 · realized P&L Rs -13.05 since 2026-10-19T16:56:33
-- Autopilot cycles run: **154** · mode `paper` · live-armed: False
+- Capital Rs 1,000,000 · equity Rs 999,992 · realized P&L Rs -13.05 since 2026-10-20T18:25:48
+- Autopilot cycles run: **157** · mode `paper` · live-armed: False
 - Open paper positions: 0 · fills: 2
 
 ## 4. Funded account (read-only, from the broker)

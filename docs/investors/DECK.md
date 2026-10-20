@@ -1,0 +1,163 @@
+# KAIROS — investor deck
+*12 slides. Say the true thing on every one of them. Figures dated 2026-10-20; refresh `TRACK_RECORD.md` before presenting.*
+
+---
+
+## 1. Title
+
+**KAIROS**
+Autonomous prediction and execution for Pakistan and global markets.
+
+Built by one operator, running 24/7, publishing its own losses.
+
+> *Note: open with "I am not here to raise money to trade for you." It buys the room for the next eleven slides.*
+
+---
+
+## 2. The gap
+
+- PSX: ~380 listed companies, retail-dominated, thin books outside the heavyweights, no
+  institutional-grade systematic tooling available to a small account.
+- Global signal infrastructure exists in abundance and connects to no Pakistani broker.
+- Nobody in either market publishes an honest failure record.
+
+**The wedge is not the alpha. The wedge is the plumbing plus the honesty.**
+
+---
+
+## 3. What it is
+
+| | |
+|---|---|
+| Code | 10,584 lines Python · 34 modules · public repo |
+| Strategies | 100, selected per instrument by walk-forward search |
+| Council | 6 LLM models across 2 providers, named-seat consensus |
+| Execution | paper + JS Global PSX bridge + MT5 |
+| Uptime | 24/7 daemon, watchdog, token-gated public API |
+| Tests | 87 passing, money path included |
+
+Not a fund. No client money. No licence. No AUM.
+
+---
+
+## 4. Proof: out-of-sample, costs modelled
+
+8 / 14 instruments profitable:
+
+SILVER **+44.5%** · GOLD **+28.7%** (vs +13.4% buy-and-hold, Sharpe 1.61) · WTI **+25.1%**
+(Sharpe 1.68) · WHEAT +19.5% · HBL +9.3% · BRENT +6.8% · NATGAS +4.2% · KSE100 +0.0%
+
+Reported as losses: BTC −0.8% · EURUSD −0.6% · MCB −0.2% · COPPER −4.7% · LUCK −9.2% · OGDC −14.1%
+
+> *Note: read the losses before the winners. It is the only slide that makes the winners credible.*
+
+---
+
+## 5. The uncomfortable finding
+
+**PSX equities lost money net of local costs.** −2.8% mean across the equity book against
++13.6% across the global book. Observed fee-and-slippage drag on active stock trials: ~8%.
+
+That is not a bug, it is a market structure fact, and it is the reason most PSX "signals"
+never survive to a real account. Any PSX strategy here is sized against cost before
+conviction.
+
+---
+
+## 6. What is *not* proven
+
+- **No forward track record.** 890 predictions journaled, 140 horizons matured, all 140 were
+  non-trades. A directional hit rate does not yet exist.
+- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 154 cycles, 2 fills.
+- Live execution path is built and gated, not exercised at scale.
+- No audit, no team, no third-party capital.
+
+> *Note: this slide has ended more conversations than any other. Keep it. A prospect who walks away here was never going to fund slide 4.*
+
+---
+
+## 7. The integrity story — why to trust slide 4
+
+Our own scorer reported **100% hit rate**. It was counting non-trades as correct predictions,
+and grading un-printed horizons on the last flat bar. It fed a 1.05× confidence bonus into
+live entry thresholds.
+
+We found it, fixed it, pinned confidence to 1.0 until 10 real calls mature, and wrote 8
+regression tests so it cannot come back.
+
+**A system that audits its own performance numbers is the product.** Everything else is a
+chart.
+
+---
+
+## 8. Architecture that transfers
+
+1. Fail-closed execution: three independent arming keys, kill switch, notional cap enforced
+   in the order bridge, price band, cash-ledger check, no shorting a cash market,
+   stage→ack with TTL.
+2. Council integrity: a dead seat shrinks the council instead of substituting another
+   provider's opinion into a "median".
+3. Self-calibration from realized outcomes, with a leash that refuses to trust thin evidence.
+4. Venue-agnostic risk layer — PSX today, MT5 now, PMX scaffolded.
+5. Secrets handling: broker PIN storable in git-ignored config only, never logged or echoed,
+   one-click disarm.
+
+---
+
+## 9. Who this is for
+
+| buyer | why it is worth something to them |
+|---|---|
+| **PSX broker / digital desk** | an execution + risk stack that already speaks their portal, as a differentiator for their own clients |
+| **Asset manager / mutual fund** | signal research and an instrumented journal they can diligence — costs and all |
+| **Exchange / market infrastructure** | a working proof that retail-accessible systematic tooling can be built locally |
+| **Strategic technology acquirer** | the only Pakistani-market stack of this shape that is open enough to verify |
+
+---
+
+## 10. Business shape
+
+- **Now:** licensing / acquisition of the engine, or a bounded pilot inside a licensed firm.
+- **Pilot deliverable:** a real forward record — 100+ matured directional calls on a named
+  book, published either way.
+- **Deliberately not for sale:** pooled capital, managed accounts, or a return promise.
+  Those require a licensed vehicle, and proposing one without counsel would be the fastest
+  way to lose the only asset that matters here: credibility.
+
+---
+
+## 11. Roadmap, evidence-first
+
+| step | gate |
+|---|---|
+| 1. Grow the forward record | 100 matured directional calls; hit rate published however it lands |
+| 2. Fix the cost problem | a PSX equity book that survives fees out-of-sample, or PSX equities are dropped |
+| 3. Pilot on a real but bounded mandate | one institution, one instrument class, kill switch in their hands |
+| 4. Licensed structure | only with counsel and a regulator-appropriate wrapper |
+
+---
+
+## 12. Close
+
+**Verify, don't trust.**
+
+```
+github.com/zhaider5142009-oss/kairos
+python tools/make_track_record.py     # rebuilds the ledger from the journals
+```
+
+z.haider5142009@gmail.com
+
+> *Note: ask for one specific thing — a 20-minute technical review with someone who can diligence a codebase. Not money.*
+
+---
+
+## Presenter rules
+
+1. Never say "returns", "guaranteed", "passive income", "100%" or "AI beats the market".
+2. Lead every number with its caveat once, out loud.
+3. If asked "how much can I make", answer: "there is no forward record yet; that is what a
+   pilot is for."
+4. If asked for money, answer: "I'm not raising a fund; I'm looking for a licensed partner
+   and a pilot."
+5. Send only what the deck already says. No bespoke projections, ever.

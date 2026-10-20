@@ -233,6 +233,26 @@ trading box:
 4. **Everything journaled** — append-only JSONL audit trail with idempotent client order IDs.
 5. **Real money turns more than one key** — a PSX order needs `allow_orders` **and** the broker PIN **and**, for autonomy, `auto_place`; tickets are the default, a PIN is never logged or echoed, and an order whose POST died in transit is discarded rather than re-sent.
 
+## Verification & commercial interest
+
+Every published figure is regenerated from the on-disk journals, so the claims and the code
+cannot drift apart:
+
+```bash
+python tools/make_track_record.py   # rebuilds docs/investors/TRACK_RECORD.md
+python -m kairos.cli feedback       # realized record, live
+```
+
+[docs/investors/](docs/investors/) holds the ledger, a one-pager, the whitepaper and the
+deck. Read the ledger first: there is **no forward track record yet** — 890 predictions
+journaled, 140 horizons matured, all 140 non-trades — and 6 of 14 instruments in the
+walk-forward sweep lost money. That is the honest state of the project, and it is the reason
+the risk layer exists.
+
+KAIROS is research infrastructure, not a fund: no pooled capital, no managed accounts, no
+licence, no return promise. Open to licensing, acquisition, or a bounded pilot inside a
+licensed firm — contact in the one-pager.
+
 ## License
 
 Released under the [MIT License](LICENSE). Free to use, modify and redistribute

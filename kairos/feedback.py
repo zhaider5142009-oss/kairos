@@ -140,7 +140,11 @@ def track_record() -> dict[str, Any]:
                 "calibration_by_confidence": {},
                 "reason": "every resolved snapshot was a HOLD — no directional "
                           "call has matured yet",
-                "recent": done[-8:]}
+                # An empty list, not the HOLD rows. A non-trade shown under a
+                # "correct ✓" column reads as evidence of skill; it is evidence
+                # of nothing, and a diligence reader is entitled to not be
+                # shown it as if it were a call.
+                "recent": []}
     hits = sum(1 for e in calls if e["correct"])
     strong = [e for e in calls if abs(e["score"]) > 0.5]
     strong_h = sum(1 for e in strong if e["correct"])

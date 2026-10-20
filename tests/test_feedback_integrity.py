@@ -122,6 +122,8 @@ def test_all_hold_journal_has_no_hit_rate(journal, monkeypatch):
     tr = F.track_record()
     assert tr["hit_rate"] is None
     assert "HOLD" in tr["reason"]
+    # the desk's per-row ✓ column must not be fed non-trades
+    assert tr["recent"] == []
 
 
 def test_legacy_rows_without_the_flag_are_rederived(journal, monkeypatch):

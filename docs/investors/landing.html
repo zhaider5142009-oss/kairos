@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KAIROS — autonomous prediction & execution for Pakistan and global markets</title>
+<meta name="description" content="Open-source systematic trading stack for PSX, FX, commodities and crypto. Walk-forward validated, fail-closed execution, published losses. No forward track record yet, and no return promised.">
+<style>
+  :root{--bg:#080a0f;--panel:#11151d;--line:#1e2431;--tx:#e6e9ef;--dim:#8b94a6;
+        --grn:#2fd48a;--red:#ff5c6c;--amber:#f0b429;--blue:#5aa9ff}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--tx);
+       font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Inter,Roboto,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:0 22px}
+  header{padding:84px 0 46px;border-bottom:1px solid var(--line)}
+  h1{font-size:clamp(38px,7vw,62px);letter-spacing:-.03em;line-height:1.04}
+  h1 span{color:var(--grn)}
+  .sub{color:var(--dim);font-size:clamp(17px,2.4vw,21px);margin-top:18px;max-width:64ch}
+  .cta{margin-top:30px;display:flex;gap:12px;flex-wrap:wrap}
+  .btn{padding:12px 20px;border-radius:10px;text-decoration:none;font-weight:600;font-size:15px}
+  .btn.a{background:var(--grn);color:#04120b}
+  .btn.b{border:1px solid var(--line);color:var(--tx)}
+  .warn{margin-top:22px;padding:12px 15px;border-left:3px solid var(--amber);
+        background:rgba(240,180,41,.07);color:#e8d9ac;font-size:14.5px;border-radius:0 8px 8px 0}
+  section{padding:54px 0;border-bottom:1px solid var(--line)}
+  h2{font-size:26px;letter-spacing:-.01em;margin-bottom:8px}
+  .lede{color:var(--dim);margin-bottom:26px;max-width:70ch}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
+  .card h3{font-size:15px;color:var(--blue);margin-bottom:8px;letter-spacing:.01em}
+  .card p{font-size:14px;color:var(--dim)}
+  table{width:100%;border-collapse:collapse;font-size:14.5px;margin-top:6px}
+  th{color:var(--dim);text-align:left;font-weight:600;padding:9px 10px;border-bottom:1px solid var(--line)}
+  td{padding:9px 10px;border-bottom:1px solid #151a24}
+  .up{color:var(--grn);font-variant-numeric:tabular-nums}
+  .dn{color:var(--red);font-variant-numeric:tabular-nums}
+  .stat{display:flex;gap:34px;flex-wrap:wrap}
+  .stat div{min-width:140px}
+  .stat b{display:block;font-size:34px;letter-spacing:-.02em;font-weight:700}
+  .stat small{color:var(--dim);font-size:13px}
+  code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  pre{background:#0b0e14;border:1px solid var(--line);border-radius:12px;padding:16px;
+      overflow-x:auto;font-size:13.5px;color:#c8d3e6;margin-top:16px}
+  ul{padding-left:20px;color:var(--dim);font-size:14.5px}
+  li{margin:7px 0}
+  footer{padding:42px 0 64px;color:var(--dim);font-size:13.5px}
+  a{color:var(--blue)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>KAI<span>R</span>OS</h1>
+  <p class="sub">An open-source prediction and execution stack for the Pakistan stock
+  exchange, FX, commodities and crypto — running 24/7, placing its own orders behind a
+  fail-closed risk layer, and publishing the instruments where it lost money.</p>
+  <div class="cta">
+    <a class="btn a" href="#verify">Verify the numbers</a>
+    <a class="btn b" href="https://github.com/zhaider5142009-oss/kairos">Read the code</a>
+    <a class="btn b" href="#record">Track record</a>
+  </div>
+  <p class="warn"><b>Read this first.</b> KAIROS has <b>no forward track record yet</b> and
+  manages no third-party capital. It is not an offer of securities, not investment advice,
+  and makes no return promise. Every figure below is reproducible from the repository.</p>
+</header>
+
+<section>
+  <h2>What is actually built</h2>
+  <div class="stat">
+    <div><b>10,584</b><small>lines of Python, 34 modules, public</small></div>
+    <div><b>100</b><small>strategies selected per instrument, walk-forward</small></div>
+    <div><b>6</b><small>LLM council seats across 2 providers</small></div>
+    <div><b>87</b><small>passing tests, money path included</small></div>
+    <div><b>24/7</b><small>supervised daemon, watchdog, token-gated API</small></div>
+  </div>
+</section>
+
+<section id="record">
+  <h2>Out-of-sample results — the whole table, not the best row</h2>
+  <p class="lede">100 candidate strategies per instrument, parameters chosen on a rolling
+  training window, evaluated out-of-sample with Pakistani commission, CPDC/CDNS fees and
+  slippage modelled. 8 of 14 profitable. The other 6 are listed because hiding them would
+  make the winners meaningless.</p>
+  <table>
+    <thead><tr><th>instrument</th><th>net return</th><th>buy &amp; hold</th><th>Sharpe</th><th>verdict</th></tr></thead>
+    <tbody>
+      <tr><td>SILVER</td><td class="up">+44.5%</td><td>+34.5%</td><td>1.46</td><td>profitable</td></tr>
+      <tr><td>GOLD</td><td class="up">+28.7%</td><td>+13.4%</td><td>1.61</td><td>profitable</td></tr>
+      <tr><td>WTI</td><td class="up">+25.1%</td><td>+61.8%</td><td>1.68</td><td>profitable</td></tr>
+      <tr><td>WHEAT</td><td class="up">+19.5%</td><td>+31.3%</td><td>1.16</td><td>profitable</td></tr>
+      <tr><td>HBL <small>(PSX)</small></td><td class="up">+9.3%</td><td>+14.1%</td><td>1.19</td><td>profitable</td></tr>
+      <tr><td>BRENT</td><td class="up">+6.8%</td><td>+64.0%</td><td>0.65</td><td>profitable</td></tr>
+      <tr><td>NATGAS</td><td class="up">+4.2%</td><td>+5.9%</td><td>1.09</td><td>profitable</td></tr>
+      <tr><td>KSE100</td><td>+0.0%</td><td>+7.9%</td><td>0.58</td><td>flat</td></tr>
+      <tr><td>MCB <small>(PSX)</small></td><td class="dn">−0.2%</td><td>+6.6%</td><td>0.56</td><td>unprofitable</td></tr>
+      <tr><td>EURUSD</td><td class="dn">−0.6%</td><td>−4.1%</td><td>0.29</td><td>unprofitable</td></tr>
+      <tr><td>BTC</td><td class="dn">−0.8%</td><td>−29.5%</td><td>0.12</td><td>unprofitable</td></tr>
+      <tr><td>COPPER</td><td class="dn">−4.7%</td><td>+42.3%</td><td>−0.04</td><td>unprofitable</td></tr>
+      <tr><td>LUCK <small>(PSX)</small></td><td class="dn">−9.2%</td><td>−16.0%</td><td>−0.07</td><td>unprofitable</td></tr>
+      <tr><td>OGDC <small>(PSX)</small></td><td class="dn">−14.1%</td><td>+11.4%</td><td>−0.42</td><td>unprofitable</td></tr>
+    </tbody>
+  </table>
+  <p class="lede" style="margin-top:20px">Backtests are not returns. The parameter search is
+  a known overfitting risk, which is why results are reported per instrument and never as a
+  convenient average.</p>
+</section>
+
+<section>
+  <h2>The finding that matters most: PSX equities lose money net of costs</h2>
+  <p class="lede" style="margin-bottom:14px">Global book <b class="up">+13.6%</b> mean net
+  across 9 instruments. PSX equity book <b class="dn">−2.8%</b> across 5, with roughly 8%
+  observed fee-and-slippage drag on active trials. In a market with those round-trip costs,
+  most published "signals" never survive to a real account — so every position here is sized
+  against cost before it is sized against conviction.</p>
+</section>
+
+<section>
+  <h2>What is <em>not</em> proven</h2>
+  <ul>
+    <li><b>No directional hit rate exists.</b> 890 predictions journaled, 140 horizons
+      matured, and every one of the 140 was a non-trade. A non-trade cannot be a correct
+      prediction.</li>
+    <li>The live paper book is essentially flat: −Rs 13.05 realized on Rs 1,000,000 across
+      157 autopilot cycles, 2 fills.</li>
+    <li>The live order path is built, capped and tested against staging — it has not been
+      exercised at scale.</li>
+    <li>No audit, no team, no AUM, no regulatory licence, no third-party capital.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>The integrity story — why you can trust the table above</h2>
+  <p class="lede">Our own scorer reported a <b>100% hit rate</b> for weeks. It was counting
+  every "no trade" inside the entry band as a correct prediction, and when the future bars
+  for a 5-day horizon had not printed yet it clamped the evaluation to the last flat bar and
+  graded it as resolved. That fabricated accuracy then fed a <b>1.05× confidence bonus</b>
+  into live entry thresholds.</p>
+  <p class="lede">We found it, fixed it, pinned confidence to 1.0 until at least 10 real
+  directional calls mature, and wrote eight regression tests so it cannot come back. Two more
+  integrity defects went out in the same pass: a bridge that reported setup success on a
+  failed exit code, and a provider fail-over that substituted a different model into a named
+  council seat — letting one opinion be counted twice inside a median.</p>
+  <p class="lede" style="margin-bottom:0"><b>The audit caught it before a live account paid
+  for it.</b> That is the product.</p>
+</section>
+
+<section>
+  <h2>Execution is fail-closed by construction</h2>
+  <div class="grid">
+    <div class="card"><h3>Three independent keys</h3><p>Auto-place flag, order-bridge flag and the broker PIN. Remove any one and the system emits a human-confirmed ticket instead of an order.</p></div>
+    <div class="card"><h3>Cap in the bridge</h3><p>Per-order notional is enforced inside the order module, not the UI, so a buggy or compromised caller cannot bypass it.</p></div>
+    <div class="card"><h3>Live book checks</h3><p>Kill switch, broker price band, verified free cash, no shorting a cash market, never selling more than is held — all fail closed.</p></div>
+    <div class="card"><h3>Secrets discipline</h3><p>The trading PIN is written to git-ignored config only, never logged, journalled or echoed by any endpoint; the desk reports presence, not value, with one-click disarm.</p></div>
+    <div class="card"><h3>Stage → ack</h3><p>A staged order expires in 15 minutes. Nothing submits without an explicit acknowledgement of the staged ticket.</p></div>
+    <div class="card"><h3>Append-only journals</h3><p>Every prediction, gate decision, arming event and kill-switch flip is on disk and reconstructs the published ledger.</p></div>
+  </div>
+</section>
+
+<section>
+  <h2>What we are open to</h2>
+  <table>
+    <tbody>
+      <tr><td><b>Acquisition / licensing</b></td><td>The engine, risk layer and broker bridges as a technology asset for a broker, exchange or asset manager's digital desk.</td></tr>
+      <tr><td><b>Strategic partnership</b></td><td>A licensed firm holds the regulated wrapper; KAIROS supplies signal and execution. Compliance review first.</td></tr>
+      <tr><td><b>Bounded pilot</b></td><td>One named institution, one instrument class, the deliverable is a real forward record — published whichever way it lands.</td></tr>
+      <tr><td><b>Not available</b></td><td>Pooled capital, managed accounts, or any return promise. Those need a licensed vehicle and counsel.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="verify">
+  <h2>Verify, don't trust</h2>
+  <p class="lede">Nothing on this page is hand-entered. The ledger is regenerated from the
+  on-disk journals by one command, which is also the fastest way to check that the published
+  numbers and the code agree.</p>
+  <pre>git clone https://github.com/zhaider5142009-oss/kairos &amp;&amp; cd kairos
+pip install -r requirements.txt
+python -m pytest tests -q                     # 87 tests
+python -m kairos.cli backtest GOLD WTI HBL    # reproduce a sweep, costs modelled
+python -m kairos.cli feedback                 # realized record, live from the journal
+python tools/make_track_record.py             # rebuild the published ledger</pre>
+  <ul style="margin-top:18px">
+    <li><code>data/prediction_journal.jsonl</code> — every prediction, graded only once the
+      horizon's bars exist</li>
+    <li><code>data/audit_journal.jsonl</code> — order staging, arming, kill-switch events,
+      append-only</li>
+    <li><code>docs/investors/TRACK_RECORD.md</code> · <code>ONE_PAGER.md</code> ·
+      <code>WHITEPAPER.md</code> · <code>DECK.md</code></li>
+  </ul>
+</section>
+
+<footer>
+  <p><b>Contact</b> — z.haider5142009@gmail.com · github.com/zhaider5142009-oss/kairos</p>
+  <p style="margin-top:10px">KAIROS is research and trading infrastructure built by a single
+  operator. It is not a fund, not a licensed investment adviser, and not an offer of
+  securities. Nothing here is investment advice or a forecast of future returns. Past
+  backtests are not past performance; there is no performance record yet. Trading involves
+  the risk of loss, including loss of all capital.</p>
+</footer>
+
+</div>
+</body>
+</html>
