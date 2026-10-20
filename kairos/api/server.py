@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 from kairos.engine import ENGINE  # noqa: E402
 from kairos.universe import resolve, universe  # noqa: E402
 
-app = FastAPI(title="KAIROS Control Tower", version="2.5.0")
+app = FastAPI(title="KAIROS Control Tower", version="2.6.0")
 BOOT_TS = time.time()
 
 

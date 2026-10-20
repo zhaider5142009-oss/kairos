@@ -1,7 +1,7 @@
 # KAIROS — technical whitepaper
 **A self-auditing prediction and execution stack for Pakistan and global markets**
 
-Version 2.5.0 · 2026-10-19 · single-operator, publicly verifiable
+Version 2.6.0 · 2026-10-20 · single-operator, publicly verifiable
 
 > **Reading note.** This document describes a system, not a track record. Every quantitative
 > claim is either reproduced from an on-disk journal or explicitly labelled as a backtest.

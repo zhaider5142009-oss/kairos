@@ -143,4 +143,4 @@ which wording converted.
 
 | date | channel | recipient | version | reply |
 |---|---|---|---|---|
-| — | — | — | v2.5.0 kit | nothing sent yet |
+| 2026-10-20 | GitHub release (public repo, tag v2.6.0) | open audience — no named recipient | v2.6.0 kit | — |
