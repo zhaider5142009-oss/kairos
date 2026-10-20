@@ -68,9 +68,9 @@
 <section>
   <h2>What is actually built</h2>
   <div class="stat">
-    <div><b>10,691</b><small>lines of Python, 35 modules, public</small></div>
+    <div><b>10,733</b><small>lines of Python, 35 modules, public</small></div>
     <div><b>100</b><small>strategies selected per instrument, walk-forward</small></div>
-    <div><b>6</b><small>LLM council seats across 2 providers</small></div>
+    <div><b>6</b><small>configured council seats; a dead one shrinks the vote</small></div>
     <div><b>87</b><small>passing tests, money path included</small></div>
     <div><b>24/7</b><small>supervised daemon, watchdog, token-gated API</small></div>
   </div>
@@ -118,11 +118,11 @@
 <section>
   <h2>What is <em>not</em> proven</h2>
   <ul>
-    <li><b>No directional hit rate exists.</b> 1,018 predictions journaled, 140 horizons
+    <li><b>No directional hit rate exists.</b> 1,062 predictions journaled, 140 horizons
       matured, and every one of the 140 was a non-trade. A non-trade cannot be a correct
       prediction.</li>
     <li>The live paper book is essentially flat: −Rs 13.05 realized on Rs 1,000,000 across
-      157 autopilot cycles, 2 fills.</li>
+      172 autopilot cycles, 2 fills.</li>
     <li>The live order path is built, capped and tested against staging — it has not been
       exercised at scale.</li>
     <li>No audit, no team, no AUM, no regulatory licence, no third-party capital.</li>
@@ -149,6 +149,15 @@
   write reset the paper book to full capital, a test suite that could arm live mode and write
   into the production audit journal, and a restart that reported <b>LIVE</b> from a stale
   state file while running paper.</p>
+  <p class="lede">A fifth pass, run after the v2.6.0 tag, took out five more. A provider's
+  HTTP error body was passed through verbatim, which put our own account identifiers on the
+  health page. A model's stop-token markup was parsed as part of its answer. A blank
+  completion — what a reasoning model returns when it spends its whole budget on hidden
+  thinking — was counted as a council seat that had said nothing. The paper book rolled its
+  daily figure in memory and never wrote it, so a quiet stretch published yesterday's number
+  under yesterday's date. And the fifth was the reason the other four could hide: nothing in
+  the build compared the figures this page prints with the repository they come from. Now a
+  test does, and one command regenerates them.</p>
   <p class="lede">The last two matter more than they look. An operator who cannot trust the
   order trail cannot trust the system, and a desk that says "live" when it is paper is the
   one lie a trading system must never tell. Both are fixed structurally, not cosmetically,
@@ -189,7 +198,7 @@
   numbers and the code agree.</p>
   <pre>git clone https://github.com/zhaider5142009-oss/kairos &amp;&amp; cd kairos
 pip install -r requirements.txt
-python -m pytest tests -q                     # 121 tests
+python -m pytest tests -q                     # 149 tests
 python -m kairos.cli backtest GOLD WTI HBL    # reproduce a sweep, costs modelled
 python -m kairos.cli feedback                 # realized record, live from the journal
 python tools/make_track_record.py             # rebuild the published ledger</pre>

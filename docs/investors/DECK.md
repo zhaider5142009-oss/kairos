@@ -29,9 +29,9 @@ Built by one operator, running 24/7, publishing its own losses.
 
 | | |
 |---|---|
-| Code | 10,691 lines Python · 35 modules · public repo |
+| Code | 10,733 lines Python · 35 modules · public repo |
 | Strategies | 100, selected per instrument by walk-forward search |
-| Council | 6 LLM models across 2 providers, named-seat consensus |
+| Council | 6 configured LLM seats across 2 providers; a dead seat shrinks the council |
 | Execution | paper + JS Global PSX bridge + MT5 |
 | Uptime | 24/7 daemon, watchdog, token-gated public API |
 | Tests | 121 passing, money path included |
@@ -66,9 +66,9 @@ conviction.
 
 ## 6. What is *not* proven
 
-- **No forward track record.** 1,018 predictions journaled, 140 horizons matured, all 140 were
+- **No forward track record.** 1,062 predictions journaled, 140 horizons matured, all 140 were
   non-trades. A directional hit rate does not yet exist.
-- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 154 cycles, 2 fills.
+- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 172 cycles, 2 fills.
 - Live execution path is built and gated, not exercised at scale.
 - No audit, no team, no third-party capital.
 
@@ -93,8 +93,14 @@ that is supposed to catch a leaked credential only compared against values prese
 `config.yaml`, so a PIN an operator keeps in their head was invisible to it — and a fix we had
 already reported as landed had not landed. It was caught by re-scanning by hand before
 tagging v2.6.0. The rule now matches the **shape** of a short numeric secret, not just a
-value we happen to know. The journal was left as it is — the containment is recorded in
-it, because a rewritten audit trail proves nothing.
+value we happen to know. A fifth pass, run after that tag, took out five more: a provider's
+HTTP error body that leaked our own account identifiers onto the health page, a model's
+stop-token markup parsed as part of its vote, a blank completion counted as a council seat
+that had said nothing, a paper ledger whose daily figure rolled in memory and never reached
+the file, and the reason any of them could be missed at all — nothing in the build compared
+the figures this deck prints with the repository they are supposed to come from. Now a test
+does, and one command regenerates them. The journal was left as it is — the containment is
+recorded in it, because a rewritten audit trail proves nothing.
 
 **A system that audits its own performance numbers is the product.** Everything else is a
 chart.
@@ -155,6 +161,7 @@ chart.
 ```
 github.com/zhaider5142009-oss/kairos
 python tools/make_track_record.py     # rebuilds the ledger from the journals
+python tools/kit_stats.py --write     # re-points every figure in this kit at it
 ```
 
 z.haider5142009@gmail.com

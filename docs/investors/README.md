@@ -15,7 +15,7 @@ appears in one document and not in another, the journals win — and the mistake
 
 ## Standing rules for this pack
 
-1. **No forward track record exists.** 1,018 predictions journaled, 140 horizons matured,
+1. **No forward track record exists.** 1,062 predictions journaled, 140 horizons matured,
    and all 140 were non-trades. Never quote a hit rate; the ledger says "not yet measurable"
    and so must every other document.
 2. **Backtests are labelled backtests**, per instrument, including the 6 unprofitable ones.
@@ -31,11 +31,18 @@ appears in one document and not in another, the journals win — and the mistake
 
 ## Update discipline
 
-When the ledger changes, regenerate it and re-check the three documents that quote it:
+Nothing in this directory is allowed to be typed. Regenerate the ledger, then let the pack
+pull its figures from it:
 
 ```bash
 python tools/make_track_record.py
-grep -rn "890|140\|140\|+44.5\|−2.8" docs/investors --include=*.md
+python tools/kit_stats.py            # the only figures this pack may quote
+python tools/kit_stats.py --write    # point every quoted figure at them
+python -m pytest tests/test_kit_figures.py -q
 ```
 
-Any figure that has moved but was not re-checked is a misstatement waiting to be screenshotted.
+`tests/test_kit_figures.py` is not a formality. It compares each codebase figure against the
+repository and each evidence figure against the regenerated ledger, so a number that has
+moved and was not re-checked fails the build instead of going out in an email. That test
+exists because the published v2.6.0 deck quoted a line count and a test total three passes
+old under a footer saying they were verified that day.

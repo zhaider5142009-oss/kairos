@@ -247,11 +247,12 @@ cannot drift apart:
 
 ```bash
 python tools/make_track_record.py   # rebuilds docs/investors/TRACK_RECORD.md
+python tools/kit_stats.py --write   # re-points the investor pack at those figures
 python -m kairos.cli feedback       # realized record, live
 ```
 
 [docs/investors/](docs/investors/) holds the ledger, a one-pager, the whitepaper and the
-deck. Read the ledger first: there is **no forward track record yet** — 1,018 predictions
+deck. Read the ledger first: there is **no forward track record yet** — 1,062 predictions
 journaled, 140 horizons matured, all 140 non-trades — and 6 of 14 instruments in the
 walk-forward sweep lost money. That is the honest state of the project, and it is the reason
 the risk layer exists.

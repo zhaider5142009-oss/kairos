@@ -235,6 +235,11 @@ class PaperBroker:
         today = datetime.now().strftime("%Y-%m-%d")
         if today != self._day_stamp:
             self._day_stamp, self.day_pnl = today, 0.0
+            # The roll has to reach the file. State was written only on a fill, so
+            # on a quiet stretch — which is most of this book — the ledger kept a
+            # stale stamp and the daily figure published in the track record aged
+            # past the day it claims to describe.
+            self._save()
         equity = self.cash + sum(p["qty"] * p["last"] for p in self.positions.values())
         return {"venue": "PAPER", "login": "paper", "equity": equity,
                 "balance": self.cash, "day_pnl": self.day_pnl,

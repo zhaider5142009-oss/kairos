@@ -74,6 +74,20 @@ forward as a feature rather than averaged away.
    silent.
 3. *Provider cooldown.* A fatal hint (401/402/403/429, insufficient balance) cools that
    provider for 30 minutes instead of burning a request per call.
+4. *A blank answer is not a vote.* A reasoning model can spend its whole token budget on
+   hidden thinking and return an empty completion. Reported as success, that inflates the
+   count of responding seats while contributing nothing to the median — a phantom opinion
+   inside a consensus. A blank completion is therefore a failure: the seat loses its vote,
+   and because the failure is not fatal the seat is retried next cycle instead of cooling
+   its provider.
+
+**Six configured seats are not six live seats.** The direct Moonshot key on this machine has
+been suspended by the provider, so its two configured seats lose their vote on every call
+until that is resolved, and one Kimi seat hosted behind OpenRouter answers intermittently at
+small token budgets. Nothing here is presented as better than it is: `provider_status()`
+reports the suspension, `dead_seats()` reports retired slugs, and every council record
+publishes `models_responded` beside `models_total`, so the size of the council that actually
+voted is part of the evidence rather than an assumption.
 
 **Dissent is attributed** as `provider/model`, so a split council can be traced to who
 disagreed, which turned out to matter for debugging more than for alpha.
@@ -130,7 +144,7 @@ exist is a way to lose money faster than the market teaches you.
 - Logs rotate; state persists across restarts; RAM, startup and per-cycle cost were profiled
   on a 2015-era i5 / 8 GB machine, which is a deliberate constraint — if it runs there, the
   infrastructure argument is cheap.
-- 121 regression tests, including the money path and the integrity cases below.
+- 149 regression tests, including the money path and the integrity cases below.
 
 ## 7. What the numbers say, and what they do not
 
@@ -143,16 +157,20 @@ adjustment), and six instruments reported as losses.
 important finding in the project: the edge, if any, is in the global and commodity books,
 and any PSX strategy must be sized against costs before it is sized against conviction.
 
-The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 168
+The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 172
 autopilot cycles) with two fills. That is a system working as designed on a low-conviction
 market, not a strategy proving itself.
 
 ## 8. The integrity bugs, documented because they are the credibility
 
-An investor kit is only worth its willingness to publish its own audit. Eleven defects were
+An investor kit is only worth its willingness to publish its own audit. Sixteen defects were
 found and fixed; four of them were in the machinery that produces the numbers an investor
-would read, five were on the money path or the trail that records it, and two were
-credentials — or the guard that was supposed to catch them — sitting in tracked files.
+would read, five were on the money path or the trail that records it, two were
+credentials — or the guard that was supposed to catch them — sitting in tracked files, and
+the last five came from probing the newest provider and then re-reading our own published
+pack. That second group is worth naming, because nothing about it was flattering: three of
+them were in code we had already declared finished, and two were in the numbers we had
+already printed.
 
 | defect | consequence had it shipped | fix |
 |---|---|---|
@@ -167,6 +185,11 @@ credentials — or the guard that was supposed to catch them — sitting in trac
 | The operator's real broker account number was hard-coded in test fixtures, in the shipped `config.example.yaml`, and in the order module's own docstring | a live account identifier in a public repository, next to code that names its venue | replaced with a synthetic sentinel in all eight places, and a tripwire test fails if any live credential value appears in tracked source |
 | The credential tripwire could only see credentials that were present in `config.yaml` | a PIN literal in five test assertions and the account number in the shipped example were invisible to it — an earlier pass even reported the account number as replaced while it still sat in eight tracked files | the guard now matches the **shape** of a short numeric secret bound to a secret-shaped name, with an explicit sentinel allow-list, so an unknown value still fails the run; this was caught by re-scanning immediately before tagging v2.6.0, not by the suite |
 | The prediction journal and the paper book were rewritten in place | an interrupted write left a truncated file, and every loader below it read "unreadable" as "no state yet" — the next cycle opened at full capital with no positions and no realized P&L, a reset that looks exactly like a healthy account, on the same equity number live sizing divides by | both files are written through a temp file and renamed into place; an unreadable book is now moved aside, journalled, and engages the kill switch instead of silently restarting — 7 tests |
+| A provider's HTTP error body was passed through verbatim | the Moonshot account ids that come back inside a `429` were returned by `/api/health` and rendered on the desk, so a status page meant for operators leaked identifiers meant for the provider | every provider error is now run through a shape-based redactor **before** the length cap, keeping the status code and the sentence so the cooldown logic and the operator both still work |
+| A model's own stop-token markup was kept in its answer | a hosted Kimi seat answers `OK<|close|>`; the token went on to be read as part of the verdict by the parser and published as part of the vote | special-token markup is stripped from every provider's text before anyone parses it |
+| An empty completion was reported as a successful answer | a reasoning model that spends its token budget on hidden thinking returns a blank `content`, and the council counted it as a responding seat while it contributed nothing to the median — a phantom opinion in a "consensus". Reachable on every provider leg but one, which already guarded itself | one shared success constructor, so a blank or markup-only completion is a **failure**: the seat loses its vote instead of skewing it, and the failure is non-fatal so a flaky model is retried next pass rather than cooling its provider for half an hour — 11 tests |
+| The paper book rolled its daily figure in memory only | state was written on a fill, so through a quiet stretch — most of this account — the ledger on disk kept the previous day's stamp and the previous day's loss, and the published track record quoted them. A daily loss limit is a brake; a stale stamp means nobody can tell from the file which day a number belongs to | the roll is persisted when the date changes, and a test asserts the desk polling the book does not rewrite it |
+| Nothing in the suite compared the pack's figures with the repository | our own published deck quoted a line count, a module count and a test total that were three passes old under a footer saying they were verified that day, and a `pytest` run could not have noticed: the numbers were prose in a markdown table | every quoted figure is now checked twice — codebase figures against the working tree, evidence figures against the regenerated ledger — and one command rewrites them all, so "verified today" is a claim the suite holds up rather than one we type |
 
 Nothing moved money. The journal now says so itself: rebuilt from `data/audit_journal.jsonl`,
 the track record publishes the count of lines carrying the test signature and the count of
@@ -183,8 +206,11 @@ one.
 
 The same pre-release scan caught our own deck quoting line counts and a test total that were
 three passes old, under a footer that said the figures were verified that day. That was a
-document defect rather than a code one, and it is the reason every number in this pack is
-regenerated by the commands in §9 immediately before a release rather than typed by hand.
+document defect rather than a code one — and "be more careful next time" is not a fix for a
+class of error that lives in prose, so it is now structural: `python tools/kit_stats.py
+--write` recomputes every figure in the pack from the repository and the regenerated ledger,
+and a test fails if any of them disagrees. A stale number in this pack is a broken build
+rather than an unnoticed sentence.
 
 The first is the one to judge us by. It was not an investor's bug or a reviewer's bug — our
 own scorer produced it, our own audit caught it, and it was fixed before a live rupee could
@@ -196,11 +222,13 @@ be mis-sized because of it.
 git clone https://github.com/zhaider5142009-oss/kairos && cd kairos
 cp config.example.yaml config.yaml      # add your own keys; config.yaml is git-ignored
 pip install -r requirements.txt
-python -m pytest tests -q                    # 121 tests
+python -m pytest tests -q                    # 149 tests
 python -m kairos.cli backtest GOLD WTI HBL   # walk-forward sweep, costs modelled
 python -m kairos.cli health                  # subsystem health, dead council seats
 python -m kairos.cli feedback                # realized track record, live from the journal
 python tools/make_track_record.py            # rebuilds docs/investors/TRACK_RECORD.md
+python tools/kit_stats.py                    # the only figures this pack may quote
+python tools/kit_stats.py --write            # point every quoted figure at them
 ```
 
 Journals are append-only JSONL and map to the bars they were graded on:

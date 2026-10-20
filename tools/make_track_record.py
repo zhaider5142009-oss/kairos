@@ -133,6 +133,11 @@ def main() -> int:
     w("")
     w("| measure | value |")
     w("|---|---|")
+    # Dated, because every figure below is a snapshot of a journal that is still
+    # growing. An undated ledger invites the reader to assume it is current, and
+    # the pack used to carry a "verified today" footer over numbers three passes
+    # old. The date is the thing they can check that against.
+    w(f"| rebuilt from the journals on | {datetime.now().strftime('%Y-%m-%d')} |")
     w(f"| predictions journaled | {tr.get('predictions', 0)} |")
     w(f"| horizons matured | {tr.get('resolved', 0)} |")
     w(f"| of which directional calls | {tr.get('directional_resolved', 0)} |")

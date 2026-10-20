@@ -111,3 +111,44 @@ def test_a_recovered_operator_can_release_and_reload(data, monkeypatch):
     atomic_write(data / "paper_account.json", json.dumps(good))
     broker = E.PaperBroker(capital=1_000_000.0)
     assert broker.cash == 800_000.0
+
+
+# ---------------------------------------------------------------- daily roll
+def test_the_day_roll_is_persisted_not_only_held_in_memory(data):
+    """The book rolls its daily figure when the date changes, but used to keep
+    the roll in memory and write the file only on a fill. On a quiet stretch —
+    which is most of this account — the ledger on disk kept the previous day's
+    stamp and the previous day's loss, and the track record published those.
+
+    A daily loss limit is a brake; a stale stamp means nobody can tell from the
+    file which day the number belongs to.
+    """
+    from datetime import datetime
+
+    stale = {"capital": 1_000_000.0, "cash": 990_000.0, "positions": {},
+             "fills": [], "realized_pnl": -10_000.0,
+             "day_pnl": -9_033.0, "day_stamp": "2000-01-01"}
+    atomic_write(data / "paper_account.json", json.dumps(stale))
+
+    broker = E.PaperBroker(capital=1_000_000.0)
+    assert broker.account()["day_pnl"] == 0.0
+
+    on_disk = json.loads((data / "paper_account.json").read_text(encoding="utf-8"))
+    assert on_disk["day_stamp"] == datetime.now().strftime("%Y-%m-%d")
+    assert on_disk["day_pnl"] == 0.0
+    assert on_disk["realized_pnl"] == -10_000.0     # the roll must not lose history
+
+
+def test_reading_the_book_does_not_rewrite_it_every_time(data):
+    from datetime import datetime
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    atomic_write(data / "paper_account.json", json.dumps(
+        {"capital": 1_000_000.0, "cash": 1_000_000.0, "positions": {},
+         "fills": [], "realized_pnl": 0.0, "day_pnl": 0.0, "day_stamp": today}))
+    broker = E.PaperBroker(capital=1_000_000.0)
+    path = data / "paper_account.json"
+    before = path.stat().st_mtime_ns
+    for _ in range(50):
+        broker.account()
+    assert path.stat().st_mtime_ns == before        # the desk polls this constantly
