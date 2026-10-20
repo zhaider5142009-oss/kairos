@@ -8,6 +8,13 @@
 
 KAIROS forecasts **crypto** (22 majors: BTC, ETH, SOL, BNB, XRP, ADA, DOGE, AVAX, LINK, DOT, LTC and more), commodities, FX, global indices and the Pakistan Stock Exchange (all 484 listed names + blue-chip dossiers), sizes positions with layered risk gates, and executes through paper, MT5, and JS Global bridges. A **100-instrument** tradable universe, all free and open source under MIT.
 
+> **Status, stated honestly.** There is **no forward track record yet**: of every prediction
+> that has matured, all were non-trades, so no hit rate exists. The walk-forward sweep is
+> profitable on 8 of 14 instruments and **loses money on PSX equities net of local costs**.
+> Numbers are regenerated from the journals by one command — see
+> [docs/investors/TRACK_RECORD.md](docs/investors/TRACK_RECORD.md). Not a fund, not advice,
+> no return promised.
+
 ---
 
 ## What it does
