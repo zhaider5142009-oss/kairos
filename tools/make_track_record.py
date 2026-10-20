@@ -14,6 +14,7 @@ import json
 import re
 import sys
 from collections import Counter, defaultdict
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -60,11 +61,62 @@ def _live_book() -> dict:
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
 
 
+TEST_WINDOW_S = 30.0
+
+
+def _audit_trail() -> dict:
+    """Count what the audit journal actually contains.
+
+    The ledger used to describe its own evidence in prose only. An outside
+    reader could not tell that the money-path events were written by tests, so
+    the numbers are recomputed on every rebuild and published.
+    """
+    p = ROOT / "data" / "audit_journal.jsonl"
+    out = {"lines": 0, "events": Counter(), "live_starts": 0,
+           "test_attributable": 0, "contained": False, "venue_acks": 0}
+    if not p.exists():
+        return out
+    rows = []
+    for line in p.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except ValueError:
+            continue
+    out["lines"] = len(rows)
+    out["events"] = Counter(r.get("event", "?") for r in rows)
+    out["contained"] = "AUDIT_TRAIL_TEST_EVENTS_CONTAINED" in out["events"]
+
+    def _ts(r):
+        try:
+            return datetime.fromisoformat(r["ts"]).timestamp()
+        except (KeyError, ValueError):
+            return None
+
+    live = [t for t in (_ts(r) for r in rows
+                        if r.get("event") == "AUTOPILOT_START"
+                        and r.get("mode") == "live") if t]
+    out["live_starts"] = len(live)
+    # The only shape that could mean money moved: a venue ack carrying an order
+    # number. The test broker answers with the constant 1 and the mock JSG
+    # session answers with null, so neither counts as one.
+    out["venue_acks"] = sum(
+        1 for r in rows
+        if r.get("event") in ("AUTOPILOT_PLACED", "JSG_PLACED", "MT5_LIVE")
+        and isinstance(r.get("order_no"), int) and r["order_no"] != 1)
+    out["test_attributable"] = sum(
+        1 for r in rows
+        if (t := _ts(r)) and any(0.0 <= t - s <= TEST_WINDOW_S for s in live))
+    return out
+
+
 def main() -> int:
     tr = track_record()
     rows, summary = _spectrum()
     pa, ap = _paper(), _autopilot()
     lb = _live_book()
+    at = _audit_trail()
     by_venue = defaultdict(list)
     for r in rows:
         by_venue["PSX" if r["symbol"] in ("OGDC", "HBL", "MCB", "LUCK", "KSE100",
@@ -159,6 +211,46 @@ def main() -> int:
     w("- `data/audit_journal.jsonl` — order staging, arming, kill-switch and "
       "venue-loss events, append-only.")
     w("- Rebuilding this ledger is one command; it reads only those files.")
+    w("")
+    w("### What the audit journal actually contains")
+    w("")
+    w("| measure | value |")
+    w("|---|---|")
+    w(f"| lines recorded | {at['lines']} |")
+    w(f"| distinct event types | {len(at['events'])} |")
+    w(f"| live-mode loop starts | {at['live_starts']} |")
+    w(f"| lines inside {TEST_WINDOW_S:.0f}s of a live-mode start "
+      f"(the automated-test signature) | {at['test_attributable']} |")
+    w(f"| venue acknowledgements carrying a real order number | "
+      f"**{at['venue_acks']}** |")
+    w("")
+    if at["venue_acks"] == 0:
+        w("**No order has ever reached a broker.** Every `AUTOPILOT_PLACED` line "
+          "in the journal answers with the test broker's constant order number `1` "
+          "at a fixed fixture price, and the single `JSG_STAGED`/`JSG_PLACED` pair "
+          "came from an offline unit test whose HTTP session was mocked — that pair "
+          "is annotated in the journal itself.")
+    w("")
+    if at["test_attributable"] and at["contained"]:
+        w(f"Of the {at['lines']} lines, **{at['test_attributable']} were written by "
+          "the automated test suite**, not by the trading process. The suite used to "
+          "import the operator's live configuration, so the module-bound journal "
+          "object inside a test process appended to the production file, armed "
+          "`live` mode against stubbed brokers, and left its daemon threads running "
+          "after the stubs were torn down. Nothing was placed and the paper book was "
+          "never touched, but the trail was polluted, which is a defect in an "
+          "append-only audit log and is not something to leave unmentioned.")
+        w("")
+        w("The fix is structural, not a cleanup of the file: `tests/conftest.py` now "
+          "points every test at a throwaway config with an unroutable portal URL and "
+          "empty credentials, blocks the transport layer so no test can reach a "
+          "network, and stops every autopilot instance built during a test at "
+          "teardown. The history is left in place — the containment event itself is "
+          "the last line of the journal, because rewriting an audit trail to hide "
+          "its own contamination would destroy the thing it is supposed to prove.")
+    elif at["test_attributable"]:
+        w(f"{at['test_attributable']} lines fall inside the test signature window "
+          "and have not yet been annotated in the journal.")
     w("")
 
     OUT.parent.mkdir(parents=True, exist_ok=True)

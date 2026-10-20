@@ -96,6 +96,11 @@ class Autopilot:
         except Exception:
             pass
         st["running"] = False   # a restart never resurrects a live loop
+        # and it must never *report* one either: the desk shows LIVE straight
+        # from these fields, so a stale arming in the file would tell the
+        # operator the opposite of what the process is doing.
+        st["mode"] = "paper"
+        st["armed_live"] = False
         return st
 
     def _save(self) -> None:

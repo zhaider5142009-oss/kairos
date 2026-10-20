@@ -83,7 +83,11 @@ and grading un-printed horizons on the last flat bar. It fed a 1.05× confidence
 live entry thresholds.
 
 We found it, fixed it, pinned confidence to 1.0 until 10 real calls mature, and wrote 8
-regression tests so it cannot come back.
+regression tests so it cannot come back. Seven more defects went out in the next two passes,
+three of them on the money path: a config that froze its risk limits at process start, a test
+suite that could arm live mode and write into the production audit journal, and a restart that
+reported **LIVE** from a stale state file while running paper. The journal was left as it is —
+the containment is recorded in it, because a rewritten audit trail proves nothing.
 
 **A system that audits its own performance numbers is the product.** Everything else is a
 chart.

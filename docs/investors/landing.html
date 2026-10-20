@@ -137,10 +137,18 @@
   graded it as resolved. That fabricated accuracy then fed a <b>1.05× confidence bonus</b>
   into live entry thresholds.</p>
   <p class="lede">We found it, fixed it, pinned confidence to 1.0 until at least 10 real
-  directional calls mature, and wrote eight regression tests so it cannot come back. Two more
-  integrity defects went out in the same pass: a bridge that reported setup success on a
-  failed exit code, and a provider fail-over that substituted a different model into a named
-  council seat — letting one opinion be counted twice inside a median.</p>
+  directional calls mature, and wrote eight regression tests so it cannot come back. Seven
+  more defects went out in the same two passes: a bridge that reported setup success on a
+  failed exit code, a provider fail-over that substituted a different model into a named
+  council seat, a config that froze its risk limits at process start, an unbounded
+  duplicate-order guard, silently truncated parallel arrays, a test suite that could arm
+  live mode and write into the production audit journal, and a restart that reported
+  <b>LIVE</b> from a stale state file while running paper.</p>
+  <p class="lede">The last two matter more than they look. An operator who cannot trust the
+  order trail cannot trust the system, and a desk that says "live" when it is paper is the
+  one lie a trading system must never tell. Both are fixed structurally, not cosmetically,
+  and the journal that was polluted was <b>left as it is</b> — the containment event is
+  appended to it, because a rewritten audit trail proves nothing.</p>
   <p class="lede" style="margin-bottom:0"><b>The audit caught it before a live account paid
   for it.</b> That is the product.</p>
 </section>
@@ -176,7 +184,7 @@
   numbers and the code agree.</p>
   <pre>git clone https://github.com/zhaider5142009-oss/kairos &amp;&amp; cd kairos
 pip install -r requirements.txt
-python -m pytest tests -q                     # 87 tests
+python -m pytest tests -q                     # 113 tests
 python -m kairos.cli backtest GOLD WTI HBL    # reproduce a sweep, costs modelled
 python -m kairos.cli feedback                 # realized record, live from the journal
 python tools/make_track_record.py             # rebuild the published ledger</pre>

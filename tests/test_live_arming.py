@@ -254,3 +254,20 @@ def test_disarmed_config_still_returns_none(ap, monkeypatch):
 def _intent():
     from kairos.execution import OrderIntent
     return OrderIntent(symbol="TEST", side="BUY", quantity=1, venue="JS_GLOBAL")
+
+
+def test_a_restart_never_reports_live(tmp_path):
+    """The desk prints LIVE straight from these fields, so a file that still
+    claims an arming must not survive into a process that has no arming."""
+    import json
+
+    p = tmp_path / "autopilot.json"
+    p.write_text(json.dumps({"running": True, "mode": "live",
+                             "armed_live": True, "cycles": 99}), encoding="utf-8")
+    a = Autopilot()
+    a.state_path = p
+    st = a._load()
+    assert st["running"] is False
+    assert st["mode"] == "paper"
+    assert st["armed_live"] is False
+    assert st["cycles"] == 99          # history survives, the arming does not

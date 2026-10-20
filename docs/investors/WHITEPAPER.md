@@ -130,7 +130,7 @@ exist is a way to lose money faster than the market teaches you.
 - Logs rotate; state persists across restarts; RAM, startup and per-cycle cost were profiled
   on a 2015-era i5 / 8 GB machine, which is a deliberate constraint — if it runs there, the
   infrastructure argument is cheap.
-- 87 regression tests, including the money path and the integrity cases below.
+- 113 regression tests, including the money path and the integrity cases below.
 
 ## 7. What the numbers say, and what they do not
 
@@ -149,15 +149,26 @@ market, not a strategy proving itself.
 
 ## 8. The integrity bugs, documented because they are the credibility
 
-An investor kit is only worth its willingness to publish its own audit. Three defects were
-found and fixed; two of them were in the machinery that produces the numbers an investor
-would read.
+An investor kit is only worth its willingness to publish its own audit. Eight defects were
+found and fixed; four of them were in the machinery that produces the numbers an investor
+would read, and four were on the money path or on the trail that records it.
 
 | defect | consequence had it shipped | fix |
 |---|---|---|
 | Non-trades scored as correct predictions; horizons clamped to the last available bar | the headline read **"100% hit rate"**; the calibration loop fed a 1.05× confidence boost into live entries on evidence that was entirely fabricated | a call must exceed the entry threshold and its horizon bars must exist; confidence pinned to 1.0 until 10 real calls mature; 8 new regression tests |
 | WSL bridge reported setup success on a non-zero exit | a broken foundation-model bridge would look healthy forever | exit code is checked, `check=False` made explicit |
 | Provider fail-over substituted models into named council seats | one provider's opinion counted twice inside a "median consensus" | named seats route to that seat only |
+| Configuration was read once at import and never re-read | a risk limit tightened mid-run — the daily loss cap, the arming keys — bound only after a restart, so an operator pulling the brake did not stop the next order | the config is re-read on mtime change, throttled, and a half-written file keeps the last good values; the risk gate now reads its limits per check — 13 tests |
+| The duplicate-order idempotency set grew without bound | after enough cycles the process that guards live orders exhausts its own memory | the seen-order window is a bounded LRU |
+| Parallel arrays (weights, symbols, forecasts) were zipped silently | a short selection vector would drop the tail instruments from the book while still reporting their count | every such zip is now length-checked and fail-closed — 9 tests |
+| The test suite imported the operator's live config | a `pytest` run armed live mode against stubbed brokers, appended to the production audit journal, and left daemon threads alive after the stubs were torn down — the operator could no longer trust their own order trail | `tests/conftest.py`: a throwaway config with an unroutable URL and empty credentials, the HTTP transport blocked for the session, every autopilot stopped at teardown; plus a credential-leak tripwire that reads `git ls-files` — 3 tests |
+| A restarted autopilot reported live from a stale state file | the desk told the operator "LIVE" while the process was running paper — the opposite of the truth at exactly the moment it mattered | restart clamps `mode`, `armed_live` and `running` before it reports anything |
+
+Nothing moved money. The journal now says so itself: rebuilt from `data/audit_journal.jsonl`,
+the track record publishes the count of lines carrying the test signature and the count of
+venue acknowledgements with a real order number, which is zero. That history is left in
+place rather than cleaned — a rewritten audit trail cannot prove anything, so the containment
+event was appended instead.
 
 The first is the one to judge us by. It was not an investor's bug or a reviewer's bug — our
 own scorer produced it, our own audit caught it, and it was fixed before a live rupee could
@@ -169,7 +180,7 @@ be mis-sized because of it.
 git clone https://github.com/zhaider5142009-oss/kairos && cd kairos
 cp config.example.yaml config.yaml      # add your own keys; config.yaml is git-ignored
 pip install -r requirements.txt
-python -m pytest tests -q                    # 87 tests
+python -m pytest tests -q                    # 113 tests
 python -m kairos.cli backtest GOLD WTI HBL   # walk-forward sweep, costs modelled
 python -m kairos.cli health                  # subsystem health, dead council seats
 python -m kairos.cli feedback                # realized track record, live from the journal
