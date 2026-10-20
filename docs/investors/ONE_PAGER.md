@@ -16,7 +16,7 @@ SECP-licensed as an investment adviser, and has never managed third-party capita
 
 | | |
 |---|---|
-| Codebase | 10,765 lines of Python across 35 modules, public repo |
+| Codebase | 10,785 lines of Python across 35 modules, public repo |
 | Strategy library | 100 candidate strategies, selected per instrument by walk-forward search |
 | Signal council | 6 configured seats across 2 providers, median consensus with named-seat integrity; a blank or dead seat casts no vote |
 | Execution | paper book + JS Global PSX order bridge + MT5 (JS Markets) |

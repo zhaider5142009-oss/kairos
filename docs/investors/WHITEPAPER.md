@@ -144,7 +144,7 @@ exist is a way to lose money faster than the market teaches you.
 - Logs rotate; state persists across restarts; RAM, startup and per-cycle cost were profiled
   on a 2015-era i5 / 8 GB machine, which is a deliberate constraint — if it runs there, the
   infrastructure argument is cheap.
-- 152 regression tests, including the money path and the integrity cases below.
+- 154 regression tests, including the money path and the integrity cases below.
 
 ## 7. What the numbers say, and what they do not
 
@@ -191,7 +191,7 @@ earlier repair — which is why the last one was found at all.
 | An empty completion was reported as a successful answer | a reasoning model that spends its token budget on hidden thinking returns a blank `content`, and the council counted it as a responding seat while it contributed nothing to the median — a phantom opinion in a "consensus". Reachable on every provider leg but one, which already guarded itself | one shared success constructor, so a blank or markup-only completion is a **failure**: the seat loses its vote instead of skewing it, and the failure is non-fatal so a flaky model is retried next pass rather than cooling its provider for half an hour — 11 tests |
 | The paper book rolled its daily figure in memory only | state was written on a fill, so through a quiet stretch — most of this account — the ledger on disk kept the previous day's stamp and the previous day's loss, and the published track record quoted them. A daily loss limit is a brake; a stale stamp means nobody can tell from the file which day a number belongs to | the roll is persisted when the date changes, and a test asserts the desk polling the book does not rewrite it |
 | Nothing in the suite compared the pack's figures with the repository | our own published deck quoted a line count, a module count and a test total that were three passes old under a footer saying they were verified that day, and a `pytest` run could not have noticed: the numbers were prose in a markdown table | every quoted figure is now checked twice — codebase figures against the working tree, evidence figures against the regenerated ledger — and one command rewrites them all, so "verified today" is a claim the suite holds up rather than one we type |
-| The fix for the first defect in this table trusted today's configuration | to decide whether an old journal row was a call or a non-trade it re-read the row's score against whatever `entry_threshold` is set **now**, and the hit arithmetic still read the pre-fix `correct` column. The threshold is a knob the operator turns, so turning it down reaches backwards and edits history: those rows become wins that were never played, and the published 100% hit rate returns from a journal containing no calls. Turning it up deletes calls that were made and won | the label written that day decides whether a row claimed a direction, and a legacy row's verdict is recomputed from the sign of the realized return against that claim. Neither reads today's config, so no future tuning can rewrite the record — 4 more tests. Found because the new figure test failed on the commit that added it, which sent us back through the ledger code it protects |
+| The fix for the first defect in this table trusted today's configuration | to decide whether an old journal row was a call or a non-trade it re-read the row's score against whatever `entry_threshold` is set **now**, and the hit arithmetic still read the pre-fix `correct` column. The threshold is a knob the operator turns, so turning it down reaches backwards and edits history: those rows become wins that were never played, and the published 100% hit rate returns from a journal containing no calls. Turning it up deletes calls that were made and won | the label written that day decides whether a row claimed a direction, and a legacy row's verdict is recomputed from the sign of the realized return against that claim. Neither reads today's config, so no future tuning can rewrite the record — 4 more tests. Found because the new figure test failed on the commit that added it, which sent us back through the ledger code it protects. Worth adding that the first cut of this repair was itself wrong: it matched the label `BUY` exactly, and the ensemble says `STRONG BUY` / `BUY` / `HOLD` / `SELL` / `STRONG SELL`, so the strongest band — the one the strong-signal rate is measured on — would have been filed as a loss it had won. Caught by re-reading the fix against the vocabulary it reads, two commits later, and now covered by two more tests |
 
 Nothing moved money. The journal now says so itself: rebuilt from `data/audit_journal.jsonl`,
 the track record publishes the count of lines carrying the test signature and the count of
@@ -224,7 +224,7 @@ be mis-sized because of it.
 git clone https://github.com/zhaider5142009-oss/kairos && cd kairos
 cp config.example.yaml config.yaml      # add your own keys; config.yaml is git-ignored
 pip install -r requirements.txt
-python -m pytest tests -q                    # 152 tests
+python -m pytest tests -q                    # 154 tests
 python -m kairos.cli backtest GOLD WTI HBL   # walk-forward sweep, costs modelled
 python -m kairos.cli health                  # subsystem health, dead council seats
 python -m kairos.cli feedback                # realized track record, live from the journal

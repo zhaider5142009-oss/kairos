@@ -19,7 +19,11 @@ promoted last month's 140 HOLDs into 140 wins and republished a 100% hit rate
 from a journal with no calls in it; turning it up would have deleted real calls
 that were placed and won. Whether a row was a claim is now read from the label
 written that day, and a legacy row's verdict is recomputed from the sign of the
-return against the direction claimed. Neither depends on today's config.
+return against the direction claimed. Neither depends on today's config. The first cut of
+that repair had a hole of its own, and it is the reason the label is matched on a substring:
+it matched `BUY` exactly, while the ensemble's vocabulary is `STRONG BUY / BUY / HOLD / SELL /
+STRONG SELL`, so the strongest band — exactly the one the strong-signal rate is measured on —
+was filed as a loss it had actually won.
 """
 
 from __future__ import annotations
@@ -210,6 +214,43 @@ def test_the_claim_is_what_was_recorded_even_below_todays_band(journal,
     tr = F.track_record()
     assert tr["directional_resolved"] == 1
     assert tr["hit_rate"] == 1.0
+
+
+def test_strong_labels_are_the_same_claim(journal, monkeypatch):
+    """The ensemble says STRONG BUY / BUY / HOLD / SELL / STRONG SELL.
+
+    Matching the label exactly would file the strongest band — the one the
+    published strong-signal rate is measured on — as a non-trade or, worse, as
+    a loss it actually won.
+    """
+    monkeypatch.setattr(F, "_direction_threshold", lambda: 0.18)
+    _write(journal, [
+        {"ts": "2026-01-05T00:00:00", "symbol": "BTC", "horizon": 5,
+         "score": 0.71, "confidence": 0.6, "expected_return": 0.04,
+         "price": 100.0, "direction": "STRONG BUY", "resolved": True,
+         "realized_return": 0.061, "correct": False, "abs_err": 0.021},
+        {"ts": "2026-01-05T00:00:00", "symbol": "OGDC", "horizon": 5,
+         "score": -0.66, "confidence": 0.6, "expected_return": -0.03,
+         "price": 100.0, "direction": "STRONG SELL", "resolved": True,
+         "realized_return": 0.012, "correct": True, "abs_err": 0.042}])
+    tr = F.track_record()
+    assert tr["directional_resolved"] == 2
+    assert tr["strong_signal_hit_rate"] == 0.5     # the BUY won, the SELL lost
+    assert tr["hit_rate"] == 0.5
+
+
+def test_a_row_with_no_label_at_all_falls_back_to_the_score(journal,
+                                                            monkeypatch):
+    """The score path is only for rows too old to say what they claimed."""
+    monkeypatch.setattr(F, "_direction_threshold", lambda: 0.18)
+    _write(journal, [
+        {"ts": "2026-01-05T00:00:00", "symbol": "SILVER", "horizon": 5,
+         "score": 0.62, "confidence": 0.5, "expected_return": 0.02,
+         "price": 100.0, "resolved": True, "realized_return": 0.03,
+         "correct": True, "abs_err": 0.01}])
+    tr = F.track_record()
+    assert tr["directional_resolved"] == 1
+    assert tr["hit_rate"] == 1.0          # up claimed, up delivered
 
 
 def test_no_evidence_does_not_inflate_confidence(journal, monkeypatch):

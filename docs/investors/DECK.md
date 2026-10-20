@@ -29,7 +29,7 @@ Built by one operator, running 24/7, publishing its own losses.
 
 | | |
 |---|---|
-| Code | 10,765 lines Python · 35 modules · public repo |
+| Code | 10,785 lines Python · 35 modules · public repo |
 | Strategies | 100, selected per instrument by walk-forward search |
 | Council | 6 configured LLM seats across 2 providers; a dead seat shrinks the council |
 | Execution | paper + JS Global PSX bridge + MT5 |

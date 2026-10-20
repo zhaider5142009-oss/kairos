@@ -107,6 +107,22 @@ def resolve_outcomes(md, lookback_days: int = 90) -> int:
     return newly
 
 
+def _claimed_side(e: dict) -> int | None:
+    """+1 if the row claimed upside, -1 downside, None if it claimed nothing.
+
+    Matching on a substring rather than an exact label because the ensemble's
+    vocabulary is `STRONG BUY / BUY / HOLD / SELL / STRONG SELL`, and the
+    strongest band is the one the published strong-signal rate is about: an
+    exact match on "BUY" silently files a winning STRONG BUY as a loss.
+    """
+    label = str(e.get("direction", "")).upper()
+    if "BUY" in label or "LONG" in label:
+        return 1
+    if "SELL" in label or "SHORT" in label:
+        return -1
+    return None
+
+
 def _is_directional(e: dict) -> bool:
     """Whether a resolved row was an actual call, not a HOLD.
 
@@ -120,11 +136,11 @@ def _is_directional(e: dict) -> bool:
     """
     if "directional" in e:
         return bool(e["directional"])
-    label = str(e.get("direction", "")).upper()
-    if label in ("BUY", "SELL", "LONG", "SHORT"):
-        return True
-    if label in ("HOLD", "NEUTRAL", "FLAT"):
+    if str(e.get("direction", "")).upper() in ("HOLD", "NEUTRAL", "FLAT"):
         return False
+    side = _claimed_side(e)
+    if side is not None:
+        return True
     return abs(float(e.get("score", 0.0))) > _direction_threshold()
 
 
@@ -143,12 +159,16 @@ def _was_correct(e: dict) -> bool:
     realized = e.get("realized_return")
     if realized is None:
         return False
-    label = str(e.get("direction", "")).upper()
-    if label in ("BUY", "LONG"):
-        return float(realized) > 0
-    if label in ("SELL", "SHORT"):
-        return float(realized) < 0
-    return False
+    side = _claimed_side(e)
+    if side is None:
+        # A row too old to carry a label still records the signed score it was
+        # judged on, and the sign is the claim — unlike the band, it does not
+        # depend on a threshold anyone can move later.
+        score = float(e.get("score", 0.0))
+        side = 1 if score > 0 else -1 if score < 0 else None
+    if side is None:
+        return False
+    return side * float(realized) > 0
 
 
 def track_record() -> dict[str, Any]:
