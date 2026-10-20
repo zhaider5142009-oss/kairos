@@ -11,7 +11,7 @@ Portal quirks this module absorbs so callers can stay sane:
   * BuySell is broker code, not English: BUY / SEL / SHS (short sell).
   * OrderType is sent as the select VALUE on the buy side ("StopLoss") but
     the LABEL on the sell side ("Stop Loss") — both spellings map per side.
-  * Account is the account NUMBER (accountNo), e.g. "53035".
+  * Account is the account NUMBER (accountNo), e.g. "90001".
   * The broker rejects a price outside the scrip's upper cap / lower lock;
     the portal only checks that client-side, so we check it here first.
 

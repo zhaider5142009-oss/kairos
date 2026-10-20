@@ -6,7 +6,7 @@ _Rebuilt from the on-disk journals by `tools/make_track_record.py`. Unaudited. N
 
 | measure | value |
 |---|---|
-| predictions journaled | 974 |
+| predictions journaled | 1018 |
 | horizons matured | 140 |
 | of which directional calls | 0 |
 | of which non-trades (HOLD) | 140 |
@@ -45,7 +45,7 @@ _Backtests are not returns. They include costs but not every market impact, and 
 ## 3. Live paper book
 
 - Capital Rs 1,000,000 · equity Rs 999,992 · realized P&L Rs -13.05 since 2026-10-20T18:25:48
-- Autopilot cycles run: **164** · mode `paper` · live-armed: False
+- Autopilot cycles run: **168** · mode `paper` · live-armed: False
 - Open paper positions: 0 · fills: 2
 
 ## 4. Funded account (read-only, from the broker)
@@ -74,7 +74,7 @@ _Backtests are not returns. They include costs but not every market impact, and 
 
 | measure | value |
 |---|---|
-| lines recorded | 161 |
+| lines recorded | 162 |
 | distinct event types | 22 |
 | live-mode loop starts | 20 |
 | lines inside 30s of a live-mode start (the automated-test signature) | 100 |
@@ -82,7 +82,7 @@ _Backtests are not returns. They include costs but not every market impact, and 
 
 **No order has ever reached a broker.** Every `AUTOPILOT_PLACED` line in the journal answers with the test broker's constant order number `1` at a fixed fixture price, and the single `JSG_STAGED`/`JSG_PLACED` pair came from an offline unit test whose HTTP session was mocked — that pair is annotated in the journal itself.
 
-Of the 161 lines, **100 were written by the automated test suite**, not by the trading process. The suite used to import the operator's live configuration, so the module-bound journal object inside a test process appended to the production file, armed `live` mode against stubbed brokers, and left its daemon threads running after the stubs were torn down. Nothing was placed and the paper book was never touched, but the trail was polluted, which is a defect in an append-only audit log and is not something to leave unmentioned.
+Of the 162 lines, **100 were written by the automated test suite**, not by the trading process. The suite used to import the operator's live configuration, so the module-bound journal object inside a test process appended to the production file, armed `live` mode against stubbed brokers, and left its daemon threads running after the stubs were torn down. Nothing was placed and the paper book was never touched, but the trail was polluted, which is a defect in an append-only audit log and is not something to leave unmentioned.
 
 The fix is structural, not a cleanup of the file: `tests/conftest.py` now points every test at a throwaway config with an unroutable portal URL and empty credentials, blocks the transport layer so no test can reach a network, and stops every autopilot instance built during a test at teardown. The history is left in place — the containment event itself is the last line of the journal, because rewriting an audit trail to hide its own contamination would destroy the thing it is supposed to prove.
 

@@ -41,7 +41,7 @@ class FakeSession:
     def get(self, url: str, params=None, timeout=None) -> FakeResponse:
         if url.endswith("/Home/GetUpperLowerCap"):
             return FakeResponse("", 200, self.caps)
-        return FakeResponse(json.dumps([{"accountNo": "53035",
+        return FakeResponse(json.dumps([{"accountNo": "90001",
                                          "accountName": "TEST ACCOUNT"}]))
 
     def post(self, url: str, data=None, timeout=None) -> FakeResponse:
@@ -87,7 +87,7 @@ def sb(tmp_path, monkeypatch):
 
 
 def arm(monkeypatch, ses: FakeSession, **over):
-    conf = _conf(allow_orders=True, order_account="53035")
+    conf = _conf(allow_orders=True, order_account="90001")
     conf.update(over)
     monkeypatch.setattr(jsgsync, "_conf", lambda: dict(conf))
     monkeypatch.setattr(jsgtrade, "_conf", lambda: dict(conf))
@@ -116,7 +116,7 @@ def test_side_and_order_type_use_broker_codes(sb, monkeypatch):
     assert url.endswith("/Home/PlaceOrder")
     assert payload["BuySell"] == "SEL"            # broker code, not "SELL"
     assert payload["OrderType"] == "Stop Loss"    # sell side sends the label
-    assert payload["Account"] == "53035" and payload["Exchange"] == "KSE"
+    assert payload["Account"] == "90001" and payload["Exchange"] == "KSE"
     assert payload["Market"] == "REG"
     assert payload["Volume"] == 25 and payload["Price"] == 300.0
     assert payload["LimitPrice"] == 0             # only LIMIT carries one
@@ -138,7 +138,7 @@ def test_account_defaults_to_portal_accountno(sb, monkeypatch):
     arm(monkeypatch, ses, order_account="")
     row = jsgtrade.stage("OGDC", "BUY", 5, 300.0)
     out = jsgtrade.ack(row["id"], pin="1234")
-    assert out["account"] == "53035"
+    assert out["account"] == "90001"
 
 
 def test_pin_never_leaks(sb, monkeypatch):
@@ -206,7 +206,7 @@ def test_scrub_is_whole_token_only():
 def test_rejected_broker_answer_is_not_ok(sb, monkeypatch):
     arm(monkeypatch, FakeSession(CAPS, post_text="Invalid PIN"))
     row = jsgtrade.stage("OGDC", "BUY", 5, 300.0)
-    assert jsgtrade.ack(row["id"], pin="0000")["ok"] is False
+    assert jsgtrade.ack(row["id"], pin="1234")["ok"] is False
 
 
 def test_transport_loss_drops_the_staged_copy(sb, monkeypatch):

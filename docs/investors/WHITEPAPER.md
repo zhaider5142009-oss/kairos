@@ -130,7 +130,7 @@ exist is a way to lose money faster than the market teaches you.
 - Logs rotate; state persists across restarts; RAM, startup and per-cycle cost were profiled
   on a 2015-era i5 / 8 GB machine, which is a deliberate constraint — if it runs there, the
   infrastructure argument is cheap.
-- 120 regression tests, including the money path and the integrity cases below.
+- 121 regression tests, including the money path and the integrity cases below.
 
 ## 7. What the numbers say, and what they do not
 
@@ -143,16 +143,16 @@ adjustment), and six instruments reported as losses.
 important finding in the project: the edge, if any, is in the global and commodity books,
 and any PSX strategy must be sized against costs before it is sized against conviction.
 
-The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 154
+The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 168
 autopilot cycles) with two fills. That is a system working as designed on a low-conviction
 market, not a strategy proving itself.
 
 ## 8. The integrity bugs, documented because they are the credibility
 
-An investor kit is only worth its willingness to publish its own audit. Ten defects were
+An investor kit is only worth its willingness to publish its own audit. Eleven defects were
 found and fixed; four of them were in the machinery that produces the numbers an investor
-would read, five were on the money path or the trail that records it, and one was a
-credential sitting in a committed file.
+would read, five were on the money path or the trail that records it, and two were
+credentials — or the guard that was supposed to catch them — sitting in tracked files.
 
 | defect | consequence had it shipped | fix |
 |---|---|---|
@@ -164,7 +164,8 @@ credential sitting in a committed file.
 | Parallel arrays (weights, symbols, forecasts) were zipped silently | a short selection vector would drop the tail instruments from the book while still reporting their count | every such zip is now length-checked and fail-closed — 9 tests |
 | The test suite imported the operator's live config | a `pytest` run armed live mode against stubbed brokers, appended to the production audit journal, and left daemon threads alive after the stubs were torn down — the operator could no longer trust their own order trail | `tests/conftest.py`: a throwaway config with an unroutable URL and empty credentials, the HTTP transport blocked for the session, every autopilot stopped at teardown; plus a credential-leak tripwire that reads `git ls-files` — 3 tests |
 | A restarted autopilot reported live from a stale state file | the desk told the operator "LIVE" while the process was running paper — the opposite of the truth at exactly the moment it mattered | restart clamps `mode`, `armed_live` and `running` before it reports anything |
-| The operator's real broker account number was hard-coded in two test fixtures | a live account identifier in a public repository, next to code that names its venue | replaced with a placeholder, and a tripwire test now fails if any live credential value or provider-key-shaped string appears in tracked source |
+| The operator's real broker account number was hard-coded in test fixtures, in the shipped `config.example.yaml`, and in the order module's own docstring | a live account identifier in a public repository, next to code that names its venue | replaced with a synthetic sentinel in all eight places, and a tripwire test fails if any live credential value appears in tracked source |
+| The credential tripwire could only see credentials that were present in `config.yaml` | a PIN literal in five test assertions and the account number in the shipped example were invisible to it — an earlier pass even reported the account number as replaced while it still sat in eight tracked files | the guard now matches the **shape** of a short numeric secret bound to a secret-shaped name, with an explicit sentinel allow-list, so an unknown value still fails the run; this was caught by re-scanning immediately before tagging v2.6.0, not by the suite |
 | The prediction journal and the paper book were rewritten in place | an interrupted write left a truncated file, and every loader below it read "unreadable" as "no state yet" — the next cycle opened at full capital with no positions and no realized P&L, a reset that looks exactly like a healthy account, on the same equity number live sizing divides by | both files are written through a temp file and renamed into place; an unreadable book is now moved aside, journalled, and engages the kill switch instead of silently restarting — 7 tests |
 
 Nothing moved money. The journal now says so itself: rebuilt from `data/audit_journal.jsonl`,
@@ -172,6 +173,18 @@ the track record publishes the count of lines carrying the test signature and th
 venue acknowledgements with a real order number, which is zero. That history is left in
 place rather than cleaned — a rewritten audit trail cannot prove anything, so the containment
 event was appended instead.
+
+One limit we will not paper over: the account-number and PIN literals are gone from the
+current tree, but they remain in the pushed git history, and a release that deleted history
+would also delete the evidence the audit rests on. Those values must be rotated before any
+live arming — and they never were reachable by a scanner that only knew what was in a config
+file, which is why the guard now matches shapes rather than known values, to stop the next
+one.
+
+The same pre-release scan caught our own deck quoting line counts and a test total that were
+three passes old, under a footer that said the figures were verified that day. That was a
+document defect rather than a code one, and it is the reason every number in this pack is
+regenerated by the commands in §9 immediately before a release rather than typed by hand.
 
 The first is the one to judge us by. It was not an investor's bug or a reviewer's bug — our
 own scorer produced it, our own audit caught it, and it was fixed before a live rupee could
@@ -183,7 +196,7 @@ be mis-sized because of it.
 git clone https://github.com/zhaider5142009-oss/kairos && cd kairos
 cp config.example.yaml config.yaml      # add your own keys; config.yaml is git-ignored
 pip install -r requirements.txt
-python -m pytest tests -q                    # 120 tests
+python -m pytest tests -q                    # 121 tests
 python -m kairos.cli backtest GOLD WTI HBL   # walk-forward sweep, costs modelled
 python -m kairos.cli health                  # subsystem health, dead council seats
 python -m kairos.cli feedback                # realized track record, live from the journal

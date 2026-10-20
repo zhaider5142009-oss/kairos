@@ -35,7 +35,7 @@ def test_existing_key_is_replaced_in_place(cfg):
 
 
 def test_comments_and_other_blocks_survive(cfg):
-    cfg.store_secret("js_global", "trading_pin", "0000")
+    cfg.store_secret("js_global", "trading_pin", "1234")
     text = cfg.path.read_text(encoding="utf-8")
     assert "# operator notes" in text
     assert "app:" in text and "data_dir: data" in text
@@ -49,13 +49,14 @@ def test_new_key_lands_inside_the_block(cfg):
 
 
 def test_leading_zeros_are_kept(cfg):
-    cfg.store_secret("js_global", "trading_pin", "0000")
+    """A PIN like 0123 must round-trip as a string, not collapse to int 123."""
+    cfg.store_secret("js_global", "trading_pin", "0123")
     raw = yaml.safe_load(cfg.path.read_text(encoding="utf-8"))
-    assert raw["js_global"]["trading_pin"] == "0000"
+    assert raw["js_global"]["trading_pin"] == "0123"
 
 
 def test_clearing_a_pin_leaves_it_falsy(cfg):
-    cfg.store_secret("js_global", "trading_pin", "0000")
+    cfg.store_secret("js_global", "trading_pin", "1234")
     cfg.store_secret("js_global", "trading_pin", "")
     assert not cfg._raw["js_global"]["trading_pin"]
 

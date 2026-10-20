@@ -15,9 +15,9 @@ appears in one document and not in another, the journals win — and the mistake
 
 ## Standing rules for this pack
 
-1. **No forward track record exists.** 890 predictions journaled, grep -rn "890|140 horizons matured, all
-   grep -rn "890|140 non-trades. Never quote a hit rate; the ledger says "not yet measurable" and so must
-   every other document.
+1. **No forward track record exists.** 1,018 predictions journaled, 140 horizons matured,
+   and all 140 were non-trades. Never quote a hit rate; the ledger says "not yet measurable"
+   and so must every other document.
 2. **Backtests are labelled backtests**, per instrument, including the 6 unprofitable ones.
 3. **No return promise, projection, or illustration of future performance** in any channel.
 4. **Nothing is sent or published without the operator's approval for that specific

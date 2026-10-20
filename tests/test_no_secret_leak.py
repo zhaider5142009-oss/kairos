@@ -11,6 +11,7 @@ Nothing here prints a secret: failures name the key and the file only.
 
 from __future__ import annotations
 
+import re
 import subprocess
 
 import pytest
@@ -86,7 +87,6 @@ def test_no_live_credential_appears_in_tracked_source():
 def test_tracked_source_has_no_generic_secret_shapes():
     """Catches the shape of a leak rather than a known value: a long provider
     key pasted straight into code."""
-    import re
     patterns = [
         re.compile(r"sk-[A-Za-z0-9]{16,}"),
         re.compile(r"ghp_[A-Za-z0-9]{20,}"),
@@ -104,3 +104,30 @@ def test_tracked_source_has_no_generic_secret_shapes():
             if pat.search(body):
                 bad.append((f, pat.pattern))
     assert not bad, f"provider-key-shaped strings in tracked source: {bad[:5]}"
+
+
+# The value scan above can only see a credential it is told about: it compares
+# tracked source against config.yaml, and an operator who keeps the PIN in their
+# head — or clears it from the file — makes the real value invisible to it. Both
+# leaks this repo has had were that kind. So this rule matches the shape of a
+# short numeric secret bound to a secret-shaped name, whatever its value is.
+SECRETISH = r"(?:trading_)?(?:pin|password|passwd|login|account|account_no|accountno)"
+NUM_LIT = re.compile(rf"{SECRETISH}[\"']?\s*[:=]\s*[\"'](\d{{4,12}})[\"']")
+# Values used by the fixtures themselves. Deliberately not real-looking, and
+# never allowed to be a value the operator has actually typed anywhere.
+SENTINELS = {"1234", "4321", "9999", "0123", "90001", "99999", "111111"}
+
+
+def test_no_short_numeric_secret_literals_in_tracked_source():
+    hits = []
+    for f in _tracked_files():
+        p = ROOT / f
+        if not p.is_file():
+            continue
+        for i, line in enumerate(p.read_text(encoding="utf-8",
+                                             errors="ignore").splitlines(), 1):
+            for m in NUM_LIT.finditer(line):
+                if m.group(1) not in SENTINELS:
+                    hits.append((f, i))
+    assert not hits, (f"{len(hits)} tracked line(s) bind a non-sentinel numeric "
+                      f"literal to a secret-shaped name: {hits[:5]}")

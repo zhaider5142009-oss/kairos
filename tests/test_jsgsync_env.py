@@ -35,12 +35,12 @@ def test_env_secrets_override_config(monkeypatch):
     monkeypatch.setenv("JSG_PASSWORD", "envpw")
     monkeypatch.setenv("JSG_PIN", "9999")
     monkeypatch.setenv("JSG_ALLOW_ORDERS", "true")
-    monkeypatch.setenv("JSG_ORDER_ACCOUNT", "53035")
+    monkeypatch.setenv("JSG_ORDER_ACCOUNT", "90001")
     c = jsgsync._conf()
     assert c["url"] == "https://env.example"          # trailing slash stripped
     assert c["login"] == "envlogin" and c["password"] == "envpw"
     assert c["trading_pin"] == "9999" and c["allow_orders"] is True
-    assert c["order_account"] == "53035"
+    assert c["order_account"] == "90001"
 
 
 @pytest.mark.parametrize("raw,want", [("1", True), ("on", True), ("yes", True),

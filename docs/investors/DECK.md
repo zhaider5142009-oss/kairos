@@ -29,12 +29,12 @@ Built by one operator, running 24/7, publishing its own losses.
 
 | | |
 |---|---|
-| Code | 10,584 lines Python · 34 modules · public repo |
+| Code | 10,691 lines Python · 35 modules · public repo |
 | Strategies | 100, selected per instrument by walk-forward search |
 | Council | 6 LLM models across 2 providers, named-seat consensus |
 | Execution | paper + JS Global PSX bridge + MT5 |
 | Uptime | 24/7 daemon, watchdog, token-gated public API |
-| Tests | 87 passing, money path included |
+| Tests | 121 passing, money path included |
 
 Not a fund. No client money. No licence. No AUM.
 
@@ -66,7 +66,7 @@ conviction.
 
 ## 6. What is *not* proven
 
-- **No forward track record.** 890 predictions journaled, 140 horizons matured, all 140 were
+- **No forward track record.** 1,018 predictions journaled, 140 horizons matured, all 140 were
   non-trades. A directional hit rate does not yet exist.
 - Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 154 cycles, 2 fills.
 - Live execution path is built and gated, not exercised at scale.
@@ -83,12 +83,17 @@ and grading un-printed horizons on the last flat bar. It fed a 1.05× confidence
 live entry thresholds.
 
 We found it, fixed it, pinned confidence to 1.0 until 10 real calls mature, and wrote 8
-regression tests so it cannot come back. Nine more defects went out in the next three passes,
+regression tests so it cannot come back. Ten more defects went out in the next four passes,
 five of them on the money path or on the trail that records it: a config that froze its risk
 limits at process start, an unbounded duplicate-order guard, ledgers rewritten in place so an
 interrupted write reset the paper book to full capital, a test suite that could arm live mode
 and write into the production audit journal, and a restart that reported **LIVE** from a stale
-state file while running paper. The journal was left as it is — the containment is recorded in
+state file while running paper. The tenth was about us rather than the code: the tripwire
+that is supposed to catch a leaked credential only compared against values present in
+`config.yaml`, so a PIN an operator keeps in their head was invisible to it — and a fix we had
+already reported as landed had not landed. It was caught by re-scanning by hand before
+tagging v2.6.0. The rule now matches the **shape** of a short numeric secret, not just a
+value we happen to know. The journal was left as it is — the containment is recorded in
 it, because a rewritten audit trail proves nothing.
 
 **A system that audits its own performance numbers is the product.** Everything else is a

@@ -113,7 +113,7 @@ js_global:
   # it. A stored PIN is what lets the armed autopilot place without you — only
   # do that deliberately, and never commit it.
   trading_pin: ""
-  order_account: ""              # account NUMBER, e.g. 53035; "" = first the
+  order_account: ""              # account NUMBER, e.g. 90001; "" = first the
                                  # portal returns for this login
   market: "REG"                  # REG | FUT | ODL | SIF | SQR | FSR
   max_order_notional: 250000     # PKR ceiling per single order (staging rejects above)

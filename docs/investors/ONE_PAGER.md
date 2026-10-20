@@ -21,7 +21,7 @@ SECP-licensed as an investment adviser, and has never managed third-party capita
 | Signal council | 6 LLM models across 2 providers, median consensus with named-seat integrity |
 | Execution | paper book + JS Global PSX order bridge + MT5 (JS Markets) |
 | Uptime | 24/7 daemon with watchdog and public token-gated API |
-| Tests | 120 passing, money-path and integrity cases included |
+| Tests | 121 passing, money-path and integrity cases included |
 
 ## What has actually been demonstrated
 
@@ -44,7 +44,7 @@ this is published per instrument and never as an average.
 
 ## What has *not* been demonstrated — stated plainly
 
-- **No forward track record yet.** 890 predictions journaled, 140 horizons matured, and all
+- **No forward track record yet.** 1,018 predictions journaled, 140 horizons matured, and all
   140 were non-trades. A directional hit rate does not exist until live calls mature.
 - **PSX equities are net-negative out-of-sample.** Local commission and slippage exceeded
   the signal: mean −2.8% across the 5-stock book, versus +13.6% across the global book.
