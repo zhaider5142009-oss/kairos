@@ -130,7 +130,7 @@ exist is a way to lose money faster than the market teaches you.
 - Logs rotate; state persists across restarts; RAM, startup and per-cycle cost were profiled
   on a 2015-era i5 / 8 GB machine, which is a deliberate constraint — if it runs there, the
   infrastructure argument is cheap.
-- 113 regression tests, including the money path and the integrity cases below.
+- 120 regression tests, including the money path and the integrity cases below.
 
 ## 7. What the numbers say, and what they do not
 
@@ -149,9 +149,9 @@ market, not a strategy proving itself.
 
 ## 8. The integrity bugs, documented because they are the credibility
 
-An investor kit is only worth its willingness to publish its own audit. Nine defects were
+An investor kit is only worth its willingness to publish its own audit. Ten defects were
 found and fixed; four of them were in the machinery that produces the numbers an investor
-would read, four were on the money path or the trail that records it, and one was a
+would read, five were on the money path or the trail that records it, and one was a
 credential sitting in a committed file.
 
 | defect | consequence had it shipped | fix |
@@ -165,6 +165,7 @@ credential sitting in a committed file.
 | The test suite imported the operator's live config | a `pytest` run armed live mode against stubbed brokers, appended to the production audit journal, and left daemon threads alive after the stubs were torn down — the operator could no longer trust their own order trail | `tests/conftest.py`: a throwaway config with an unroutable URL and empty credentials, the HTTP transport blocked for the session, every autopilot stopped at teardown; plus a credential-leak tripwire that reads `git ls-files` — 3 tests |
 | A restarted autopilot reported live from a stale state file | the desk told the operator "LIVE" while the process was running paper — the opposite of the truth at exactly the moment it mattered | restart clamps `mode`, `armed_live` and `running` before it reports anything |
 | The operator's real broker account number was hard-coded in two test fixtures | a live account identifier in a public repository, next to code that names its venue | replaced with a placeholder, and a tripwire test now fails if any live credential value or provider-key-shaped string appears in tracked source |
+| The prediction journal and the paper book were rewritten in place | an interrupted write left a truncated file, and every loader below it read "unreadable" as "no state yet" — the next cycle opened at full capital with no positions and no realized P&L, a reset that looks exactly like a healthy account, on the same equity number live sizing divides by | both files are written through a temp file and renamed into place; an unreadable book is now moved aside, journalled, and engages the kill switch instead of silently restarting — 7 tests |
 
 Nothing moved money. The journal now says so itself: rebuilt from `data/audit_journal.jsonl`,
 the track record publishes the count of lines carrying the test signature and the count of
@@ -182,7 +183,7 @@ be mis-sized because of it.
 git clone https://github.com/zhaider5142009-oss/kairos && cd kairos
 cp config.example.yaml config.yaml      # add your own keys; config.yaml is git-ignored
 pip install -r requirements.txt
-python -m pytest tests -q                    # 113 tests
+python -m pytest tests -q                    # 120 tests
 python -m kairos.cli backtest GOLD WTI HBL   # walk-forward sweep, costs modelled
 python -m kairos.cli health                  # subsystem health, dead council seats
 python -m kairos.cli feedback                # realized track record, live from the journal

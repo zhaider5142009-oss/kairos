@@ -137,12 +137,13 @@
   graded it as resolved. That fabricated accuracy then fed a <b>1.05× confidence bonus</b>
   into live entry thresholds.</p>
   <p class="lede">We found it, fixed it, pinned confidence to 1.0 until at least 10 real
-  directional calls mature, and wrote eight regression tests so it cannot come back. Eight
-  more defects went out in the next two passes: a bridge that reported setup success on a
+  directional calls mature, and wrote eight regression tests so it cannot come back. Nine
+  more defects went out in the next three passes: a bridge that reported setup success on a
   failed exit code, a provider fail-over that substituted a different model into a named
   council seat, silently truncated parallel arrays, the operator's live broker account number
   hard-coded in a committed test fixture, a config that froze its risk limits at process
-  start, an unbounded duplicate-order guard, a test suite that could arm live mode and write
+  start, an unbounded duplicate-order guard, ledgers rewritten in place so an interrupted
+  write reset the paper book to full capital, a test suite that could arm live mode and write
   into the production audit journal, and a restart that reported <b>LIVE</b> from a stale
   state file while running paper.</p>
   <p class="lede">The last two matter more than they look. An operator who cannot trust the
@@ -185,7 +186,7 @@
   numbers and the code agree.</p>
   <pre>git clone https://github.com/zhaider5142009-oss/kairos &amp;&amp; cd kairos
 pip install -r requirements.txt
-python -m pytest tests -q                     # 113 tests
+python -m pytest tests -q                     # 120 tests
 python -m kairos.cli backtest GOLD WTI HBL    # reproduce a sweep, costs modelled
 python -m kairos.cli feedback                 # realized record, live from the journal
 python tools/make_track_record.py             # rebuild the published ledger</pre>
