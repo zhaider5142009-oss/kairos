@@ -10,6 +10,7 @@ operator turns every order key (autopilot.auto_place + js_global.allow_orders
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 
@@ -21,6 +22,7 @@ from typing import Any
 from .config import CFG
 from .execution import (Fill, JOURNAL, KILL, JsGlobalTicket, get_mt5,
                         OrderIntent, PaperBroker, RiskGate)
+from .store import atomic_write
 
 DEFAULT_WATCHLIST = ["GOLD", "WTI", "EURUSD", "BTC", "SPX"]
 MAX_ACTIONS_KEPT = 80
@@ -105,8 +107,7 @@ class Autopilot:
 
     def _save(self) -> None:
         try:
-            self.state_path.write_text(__import__("json").dumps(self.st, default=str),
-                                       encoding="utf-8")
+            atomic_write(self.state_path, json.dumps(self.st, default=str))
         except Exception:
             pass
 
@@ -858,7 +859,6 @@ class Autopilot:
 
 
 def _read_json(path) -> dict[str, Any]:
-    import json
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:

@@ -26,6 +26,7 @@ import numpy as np
 import pandas as pd
 
 from .config import CFG
+from .store import atomic_write
 
 
 # ---------------------------------------------------------------------------
@@ -204,15 +205,30 @@ class PaperBroker:
             try:
                 return json.loads(self.state_path.read_text(encoding="utf-8"))
             except Exception:
+                # An unreadable file used to fall through as "no state yet", so
+                # the next cycle opened at full capital with no positions and no
+                # realized P&L — a silent reset that looks exactly like a
+                # healthy book, and that equity sizes live orders. Keep the
+                # evidence and refuse to trade against a book we cannot read.
+                stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+                damaged = self.state_path.with_name(self.state_path.name + f".{stamp}.damaged")
+                try:
+                    self.state_path.replace(damaged)
+                    kept = damaged.name
+                except OSError:
+                    kept = None
+                JOURNAL.log("PAPER_STATE_DAMAGED", {"path": str(self.state_path),
+                                                    "kept_as": kept})
+                KILL.engage("paper account state unreadable — fail-closed")
                 return {}
         return {}
 
     def _save(self) -> None:
-        self.state_path.write_text(json.dumps({
+        atomic_write(self.state_path, json.dumps({
             "capital": self.capital, "cash": self.cash, "positions": self.positions,
             "fills": self.fills[-500:], "realized_pnl": self.realized_pnl,
             "day_pnl": self.day_pnl, "day_stamp": self._day_stamp,
-        }, indent=1), encoding="utf-8")
+        }, indent=1))
 
     # -- account/positions ----------------------------------------------------
     def account(self) -> dict[str, Any]:

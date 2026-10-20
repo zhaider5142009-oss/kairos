@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from .config import CFG
+from .store import atomic_write
 
 JOURNAL = CFG.data_dir / "prediction_journal.jsonl"
 
@@ -102,8 +103,7 @@ def resolve_outcomes(md, lookback_days: int = 90) -> int:
                  directional=directional, correct=correct, abs_err=round(err, 5))
         newly += 1
     if newly:
-        JOURNAL.write_text("\n".join(json.dumps(e) for e in lines) + "\n",
-                           encoding="utf-8")
+        atomic_write(JOURNAL, "\n".join(json.dumps(e) for e in lines) + "\n")
     return newly
 
 

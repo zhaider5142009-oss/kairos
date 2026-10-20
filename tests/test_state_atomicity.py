@@ -1,0 +1,113 @@
+"""The two files that *are* the track record must survive an interrupted write.
+
+Both the prediction journal and the paper book are rewritten whole rather than
+appended to. They used to be overwritten in place, so a crash mid-write left a
+truncated file — and every loader below them read an unreadable file as "no
+state yet". For the paper book that means the next cycle opens at full capital
+with an empty position list and zero realized P&L: a reset that looks exactly
+like a healthy account, and whose equity is the number live sizing divides by.
+"""
+
+import json
+
+import pytest
+
+import kairos.execution as E
+from kairos.config import CFG
+from kairos.store import atomic_write
+
+
+@pytest.fixture()
+def data(monkeypatch, tmp_path):
+    """Give this test its own data directory and its own kill switch.
+
+    PaperBroker resolves its path from CFG at construction, so patching the
+    config is enough for the book. The kill switch is a module-level object
+    built at import, so its path has to be patched directly — otherwise the
+    test would engage the operator's real one.
+    """
+    monkeypatch.setattr(CFG, "data_dir", tmp_path)
+    monkeypatch.setattr(E.KILL, "path", tmp_path / "KILL_SWITCH")
+    return tmp_path
+
+
+def _events(monkeypatch) -> list:
+    seen: list[tuple[str, dict]] = []
+    monkeypatch.setattr(E.JOURNAL, "log",
+                        lambda event, payload=None: seen.append((event, payload or {})))
+    return seen
+
+
+# ---------------------------------------------------------------- atomic_write
+def test_a_failed_write_leaves_the_previous_file_intact(tmp_path, monkeypatch):
+    p = tmp_path / "journal.jsonl"
+    atomic_write(p, '{"a": 1}\n')
+    monkeypatch.setattr(type(p), "write_text",
+                        lambda self, *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    with pytest.raises(OSError):
+        atomic_write(p, "GONE\n")
+    assert p.read_text(encoding="utf-8") == '{"a": 1}\n'
+    assert not (tmp_path / "journal.jsonl.tmp").exists()
+
+
+def test_no_temp_file_survives_a_good_write(tmp_path):
+    p = tmp_path / "book.json"
+    atomic_write(p, "{}")
+    assert p.read_text(encoding="utf-8") == "{}"
+    assert [f.name for f in tmp_path.iterdir()] == ["book.json"]
+
+
+# -------------------------------------------------------------------- the book
+def test_a_healthy_book_round_trips(data):
+    first = E.PaperBroker(capital=1_000_000.0)
+    first.cash, first.realized_pnl = 912_345.5, -4_200.25
+    first.positions = {"GOLD": {"qty": 3.0, "entry": 4100.0}}
+    first._save()
+
+    second = E.PaperBroker(capital=1_000_000.0)
+    assert second.cash == 912_345.5
+    assert second.realized_pnl == -4_200.25
+    assert second.positions["GOLD"]["qty"] == 3.0
+
+
+def test_a_missing_book_is_a_clean_first_run(data):
+    broker = E.PaperBroker(capital=250_000.0)
+    assert broker.cash == 250_000.0
+    assert not E.KILL.engaged(), "no file is not damage, it is only a first run"
+
+
+def test_a_torn_book_is_not_read_as_a_fresh_account(data, monkeypatch):
+    (data / "paper_account.json").write_text(
+        '{"capital": 1000000.0, "cash": 912345.5', encoding="utf-8")
+    events = _events(monkeypatch)
+
+    E.PaperBroker(capital=1_000_000.0)
+
+    assert [e[0] for e in events] == ["PAPER_STATE_DAMAGED", "KILL_SWITCH_ENGAGED"]
+    assert E.KILL.engaged(), "never size an order against a book it cannot read"
+
+
+def test_the_damaged_book_is_kept_not_deleted(data, monkeypatch):
+    original = '{"capital": 1000000.0, "cash": 912345.5, "positions": {"GOLD": 3}'
+    (data / "paper_account.json").write_text(original, encoding="utf-8")
+    _events(monkeypatch)
+
+    E.PaperBroker(capital=1_000_000.0)
+
+    damaged = [f for f in data.iterdir() if f.name.endswith(".damaged")]
+    assert len(damaged) == 1
+    assert damaged[0].read_text(encoding="utf-8") == original
+
+
+def test_a_recovered_operator_can_release_and_reload(data, monkeypatch):
+    (data / "paper_account.json").write_text("{ not json", encoding="utf-8")
+    _events(monkeypatch)
+    E.PaperBroker(capital=1_000_000.0)
+    assert E.KILL.engaged()
+
+    E.KILL.release()
+    good = {"capital": 1_000_000.0, "cash": 800_000.0, "positions": {},
+            "fills": [], "realized_pnl": 12.5, "day_pnl": 0.0, "day_stamp": ""}
+    atomic_write(data / "paper_account.json", json.dumps(good))
+    broker = E.PaperBroker(capital=1_000_000.0)
+    assert broker.cash == 800_000.0
