@@ -39,6 +39,50 @@ PROVIDER_COOLDOWN_S = 1800.0
 _FATAL_HINTS = ("401", "402", "403", "429", "invalid authentication",
                 "insufficient balance", "suspended", "no api_key", "no keys")
 
+# A provider echoes its own account identifiers into the HTTP error body — a 429
+# from Moonshot names the organisation and the access-key id. That string is
+# returned by /api/health and shown on the desk, so it must not leave the process
+# verbatim. Status codes survive; identifier shapes do not.
+#
+# The unnamed-blob rule requires a digit. Without it, any long run of letters is
+# mistaken for a secret and the operator loses the sentence that explains why the
+# provider failed — and a dead provider with no readable reason is worse than a
+# redacted one. Real account ids are hex or base62 and carry digits.
+_ID_SHAPES = re.compile(
+    r"(?:org|ak|user|key|token|proj|team|sub)[-_][A-Za-z0-9]{6,}"
+    r"|sk-[A-Za-z0-9]{8,}"
+    r"|Bearer\s+[A-Za-z0-9._-]{8,}"
+    r"|\b(?=[A-Za-z0-9]*[0-9])[A-Za-z0-9]{24,}\b")
+
+
+def _safe_error(text: str) -> str:
+    return _ID_SHAPES.sub("[id]", text)[:200]
+
+
+def _clean(text: str) -> str:
+    """Drop a model's own stop-token markup before anyone parses the answer.
+
+    kimi-k3 through OpenRouter answers "OK<|close|>"; left in, the trailing token
+    rides into the verdict parser and the council vote.
+    """
+    return re.sub(r"<\|[^|>]{0,32}\|>", "", text or "").strip()
+
+
+def _answered(provider: str, model: str, text: str,
+              latency_s: float) -> LLMResponse:
+    """A blank completion is a failure, not a vote.
+
+    A reasoning model can spend max_tokens on hidden thinking and return an empty
+    content field. Reported as success it raises models_responded while
+    contributing nothing to the median — the same phantom-seat defect the router
+    fail-over fix removed, reachable on every leg instead of one.
+    """
+    body = _clean(text)
+    if not body:
+        return LLMResponse(False, provider, model, error="empty completion",
+                           latency_s=latency_s)
+    return LLMResponse(True, provider, model, body, latency_s=latency_s)
+
 
 @dataclass
 class LLMResponse:
@@ -117,13 +161,12 @@ class LLMRouter:
             with urllib.request.urlopen(req, timeout=int(api.get("timeout_s", 90))) as resp:
                 payload = json.loads(resp.read().decode("utf-8", errors="replace"))
             text = payload["choices"][0]["message"]["content"] or ""
-            return LLMResponse(True, "openrouter", model, text.strip(),
-                               latency_s=time.time() - t0)
+            return _answered("openrouter", model, text, time.time() - t0)
         except Exception as exc:
             if "401" in str(exc) or "403" in str(exc):
                 self._or_key_health[key] = 0.0
             return LLMResponse(False, "openrouter", model,
-                               error=str(exc)[:200], latency_s=time.time() - t0)
+                               error=_safe_error(str(exc)), latency_s=time.time() - t0)
 
     def _call_deepseek(self, messages: list[dict], model: str,
                        max_tokens: int, temperature: float) -> LLMResponse:
@@ -139,11 +182,11 @@ class LLMRouter:
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
                 payload = json.loads(resp.read().decode())
-            return LLMResponse(True, "deepseek", model,
-                               payload["choices"][0]["message"]["content"].strip(),
-                               latency_s=time.time() - t0)
+            return _answered("deepseek", model,
+                             payload["choices"][0]["message"]["content"],
+                             time.time() - t0)
         except Exception as exc:
-            return LLMResponse(False, "deepseek", model, error=str(exc)[:200])
+            return LLMResponse(False, "deepseek", model, error=_safe_error(str(exc)))
 
     def _call_moonshot(self, messages: list[dict], model: str,
                        max_tokens: int, temperature: float) -> LLMResponse:
@@ -177,24 +220,18 @@ class LLMRouter:
             msg = payload["choices"][0]["message"]
             # reasoning models can answer with an empty content and the text
             # in reasoning_content; never report a blank success
-            text = (msg.get("content") or "").strip()
-            if not text:
-                return LLMResponse(False, "moonshot", m,
-                                   error="empty completion",
-                                   latency_s=time.time() - t0)
-            return LLMResponse(True, "moonshot", m, text,
-                               latency_s=time.time() - t0)
+            return _answered("moonshot", m, msg.get("content"), time.time() - t0)
         except urllib.error.HTTPError as exc:
             detail = ""
             try:
-                detail = exc.read().decode("utf-8", errors="replace")[:160]
+                detail = exc.read().decode("utf-8", errors="replace")[:400]
             except Exception:
                 pass
             return LLMResponse(False, "moonshot", m,
-                               error=f"HTTP {exc.code} {detail}".strip()[:200],
+                               error=_safe_error(f"HTTP {exc.code} {detail}"),
                                latency_s=time.time() - t0)
         except Exception as exc:
-            return LLMResponse(False, "moonshot", m, error=str(exc)[:200],
+            return LLMResponse(False, "moonshot", m, error=_safe_error(str(exc)),
                                latency_s=time.time() - t0)
 
     def _call_gemini(self, prompt: str, model: str,
@@ -212,11 +249,11 @@ class LLMRouter:
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
                 payload = json.loads(resp.read().decode())
-            text = payload["candidates"][0]["content"]["parts"][0]["text"]
-            return LLMResponse(True, "gemini", model, text.strip(),
-                               latency_s=time.time() - t0)
+            parts = payload["candidates"][0]["content"].get("parts", [])
+            return _answered("gemini", model, parts[0].get("text") if parts else None,
+                             time.time() - t0)
         except Exception as exc:
-            return LLMResponse(False, "gemini", model, error=str(exc)[:200])
+            return LLMResponse(False, "gemini", model, error=_safe_error(str(exc)))
 
     # ------------------------------------------------------------------ chat
     def _legs(self) -> list[tuple[str, Any]]:
