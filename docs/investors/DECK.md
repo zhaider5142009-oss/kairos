@@ -29,7 +29,7 @@ Built by one operator, running 24/7, publishing its own losses.
 
 | | |
 |---|---|
-| Code | 10,733 lines Python · 35 modules · public repo |
+| Code | 10,765 lines Python · 35 modules · public repo |
 | Strategies | 100, selected per instrument by walk-forward search |
 | Council | 6 configured LLM seats across 2 providers; a dead seat shrinks the council |
 | Execution | paper + JS Global PSX bridge + MT5 |
@@ -66,9 +66,9 @@ conviction.
 
 ## 6. What is *not* proven
 
-- **No forward track record.** 1,062 predictions journaled, 140 horizons matured, all 140 were
+- **No forward track record.** 1,073 predictions journaled, 140 horizons matured, all 140 were
   non-trades. A directional hit rate does not yet exist.
-- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 172 cycles, 2 fills.
+- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 173 cycles, 2 fills.
 - Live execution path is built and gated, not exercised at scale.
 - No audit, no team, no third-party capital.
 
@@ -99,7 +99,14 @@ stop-token markup parsed as part of its vote, a blank completion counted as a co
 that had said nothing, a paper ledger whose daily figure rolled in memory and never reached
 the file, and the reason any of them could be missed at all — nothing in the build compared
 the figures this deck prints with the repository they are supposed to come from. Now a test
-does, and one command regenerates them. The journal was left as it is — the containment is
+does, and one command regenerates them. That test failed on the very next commit — adding
+four tests moved the quoted total — and going back through the ledger code it protects turned
+out a sixth: the earlier fix that stopped non-trades being scored as wins decided whether a
+row was a call from its score against whatever entry threshold is configured *today*, so
+turning that knob down would have reached backwards and republished a perfect hit rate built
+from trades that were never made. The record now reads the label written that day and
+recomputes the verdict from the sign of the realized return; no configuration change can
+rewrite history. The journal was left as it is — the containment is
 recorded in it, because a rewritten audit trail proves nothing.
 
 **A system that audits its own performance numbers is the product.** Everything else is a

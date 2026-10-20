@@ -10,6 +10,16 @@ Two defects these guard:
 2. A 5-day horizon was scored on the last available bar when the future bars
    had not printed, so realized_return came out 0.00000 and "predicted -0.04%,
    realized 0.00%, correct".
+
+And the third, found while testing the fix for the first two: the repair
+re-derived "was this a call?" from each row's score against the entry threshold
+*currently* configured, and left the stale `correct` column in the arithmetic.
+The threshold is a knob the operator turns, so turning it down would have
+promoted last month's 140 HOLDs into 140 wins and republished a 100% hit rate
+from a journal with no calls in it; turning it up would have deleted real calls
+that were placed and won. Whether a row was a claim is now read from the label
+written that day, and a legacy row's verdict is recomputed from the sign of the
+return against the direction claimed. Neither depends on today's config.
 """
 
 from __future__ import annotations
@@ -138,6 +148,68 @@ def test_legacy_rows_without_the_flag_are_rederived(journal, monkeypatch):
     tr = F.track_record()
     assert tr["directional_resolved"] == 0
     assert tr["hit_rate"] is None
+
+
+def test_lowering_the_threshold_cannot_promote_yesterdays_holds(journal,
+                                                                 monkeypatch):
+    """The entry threshold is operator-tuned; the record is not.
+
+    A legacy HOLD whose score sat under the old band still carries the pre-fix
+    correct=True. If direction is re-derived from whatever threshold is set
+    today, turning the knob down reaches backwards and edits history: these
+    rows become directional wins and the ledger publishes a perfect hit rate
+    built entirely from non-trades.
+    """
+    monkeypatch.setattr(F, "_direction_threshold", lambda: 0.05)
+    _write(journal, [
+        {"ts": "2026-01-05T00:00:00", "symbol": s, "horizon": 5, "score": sc,
+         "confidence": 0.3, "expected_return": 0.0, "price": 100.0,
+         "direction": "HOLD", "resolved": True, "realized_return": rr,
+         "correct": True, "abs_err": 0.001}
+        for s, sc, rr in (("GOLD", 0.152, 0.011), ("WTI", -0.14, -0.007),
+                          ("SPX", 0.09, 0.004))])
+    tr = F.track_record()
+    assert tr["directional_resolved"] == 0
+    assert tr["hit_rate"] is None
+    assert tr["recent"] == []
+
+
+def test_a_legacy_call_is_judged_on_the_sign_not_the_stale_column(journal,
+                                                                  monkeypatch):
+    """The old scorer's `correct` meant "landed inside the no-trade band", so a
+    wrong BUY could be filed as right. Recompute from the direction claimed
+    against the return that happened."""
+    monkeypatch.setattr(F, "_direction_threshold", lambda: 0.18)
+    _write(journal, [
+        {"ts": "2026-01-05T00:00:00", "symbol": "OGDC", "horizon": 5,
+         "score": 0.44, "confidence": 0.6, "expected_return": 0.03,
+         "price": 100.0, "direction": "BUY", "resolved": True,
+         "realized_return": -0.021, "correct": True, "abs_err": 0.051},
+        {"ts": "2026-01-05T00:00:00", "symbol": "HUBC", "horizon": 5,
+         "score": -0.51, "confidence": 0.5, "expected_return": -0.02,
+         "price": 100.0, "direction": "SELL", "resolved": True,
+         "realized_return": -0.03, "correct": False, "abs_err": 0.01}])
+    tr = F.track_record()
+    assert tr["directional_resolved"] == 2
+    # the BUY lost (wrong, despite its stale ✓); the SELL won
+    assert tr["hit_rate"] == 0.5
+    recent = {e["symbol"]: e["correct"] for e in tr["recent"]}
+    assert recent == {"OGDC": False, "HUBC": True}
+
+
+def test_the_claim_is_what_was_recorded_even_below_todays_band(journal,
+                                                               monkeypatch):
+    """A raised threshold must not retroactively un-make a call that was
+    actually placed as one."""
+    monkeypatch.setattr(F, "_direction_threshold", lambda: 0.60)
+    _write(journal, [
+        {"ts": "2026-01-05T00:00:00", "symbol": "LUCK", "horizon": 5,
+         "score": 0.22, "confidence": 0.4, "expected_return": 0.01,
+         "price": 100.0, "direction": "BUY", "resolved": True,
+         "realized_return": 0.02, "correct": True, "abs_err": 0.01}])
+    tr = F.track_record()
+    assert tr["directional_resolved"] == 1
+    assert tr["hit_rate"] == 1.0
 
 
 def test_no_evidence_does_not_inflate_confidence(journal, monkeypatch):

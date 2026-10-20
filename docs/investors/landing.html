@@ -68,7 +68,7 @@
 <section>
   <h2>What is actually built</h2>
   <div class="stat">
-    <div><b>10,733</b><small>lines of Python, 35 modules, public</small></div>
+    <div><b>10,765</b><small>lines of Python, 35 modules, public</small></div>
     <div><b>100</b><small>strategies selected per instrument, walk-forward</small></div>
     <div><b>6</b><small>configured council seats; a dead one shrinks the vote</small></div>
     <div><b>87</b><small>passing tests, money path included</small></div>
@@ -118,11 +118,11 @@
 <section>
   <h2>What is <em>not</em> proven</h2>
   <ul>
-    <li><b>No directional hit rate exists.</b> 1,062 predictions journaled, 140 horizons
+    <li><b>No directional hit rate exists.</b> 1,073 predictions journaled, 140 horizons
       matured, and every one of the 140 was a non-trade. A non-trade cannot be a correct
       prediction.</li>
     <li>The live paper book is essentially flat: −Rs 13.05 realized on Rs 1,000,000 across
-      172 autopilot cycles, 2 fills.</li>
+      173 autopilot cycles, 2 fills.</li>
     <li>The live order path is built, capped and tested against staging — it has not been
       exercised at scale.</li>
     <li>No audit, no team, no AUM, no regulatory licence, no third-party capital.</li>
@@ -158,6 +158,14 @@
   under yesterday's date. And the fifth was the reason the other four could hide: nothing in
   the build compared the figures this page prints with the repository they come from. Now a
   test does, and one command regenerates them.</p>
+  <p class="lede">A sixth came from that test failing on the next commit — the ledger figures
+  moved, so we went back through the code they describe. The earlier fix that stopped
+  non-trades being scored as wins decided whether a row was a call from its score against
+  whatever entry threshold is configured <b>today</b>. That knob is tuned by an operator, so
+  tuning it down would have reached backwards and republished a perfect hit rate out of trades
+  that were never made. Whether a row claimed a direction is now read from the label written
+  that day, and an old row's verdict is recomputed from the sign of the realized return. No
+  configuration change can rewrite the record.</p>
   <p class="lede">The last two matter more than they look. An operator who cannot trust the
   order trail cannot trust the system, and a desk that says "live" when it is paper is the
   one lie a trading system must never tell. Both are fixed structurally, not cosmetically,
@@ -198,7 +206,7 @@
   numbers and the code agree.</p>
   <pre>git clone https://github.com/zhaider5142009-oss/kairos &amp;&amp; cd kairos
 pip install -r requirements.txt
-python -m pytest tests -q                     # 149 tests
+python -m pytest tests -q                     # 152 tests
 python -m kairos.cli backtest GOLD WTI HBL    # reproduce a sweep, costs modelled
 python -m kairos.cli feedback                 # realized record, live from the journal
 python tools/make_track_record.py             # rebuild the published ledger</pre>

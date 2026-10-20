@@ -110,13 +110,45 @@ def resolve_outcomes(md, lookback_days: int = 90) -> int:
 def _is_directional(e: dict) -> bool:
     """Whether a resolved row was an actual call, not a HOLD.
 
-    Rows written before this distinction existed carry no flag, so they are
-    re-derived from the recorded score — otherwise every non-trade counts as a
-    win and the hit rate reads 100% on a journal with no calls in it.
+    Rows written before this distinction existed carry no flag. Their *label*
+    is what was actually claimed that day, so the label is the source of truth
+    and the score is only a fallback for rows too old to have either. Reusing
+    today's entry_threshold instead would let a config change reach backwards:
+    lower it below the largest legacy HOLD score and 140 non-trades become 140
+    directional calls — each still stamped correct=True by the pre-fix scorer —
+    and the published hit rate reads 100% on a journal containing no calls.
     """
     if "directional" in e:
         return bool(e["directional"])
+    label = str(e.get("direction", "")).upper()
+    if label in ("BUY", "SELL", "LONG", "SHORT"):
+        return True
+    if label in ("HOLD", "NEUTRAL", "FLAT"):
+        return False
     return abs(float(e.get("score", 0.0))) > _direction_threshold()
+
+
+def _was_correct(e: dict) -> bool:
+    """Whether a matured call was right, without trusting a legacy column.
+
+    For flagged rows `correct` was written by the current scorer and means what
+    it says. For unflagged rows it was written by the old accuracy rule — a
+    HOLD inside the no-trade band scored as a win — so it is discarded and the
+    verdict recomputed from the direction that was claimed against the sign of
+    the return that actually happened. No threshold involved, so no config edit
+    can rewrite last month's record.
+    """
+    if "directional" in e:
+        return bool(e.get("correct"))
+    realized = e.get("realized_return")
+    if realized is None:
+        return False
+    label = str(e.get("direction", "")).upper()
+    if label in ("BUY", "LONG"):
+        return float(realized) > 0
+    if label in ("SELL", "SHORT"):
+        return float(realized) < 0
+    return False
 
 
 def track_record() -> dict[str, Any]:
@@ -145,15 +177,15 @@ def track_record() -> dict[str, Any]:
                 # of nothing, and a diligence reader is entitled to not be
                 # shown it as if it were a call.
                 "recent": []}
-    hits = sum(1 for e in calls if e["correct"])
+    hits = sum(1 for e in calls if _was_correct(e))
     strong = [e for e in calls if abs(e["score"]) > 0.5]
-    strong_h = sum(1 for e in strong if e["correct"])
+    strong_h = sum(1 for e in strong if _was_correct(e))
     mae = float(np.mean([e["abs_err"] for e in calls]))
     # calibration: realized hit-rate per confidence bucket
     buckets: dict[str, list] = {}
     for e in calls:
         b = f"{int(e['confidence'] * 5) / 5:.1f}"
-        buckets.setdefault(b, []).append(1.0 if e["correct"] else 0.0)
+        buckets.setdefault(b, []).append(1.0 if _was_correct(e) else 0.0)
     calib = {k: round(float(np.mean(v)), 3) for k, v in sorted(buckets.items())
              if len(v) >= 3}
     return {"ok": True, "predictions": len(lines), "resolved": len(done),
@@ -162,7 +194,7 @@ def track_record() -> dict[str, Any]:
             "strong_signal_hit_rate": round(strong_h / len(strong), 3) if strong else None,
             "mean_abs_error": round(mae, 5),
             "calibration_by_confidence": calib,
-            "recent": calls[-8:]}
+            "recent": [dict(e, correct=_was_correct(e)) for e in calls[-8:]]}
 
 
 def confidence_adjustment() -> float:
