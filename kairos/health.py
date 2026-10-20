@@ -39,7 +39,7 @@ def system_health() -> dict[str, Any]:
         "psx-local": "ok" if src.psx_local else "down",
     }
 
-    from .llm import council_models, dead_seats
+    from .llm import council_models, dead_seats, provider_status
 
     or_api = CFG.apis.get("openrouter", {}) or {}
     kimi_api = CFG.apis.get("moonshot", {}) or {}
@@ -47,12 +47,21 @@ def system_health() -> dict[str, Any]:
     kimi_ok = bool(kimi_api.get("enabled", False)) and bool(
         kimi_api.get("api_key") or os.environ.get("MOONSHOT_API_KEY")
         or os.environ.get("KIMI_API_KEY"))
-    providers = [n for n, ok in (("openrouter", or_ok), ("kimi", kimi_ok)) if ok]
+    # Config says a key exists; only the calls know whether the account behind
+    # it answers. Report both, because "kimi: true" next to a suspended account
+    # is the silent rot this endpoint is supposed to make visible.
+    pstat = provider_status()
+    dead_key = {n: s["last_fatal"] for n, s in pstat.items() if s["last_fatal"]}
+    or_live = or_ok and not dead_key.get("openrouter")
+    kimi_live = kimi_ok and not dead_key.get("moonshot")
+    providers = [n for n, ok in (("openrouter", or_live), ("kimi", kimi_live)) if ok]
     dead = dead_seats()
     llm = {"ok": bool(providers),
            "provider": " + ".join(providers) or "down",
            "models": len(council_models()),
-           "kimi": kimi_ok,
+           "kimi": kimi_live,
+           "configured": {"openrouter": or_ok, "kimi": kimi_ok},
+           "unanswered": dead_key,
            "dead_seats": dead}
 
     ready = WSL.models_ready()

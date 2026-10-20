@@ -102,6 +102,8 @@ class LLMRouter:
         self._or_key_index = 0
         self._or_key_health: dict[str, float] = {}
         self._cooldown_until: dict[str, float] = {}
+        # name -> (reason, when): cooldown expires, a suspended account does not
+        self._last_fatal: dict[str, tuple[str, float]] = {}
 
     # ------------------------------------------------------------------ utils
     def _cache_path(self, key: str) -> Path:
@@ -307,6 +309,8 @@ class LLMRouter:
                 resp = fn(messages, m, max_tokens, temperature)
             if resp.ok:
                 self._cache_put(cache_key, resp.text, resp.provider)
+                # a recovered provider must not stay flagged: a 429 limit is fatal too
+                self._last_fatal.pop(name, None)
                 return resp
             # every leg's reason, in order — the last provider's balance error
             # must not hide the primary provider's actual failure
@@ -315,6 +319,7 @@ class LLMRouter:
                 # a dead key or an empty balance will not recover between
                 # cycles — stop paying 0.5s per call for a guaranteed 401/429
                 self._cooldown_until[name] = time.time() + PROVIDER_COOLDOWN_S
+                self._last_fatal[name] = (resp.error[:120], time.time())
         return LLMResponse(False, "chain", m,
                            error=" | ".join(errs)[:220] or "no provider answered")
 
@@ -391,12 +396,22 @@ def _fatal(error: str) -> bool:
 
 
 def provider_status() -> dict[str, Any]:
-    """Enabled providers and whether each is cooling after a hard failure."""
+    """Enabled providers, whether each is cooling, and why it last died.
+
+    "A key is configured" and "the account answers" are different facts: the
+    direct Kimi key sits enabled in config while the account behind it is
+    suspended, so a health page built from config alone reports a provider that
+    has not answered a request in days as live.
+    """
     out: dict[str, Any] = {}
+    now = time.time()
     for name, _fn in ROUTER._legs():
-        left = ROUTER._cooldown_until.get(name, 0.0) - time.time()
+        left = ROUTER._cooldown_until.get(name, 0.0) - now
+        why, when = ROUTER._last_fatal.get(name, ("", 0.0))
         out[name] = {"enabled": True,
-                     "cooling_s": round(max(0.0, left)) if left > 0 else 0}
+                     "cooling_s": round(left) if left > 0 else 0,
+                     "last_fatal": why,
+                     "last_fatal_age_s": round(now - when) if when else None}
     return out
 
 
