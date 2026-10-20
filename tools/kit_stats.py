@@ -37,8 +37,13 @@ def codebase() -> dict[str, int]:
     lines = sum(len((ROOT / f).read_text(encoding="utf-8",
                                          errors="replace").splitlines())
                 for f in files)
-    tests = _collected_tests()
-    return {"lines": lines, "modules": len(files), "tests": tests}
+    return {"lines": lines, "modules": len(files),
+            "tests": _collected_tests(), "strategies": _strategy_count()}
+
+
+def _strategy_count() -> int:
+    from kairos.strategies import STRATEGIES
+    return len(STRATEGIES)
 
 
 def _collected_tests() -> int:
@@ -76,6 +81,15 @@ def ledger() -> dict[str, str]:
 # like "every 12 cycles" or "8 new regression tests" is not a target. `keep` is
 # the number of leading groups to carry over — the shell-comment rule has to
 # re-emit its "# " or the code block loses its comment marker.
+#
+# The layouts are enumerated because a rule this loose could rewrite the wrong
+# digits, and rewriting is the dangerous half. That looseness is also how three
+# stale test counts survived the v2.6.0 pack: the deck and the one-pager wrote
+# "121 passing" and the landing page "<b>87</b><small>passing tests", and the
+# only phrasings covered were "N regression tests" and "# N tests". Adding a
+# layout here is not enough by itself — tests/test_kit_figures.py reads this
+# same table, so the checker and the rewriter cannot drift into two different
+# vocabularies, and it fails if a figure word in the pack has no rule behind it.
 PACK_DIR = "docs/investors"
 PACK_FILES = [f"{PACK_DIR}/{n}" for n in
               ("DECK.md", "ONE_PAGER.md", "WHITEPAPER.md", "landing.html",
@@ -83,14 +97,39 @@ PACK_FILES = [f"{PACK_DIR}/{n}" for n in
 RULES = [
     (r"[\d,]{4,9}(?=</b><small>lines of Python)", "lines_comma", 0),
     (r"[\d,]{4,9}(?=[\s>]*lines[\s>]*(?:of[\s>]*)?Python)", "lines_comma", 0),
-    (r"\b\d{2,3}(?=[\s>]modules)", "modules", 0),
-    (r"\b\d{2,4}(?=[\s>]regression[\s>]tests)", "tests", 0),
-    (r"(#\s*)\d{2,4}(?=[\s>]tests)", "tests", 1),
+    (r"\b\d{2,3}(?=[\s>]*modules)", "modules", 0),
+    (r"\b\d{2,4}(?=[\s>]*regression[\s>]*tests)", "tests", 0),
+    (r"(#\s*)\d{2,4}(?=[\s>]*tests)", "tests", 1),
+    (r"(?<=<b>)\d{2,4}(?=</b><small>passing)", "tests", 0),
+    (r"\b\d{2,4}(?=[\s>]*passing[\s>]*tests)", "tests", 0),
+    (r"\b\d{2,4}(?=[\s>]*passing,)", "tests", 0),
+    (r"(?<=<b>)\d{1,4}(?=</b><small>strateg)", "strategies", 0),
+    (r"(?<=\| Strategies \| )\d{1,4}(?=,[\s>]*selected)", "strategies", 0),
+    (r"(?<![\d,])\d{1,4}(?=[\s>-]*strateg)", "strategies", 0),
     (r"(?<![\d,])[\d,]{3,7}(?=[\s>]*predictions[\s>]*journaled)", "journaled_comma", 0),
     (r"(?<![\d,])[\d,]{2,7}(?=[\s>]*horizons[\s>]*matured)", "matured_comma", 0),
-    (r"(?<!every )\b\d{2,6}(?=[\s>]*autopilot[\s>]cycles)", "cycles", 0),
-    (r"(?<!every )\b\d{2,6}(?=[\s>]cycles)", "cycles", 0),
+    (r"(?<!every )\b\d{2,6}(?=[\s>]*autopilot[\s>]*cycles)", "cycles", 0),
+    (r"(?<!every )\b\d{2,6}(?=[\s>]*cycles)", "cycles", 0),
     (r"(?<![\d,])\d{1,7}(?=[\s>]*fills)", "fills", 0),
+]
+
+# Words that mean exactly one figure wherever the pack pairs them with a number.
+# This is the lint's vocabulary, and it is deliberately wider than RULES: a new
+# phrasing must fail the suite until a rule exists for it, rather than print a
+# number nothing checks. `width` mirrors the digit width of the rules that write
+# that figure — a one-digit number in front of "regression tests" is a defect
+# row's own count ("wrote 8 regression tests"), not the suite size, and must not
+# be pulled into either the rewrite or the lint.
+FIGURE_WORDS = [
+    ("lines_comma", r"[\d,]{4,9}", r"lines(?:[\s>]*(?:of[\s>]*)?)?Python"),
+    ("modules", r"\d{2,3}", r"modules"),
+    ("tests", r"\d{2,4}", r"regression[\s>]*tests|tests[\s>]*passing"
+                       r"|passing[\s>]*tests|passing"),
+    ("strategies", r"\d{1,4}", r"strateg(?:y|ies)"),
+    ("journaled_comma", r"[\d,]{3,7}", r"predictions[\s>]*journaled"),
+    ("matured_comma", r"[\d,]{2,7}", r"horizons[\s>]*matured"),
+    ("cycles", r"\d{2,6}", r"(?:autopilot[\s>]*)?cycles"),
+    ("fills", r"\d{1,7}", r"fills"),
 ]
 
 
@@ -102,10 +141,21 @@ def _values(facts: dict) -> dict[str, str]:
         return f"{v:,}" if thousands else str(v)
 
     return {"lines_comma": num("lines", True), "modules": num("modules", False),
-            "tests": num("tests", False),
+            "tests": num("tests", False), "strategies": num("strategies", False),
             "journaled_comma": num("journaled", True),
             "matured_comma": num("matured", True),
             "cycles": num("cycles", False), "fills": num("fills", False)}
+
+
+def figures() -> dict[str, int]:
+    """Every figure the pack is allowed to quote, as integers.
+
+    tests/test_kit_figures.py checks the pack against this and nothing else, so
+    the command that rewrites the figures and the test that guards them cannot
+    hold two different ideas of what a figure is.
+    """
+    facts = {**codebase(), **ledger()}
+    return {k: int(v.replace(",", "")) for k, v in _values(facts).items()}
 
 
 def _rewrite(facts: dict) -> dict[str, int]:
@@ -141,8 +191,8 @@ def main() -> int:
         for name, n in sorted(_rewrite(facts).items()):
             print(f"{name:34} {n} figure(s) updated")
         facts = {**codebase(), **ledger()}   # re-read, the ledger is the source
-    order = ["lines", "modules", "tests", "journaled", "matured", "directional",
-             "cycles", "fills", "realized_pnl", "ledger_generated"]
+    order = ["lines", "modules", "tests", "strategies", "journaled", "matured",
+             "directional", "cycles", "fills", "realized_pnl", "ledger_generated"]
     if args.markdown:
         print("| figure | value |")
         print("|---|---|")

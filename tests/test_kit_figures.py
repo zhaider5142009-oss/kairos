@@ -5,15 +5,30 @@ and a test total that were three passes old, under a footer that said the figure
 were verified that day. Nothing in the suite noticed: the numbers were prose in a
 markdown table, and the only generated document in the pack was the track record.
 
-Two kinds of figure, checked differently:
+That first fix had its own flaw, found by re-reading the pack against it. The
+rewriting command and this test each carried their own hand-written list of the
+phrasings a figure could appear in — "161 regression tests", "# 161 tests" — and
+neither list contained "121 passing" or "<b>87</b><small>passing tests", which is
+how the deck, the one-pager and the landing page went on publishing three test
+totals that were two and four passes old while the machinery that was supposed to
+prevent exactly that looked straight through them. A checker that enumerates the
+same vocabulary as the writer cannot find a phrase neither one knows.
 
-* Codebase figures (Python lines, modules, tests) change only when code is
-  committed, so they are compared against the working tree right now. Edit the
-  code and the pack must be edited in the same commit.
+So the vocabulary now lives in one place, `tools/kit_stats.RULES`, which this test
+imports: adding a layout makes the rewriter and the checker agree by construction.
+And `test_no_figure_phrase_lacks_a_rule` is the part neither of the old files had —
+a scan for digits standing next to a word that can only mean a figure, failing if
+no rule covers that spot. Write "999 passed" into the deck and the suite goes red
+instead of publishing it.
+
+Two kinds of figure, both pinned to the same command:
+
+* Codebase figures (Python lines, modules, tests, strategies) change only when
+  code is committed, so they are compared against the working tree right now.
 * Evidence figures (predictions journaled, horizons matured, cycles, fills) move
-  while the daemon runs, so they cannot be pinned to a live count. They are
-  pinned instead to the generated ledger, TRACK_RECORD.md, which is rebuilt by
-  one command. If the ledger is regenerated and the deck is not, this fails.
+  while the daemon runs, so they are pinned to the generated ledger instead —
+  TRACK_RECORD.md, rebuilt by one command. If the ledger is regenerated and the
+  deck is not, this fails.
 
 Either way the pack cannot drift silently, which is the point: an outside party
 can check every number in it.
@@ -22,18 +37,26 @@ can check every number in it.
 from __future__ import annotations
 
 import re
-import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from kairos.config import ROOT
 
+_TOOLS = str(ROOT / "tools")
+if _TOOLS not in sys.path:
+    sys.path.insert(0, _TOOLS)
+import kit_stats  # noqa: E402  (the figure table is the thing under test)
+
 PACK_DIR = ROOT / "docs" / "investors"
 PACK = [PACK_DIR / name for name in
         ("DECK.md", "ONE_PAGER.md", "WHITEPAPER.md", "landing.html", "README.md",
          "OUTREACH.md")] + [ROOT / "README.md"]
-LEDGER = PACK_DIR / "TRACK_RECORD.md"
+
+# A figure can sit inside markup, so the scan that looks for one has to cross the
+# tags that the layout rules have to spell out.
+SEP = r"(?:[\s>.,:;/-]|</?b>|<small>|<em>|</em>)*"
 
 
 def _text(p: Path) -> str:
@@ -44,114 +67,63 @@ def _text(p: Path) -> str:
     return re.sub(r"\s+", " ", body.replace("\n>", " "))
 
 
-def _codebase_figures() -> dict[str, int]:
-    r = subprocess.run(["git", "ls-files", "kairos/*.py"], cwd=ROOT,
-                       capture_output=True, text=True, check=False)
-    if r.returncode != 0:
-        pytest.skip("no git index available")
-    files = [f for f in r.stdout.split() if f.endswith(".py")]
-    if not files:
-        pytest.skip("no tracked source to count")
-    lines = sum(len((ROOT / f).read_text(encoding="utf-8",
-                                         errors="replace").splitlines())
-                for f in files)
-    return {"lines": lines, "modules": len(files)}
+def _digits(match: re.Match) -> int:
+    """The number a rule matched, dropping whatever the rule re-emits around it."""
+    tail = re.search(r"[\d,]+$", match.group(0))
+    return int(tail.group().replace(",", ""))
 
 
-@pytest.fixture
-def suite(request) -> int:
-    """Collected items for this session — parametrized cases included.
-
-    Counting definitions with a regex would be wrong: parametrize adds cases, so
-    the only honest number is the one pytest itself reports.
-    """
-    args = [str(a) for a in (_opt(request.config, "file_or_dir") or [])]
-    if args and args not in (["tests"], ["."], [str(ROOT / "tests")]):
-        pytest.skip("figures are only checked on a full-suite run")
-    if _opt(request.config, "keyword") or _opt(request.config, "mark"):
-        pytest.skip("figures are only checked on a full-suite run")
-    return len(request.session.items)
-
-
-def _opt(config, name):
-    """Read an option a given pytest build may not register."""
-    try:
-        return config.getoption(name)
-    except ValueError:
-        return None
-
-
-def _ledger_figures() -> dict[str, str]:
-    body = _text(LEDGER)
-    out: dict[str, str] = {}
-    for label, key in (("predictions journaled", "journaled"),
-                       ("horizons matured", "matured"),
-                       ("of which directional calls", "directional")):
-        m = re.search(rf"\| {re.escape(label)} \| ([\d,]+) \|", body)
-        assert m, f"{LEDGER.name} no longer reports {label}"
-        out[key] = m.group(1)
-    m = re.search(r"cycles run: \*\*([\d,]+)\*\*", body)
-    assert m, f"{LEDGER.name} no longer reports autopilot cycles"
-    out["cycles"] = m.group(1)
-    m = re.search(r"fills: (\d+)", body)
-    assert m, f"{LEDGER.name} no longer reports fills"
-    out["fills"] = m.group(1)
+def _rule_spans(body: str) -> list[tuple[int, int, str]]:
+    """Where each rule sits in this text, as digit spans plus its figure key."""
+    out: list[tuple[int, int, str]] = []
+    for pattern, key, _keep in kit_stats.RULES:
+        for m in re.finditer(pattern, body):
+            tail = re.search(r"[\d,]+$", m.group(0))
+            out.append((m.start() + tail.start(), m.start() + tail.end(), key))
     return out
 
 
 @pytest.fixture(scope="module")
-def codebase():
-    return _codebase_figures()
-
-
-@pytest.fixture(scope="module")
-def ledger():
-    return _ledger_figures()
+def figures():
+    """Every quotable figure, straight from the command that rewrites the pack."""
+    f = kit_stats.figures()
+    # a collector that quietly returned nothing would turn every comparison
+    # below into "the pack is wrong", which is the loudest possible lie
+    assert f["lines_comma"] > 5_000 and f["tests"] > 100, f
+    assert f["modules"] > 10 and f["strategies"] > 0, f
+    return f
 
 
 @pytest.mark.parametrize("path", PACK, ids=lambda p: p.name)
-def test_no_stale_codebase_figures(path, codebase, suite):
+def test_pack_figures_match_the_repository(path, figures):
     body = _text(path)
     bad: list[str] = []
-
-    for m in re.finditer(r"([\d,]{4,9})\s+lines(?:\s+of)?\s+Python", body):
-        if int(m.group(1).replace(",", "")) != codebase["lines"]:
-            bad.append(f"{m.group(0)!r} — repo has {codebase['lines']:,}")
-    for m in re.finditer(r"<b>([\d,]{4,9})</b><small>lines of Python", body):
-        if int(m.group(1).replace(",", "")) != codebase["lines"]:
-            bad.append(f"{m.group(0)!r} — repo has {codebase['lines']:,}")
-    for m in re.finditer(r"(\d{2,3}) modules", body):
-        if int(m.group(1)) != codebase["modules"]:
-            bad.append(f"{m.group(0)!r} — repo has {codebase['modules']} modules")
-    # only the totals: a defect row that says "9 tests" for its own fix is not
-    # the suite size and must not be rewritten.
-    for m in re.finditer(r"#\s*(\d{2,4}) tests", body):
-        if int(m.group(1)) != suite:
-            bad.append(f"{m.group(0)!r} — the suite runs {suite}")
-    for m in re.finditer(r"(\d{2,4}) regression tests(?!, including)", body):
-        if int(m.group(1)) != suite:
-            bad.append(f"{m.group(0)!r} — the suite runs {suite}")
+    for pattern, key, _keep in kit_stats.RULES:
+        want = figures[key]
+        for m in re.finditer(pattern, body):
+            if _digits(m) != want:
+                bad.append(f"{m.group(0)!r} — the repository says {want:,} {key}")
     assert not bad, f"{path.relative_to(ROOT)} contradicts the repository: {bad}"
 
 
 @pytest.mark.parametrize("path", PACK, ids=lambda p: p.name)
-def test_no_stale_evidence_figures(path, ledger):
-    """Evidence moves while the daemon runs, so the pack is pinned to the
-    generated ledger rather than to the live journal — the same numbers, but
-    checkable from a file an investor can ask for."""
+def test_no_figure_phrase_lacks_a_rule(path, figures):
+    """A digit next to a figure word must be a figure the rules rewrite.
+
+    `figures` is only here to make the message actionable: the value is the one
+    the missing rule would have to write.
+    """
     body = _text(path)
+    spans = _rule_spans(body)
     bad: list[str] = []
-
-    def check(pattern: str, want: str, label: str) -> None:
-        for m in re.finditer(pattern, body):
-            if m.group(1).replace(",", "") != want.replace(",", ""):
-                bad.append(f"{m.group(0)!r} — the ledger says {want} {label}")
-
-    check(r"([\d,]{3,7}) predictions journaled", ledger["journaled"], "journaled")
-    check(r"([\d,]{2,7}) horizons matured", ledger["matured"], "matured")
-    check(r"(?<!every )(\d{2,6}) (?:autopilot )?cycles", ledger["cycles"], "cycles")
-    check(r"(\d+) fills", ledger["fills"], "fills")
-    assert not bad, f"{path.relative_to(ROOT)} contradicts TRACK_RECORD.md: {bad}"
+    for key, width, word in kit_stats.FIGURE_WORDS:
+        for m in re.finditer(
+                rf"(?<!every )(?<![\d,]){width}(?={SEP}(?:{word}))", body):
+            if any(a < m.end() and m.start() < b for a, b, _k in spans):
+                continue
+            bad.append(f"{m.group(0)!r} before a figure word has no rule in "
+                       f"tools/kit_stats.RULES (it must read {figures[key]:,})")
+    assert not bad, f"{path.relative_to(ROOT)}: {bad}"
 
 
 def test_the_pack_cites_the_ledger_as_the_source():
@@ -159,3 +131,14 @@ def test_the_pack_cites_the_ledger_as_the_source():
     assert "make_track_record" in _text(PACK_DIR / "README.md")
 
 
+def test_a_figure_command_value_is_reachable_from_the_pack(figures):
+    """Every key the rules rewrite must be a figure this test can resolve.
+
+    A typo in a rule's key would otherwise make the rewriter crash on `--write`
+    and the checker pass on an empty rule list — the failure mode being a pack
+    that silently stops being maintained.
+    """
+    keys = {key for _p, key, _k in kit_stats.RULES}
+    assert keys <= set(figures), keys ^ set(figures)
+    words = {key for key, _w, _word in kit_stats.FIGURE_WORDS}
+    assert words <= set(figures), words ^ set(figures)

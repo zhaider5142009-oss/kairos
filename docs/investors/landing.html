@@ -68,10 +68,10 @@
 <section>
   <h2>What is actually built</h2>
   <div class="stat">
-    <div><b>10,793</b><small>lines of Python, 35 modules, public</small></div>
+    <div><b>10,817</b><small>lines of Python, 35 modules, public</small></div>
     <div><b>100</b><small>strategies selected per instrument, walk-forward</small></div>
     <div><b>6</b><small>configured council seats; a dead one shrinks the vote</small></div>
-    <div><b>87</b><small>passing tests, money path included</small></div>
+    <div><b>162</b><small>passing tests, money path included</small></div>
     <div><b>24/7</b><small>supervised daemon, watchdog, token-gated API</small></div>
   </div>
 </section>
@@ -118,11 +118,11 @@
 <section>
   <h2>What is <em>not</em> proven</h2>
   <ul>
-    <li><b>No directional hit rate exists.</b> 1,084 predictions journaled, 140 horizons
+    <li><b>No directional hit rate exists.</b> 1,139 predictions journaled, 140 horizons
       matured, and every one of the 140 was a non-trade. A non-trade cannot be a correct
       prediction.</li>
     <li>The live paper book is essentially flat: −Rs 13.05 realized on Rs 1,000,000 across
-      174 autopilot cycles, 2 fills.</li>
+      179 autopilot cycles, 2 fills.</li>
     <li>The live order path is built, capped and tested against staging — it has not been
       exercised at scale.</li>
     <li>No audit, no team, no AUM, no regulatory licence, no third-party capital.</li>
@@ -166,6 +166,19 @@
   that were never made. Whether a row claimed a direction is now read from the label written
   that day, and an old row's verdict is recomputed from the sign of the realized return. No
   configuration change can rewrite the record.</p>
+  <p class="lede">A seventh asked what our own instruments actually see. The health page built
+  its provider list from the config file, so a key that exists made the provider read live —
+  while the account behind one of them answers every request with a suspension error, and two
+  council seats have not spoken in days. It now treats "a key is configured" and "the account
+  answers" as two facts. And the figure checker turned out to have the same blind spot it was
+  written to catch: it and the command that rewrites the pack each carried their own list of the
+  phrasings a number could appear in, and neither list contained the word "passing". So this
+  page,
+  the deck and the one-pager published three test totals that were two and four passes old,
+  under the same verified-today footer, while the machinery designed to prevent that looked
+  straight through them. The vocabulary is now one table that both the rewriter and the test
+  read, the strategy count joined it as a fourth codebase figure, and a new test fails if a
+  number sits beside a figure word with no rule behind it.</p>
   <p class="lede">The last two matter more than they look. An operator who cannot trust the
   order trail cannot trust the system, and a desk that says "live" when it is paper is the
   one lie a trading system must never tell. Both are fixed structurally, not cosmetically,
@@ -206,7 +219,7 @@
   numbers and the code agree.</p>
   <pre>git clone https://github.com/zhaider5142009-oss/kairos &amp;&amp; cd kairos
 pip install -r requirements.txt
-python -m pytest tests -q                     # 156 tests
+python -m pytest tests -q                     # 162 tests
 python -m kairos.cli backtest GOLD WTI HBL    # reproduce a sweep, costs modelled
 python -m kairos.cli feedback                 # realized record, live from the journal
 python tools/make_track_record.py             # rebuild the published ledger</pre>

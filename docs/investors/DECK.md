@@ -29,12 +29,12 @@ Built by one operator, running 24/7, publishing its own losses.
 
 | | |
 |---|---|
-| Code | 10,793 lines Python · 35 modules · public repo |
+| Code | 10,817 lines Python · 35 modules · public repo |
 | Strategies | 100, selected per instrument by walk-forward search |
 | Council | 6 configured LLM seats across 2 providers; a dead seat shrinks the council |
 | Execution | paper + JS Global PSX bridge + MT5 |
 | Uptime | 24/7 daemon, watchdog, token-gated public API |
-| Tests | 121 passing, money path included |
+| Tests | 162 passing, money path included |
 
 Not a fund. No client money. No licence. No AUM.
 
@@ -66,9 +66,9 @@ conviction.
 
 ## 6. What is *not* proven
 
-- **No forward track record.** 1,084 predictions journaled, 140 horizons matured, all 140 were
+- **No forward track record.** 1,139 predictions journaled, 140 horizons matured, all 140 were
   non-trades. A directional hit rate does not yet exist.
-- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 174 cycles, 2 fills.
+- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 179 cycles, 2 fills.
 - Live execution path is built and gated, not exercised at scale.
 - No audit, no team, no third-party capital.
 
@@ -106,7 +106,18 @@ row was a call from its score against whatever entry threshold is configured *to
 turning that knob down would have reached backwards and republished a perfect hit rate built
 from trades that were never made. The record now reads the label written that day and
 recomputes the verdict from the sign of the realized return; no configuration change can
-rewrite history. The journal was left as it is — the containment is
+rewrite history. A seventh pass asked what our own health page actually knows, and then what
+our own checker knows. The health endpoint built its provider list from the config file, so a
+key that is present made the provider read live — while the account behind one of them answers
+every request with a suspension error and two council seats have not spoken in days. It now
+reports "a key exists" and "the account answers" as two facts. The checker was worse in a way
+that only matters if you trust it: it and the rewriting command each carried their own list of
+the phrasings a figure could appear in, and neither list contained the word "passing" — so the
+deck, the one-pager and the landing page published three test totals that were two and four passes
+old, under that same "verified today" footer, while the machinery built to prevent exactly that
+looked straight through them. The vocabulary now lives in one table that both the rewriter and
+the test read, a fourth figure (the strategy count) joined it, and a new test fails if a number
+sits next to a figure word with no rule behind it. The journal was left as it is — the containment is
 recorded in it, because a rewritten audit trail proves nothing.
 
 **A system that audits its own performance numbers is the product.** Everything else is a

@@ -144,7 +144,7 @@ exist is a way to lose money faster than the market teaches you.
 - Logs rotate; state persists across restarts; RAM, startup and per-cycle cost were profiled
   on a 2015-era i5 / 8 GB machine, which is a deliberate constraint — if it runs there, the
   infrastructure argument is cheap.
-- 156 regression tests, including the money path and the integrity cases below.
+- 162 regression tests, including the money path and the integrity cases below.
 
 ## 7. What the numbers say, and what they do not
 
@@ -157,21 +157,23 @@ adjustment), and six instruments reported as losses.
 important finding in the project: the edge, if any, is in the global and commodity books,
 and any PSX strategy must be sized against costs before it is sized against conviction.
 
-The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 174
+The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 179
 autopilot cycles) with two fills. That is a system working as designed on a low-conviction
 market, not a strategy proving itself.
 
 ## 8. The integrity bugs, documented because they are the credibility
 
-An investor kit is only worth its willingness to publish its own audit. Seventeen defects were
+An investor kit is only worth its willingness to publish its own audit. Nineteen defects were
 found and fixed; four of them were in the machinery that produces the numbers an investor
 would read, five were on the money path or the trail that records it, two were
 credentials — or the guard that was supposed to catch them — sitting in tracked files, and
-the last six came from probing the newest provider, re-reading our own published pack, and
-then testing the fix that was supposed to keep the ledger honest. That second group is worth
-naming, because nothing about it was flattering: three of them were in code we had already
-declared finished, two were in the numbers we had already printed, and one was inside an
-earlier repair — which is why the last one was found at all.
+the last nine came from probing the newest provider, re-reading our own published pack,
+testing the fix that was supposed to keep the ledger honest, asking what the health page
+actually knows, and then asking the same question of the tooling we wrote to keep our own
+figures honest. That second group is worth naming, because nothing about it was
+flattering: three of them were in code we had already declared finished, two were in the
+numbers we had already printed, and three were inside an earlier repair or the guardrail we
+built for one — which is why the last ones were found at all.
 
 | defect | consequence had it shipped | fix |
 |---|---|---|
@@ -192,6 +194,8 @@ earlier repair — which is why the last one was found at all.
 | The paper book rolled its daily figure in memory only | state was written on a fill, so through a quiet stretch — most of this account — the ledger on disk kept the previous day's stamp and the previous day's loss, and the published track record quoted them. A daily loss limit is a brake; a stale stamp means nobody can tell from the file which day a number belongs to | the roll is persisted when the date changes, and a test asserts the desk polling the book does not rewrite it |
 | Nothing in the suite compared the pack's figures with the repository | our own published deck quoted a line count, a module count and a test total that were three passes old under a footer saying they were verified that day, and a `pytest` run could not have noticed: the numbers were prose in a markdown table | every quoted figure is now checked twice — codebase figures against the working tree, evidence figures against the regenerated ledger — and one command rewrites them all, so "verified today" is a claim the suite holds up rather than one we type |
 | The fix for the first defect in this table trusted today's configuration | to decide whether an old journal row was a call or a non-trade it re-read the row's score against whatever `entry_threshold` is set **now**, and the hit arithmetic still read the pre-fix `correct` column. The threshold is a knob the operator turns, so turning it down reaches backwards and edits history: those rows become wins that were never played, and the published 100% hit rate returns from a journal containing no calls. Turning it up deletes calls that were made and won | the label written that day decides whether a row claimed a direction, and a legacy row's verdict is recomputed from the sign of the realized return against that claim. Neither reads today's config, so no future tuning can rewrite the record — 4 more tests. Found because the new figure test failed on the commit that added it, which sent us back through the ledger code it protects. Worth adding that the first cut of this repair was itself wrong: it matched the label `BUY` exactly, and the ensemble says `STRONG BUY` / `BUY` / `HOLD` / `SELL` / `STRONG SELL`, so the strongest band — the one the strong-signal rate is measured on — would have been filed as a loss it had won. Caught by re-reading the fix against the vocabulary it reads, two commits later, and now covered by two more tests. The write path had the same flaw — `directional` and `correct` were stamped at resolution time from the band configured that day, and those columns are read back for the rest of the record's life, so tuning the gate next week would still have chosen which of this week's snapshots ever counted. Resolution now stamps the claim the row carries, with the band kept only as a fallback for rows too old to be labelled |
+| `/api/health` built its provider list from the config file | a key that is present and enabled made `kimi: true`, and the catalog check only spots retired slugs — so the one provider failure we actually have, a Moonshot account answering every request with `429 account … is suspended`, was published as healthy. This is the endpoint the pack names as the place where rot becomes visible, and it was blind to the rot we had | the router keeps the last account-level failure per provider — redacted, timestamped, and cleared the moment the provider answers again, because a 429 rate limit is also a fatal hint and a recovered provider must not stay flagged — and health reports `configured`, `unanswered` and the remaining cooldown as three separate facts, so "a key exists" and "the account answers" can no longer be confused for one badge — 5 tests |
+| The guardrail that was supposed to stop stale figures had its own stale figures | the anti-staleness test and the command that rewrites the pack each carried a **hand-written list of the phrasings** a number could appear in — "162 regression tests", "# 162 tests" — and neither list contained the word "passing", so the deck and the one-pager printed one test total and the landing page another while the suite had moved twice since; and the checker explicitly *exempted* the phrase the rewriter rewrote, so the headline count was refreshed but never verified. A checker that enumerates the same vocabulary as the writer cannot find a phrase neither of them knows | the vocabulary is now one table (`tools/kit_stats.RULES`) that the rewriter and the test read together, so adding a layout makes them agree by construction; a second test fails if a number sits beside a figure word with no rule behind it — write "999 passed" into the deck and the suite goes red instead of publishing it; the strategy count joined the checked figures, and the exemption is gone |
 
 Nothing moved money. The journal now says so itself: rebuilt from `data/audit_journal.jsonl`,
 the track record publishes the count of lines carrying the test signature and the count of
@@ -224,7 +228,7 @@ be mis-sized because of it.
 git clone https://github.com/zhaider5142009-oss/kairos && cd kairos
 cp config.example.yaml config.yaml      # add your own keys; config.yaml is git-ignored
 pip install -r requirements.txt
-python -m pytest tests -q                    # 156 tests
+python -m pytest tests -q                    # 162 tests
 python -m kairos.cli backtest GOLD WTI HBL   # walk-forward sweep, costs modelled
 python -m kairos.cli health                  # subsystem health, dead council seats
 python -m kairos.cli feedback                # realized track record, live from the journal
