@@ -5,19 +5,25 @@ repo root. The file is OPTIONAL: without it the engine runs on built-in
 defaults, environment-variable keys, and public data sources. Put real keys in
 config.yaml (git-ignored) or env vars — never in tracked source.
 Runtime state (data/, reports/) lives next to the config file, or in the
-current directory when no config file is present.
+current directory when no config file is present. The file is re-read when its
+mtime changes, so a risk limit or an arming key edited while the tower runs
+takes effect on the next use instead of the next restart.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# how often a config read may cost a stat(); the tower runs for days
+_RELOAD_CHECK_S = 1.0
 
 
 def _find_config() -> Path | None:
@@ -48,9 +54,45 @@ class Config:
         self.reports_dir = self.root / app.get("reports_dir", "reports")
         for d in (self.data_dir, self.cache_dir, self.reports_dir):
             d.mkdir(parents=True, exist_ok=True)
+        self._file_mtime = self._stat()
+        self._next_check = time.monotonic() + _RELOAD_CHECK_S
+
+    def _stat(self) -> float | None:
+        if self.path is None:
+            return None
+        try:
+            return self.path.stat().st_mtime
+        except OSError:
+            return None
+
+    def _maybe_reload(self) -> None:
+        """Pick up an edited config.yaml without a restart.
+
+        Sections read at decision time (risk limits, arming keys, thresholds)
+        then bind on the next use. The app: paths are deliberately excluded —
+        data_dir/cache_dir/reports_dir are bound into objects at import, so
+        changing them still needs a restart.
+        """
+        now = time.monotonic()
+        if now < self._next_check:
+            return
+        self._next_check = now + _RELOAD_CHECK_S
+        mtime = self._stat()
+        if mtime is None or mtime == self._file_mtime:
+            return
+        try:
+            raw = yaml.safe_load(self.path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            # a half-written or broken file must not take the gate down: keep
+            # the last good config and wait for the next edit.
+            self._file_mtime = mtime
+            return
+        self._file_mtime = mtime
+        self._raw = raw
 
     # -- accessors ----------------------------------------------------------
     def section(self, name: str) -> dict[str, Any]:
+        self._maybe_reload()
         return self._raw.get(name, {}) or {}
 
     @property
@@ -127,6 +169,8 @@ class Config:
         tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
         tmp.replace(self.path)
         self._raw = yaml.safe_load(self.path.read_text(encoding="utf-8")) or {}
+        self._file_mtime = self._stat()
+        self._next_check = time.monotonic() + _RELOAD_CHECK_S
         return True
 
     @classmethod

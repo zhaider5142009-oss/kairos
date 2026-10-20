@@ -84,11 +84,15 @@ def optimize_portfolio(returns: pd.DataFrame, k: int = 8,
     x, _ = _anneal(mu, cov, k=min(k, len(symbols)), lam=lam)
     if x.sum() == 0:
         return None
+    if len(x) != len(symbols):
+        # a short selection vector would silently drop the tail symbols from
+        # the book while the reported cardinality still counted them.
+        return None
     w = x / x.sum()
     exp_ret = float(mu @ w)
     exp_vol = float(np.sqrt(w @ cov @ w))
     sharpe = exp_ret / exp_vol if exp_vol > 0 else 0.0
-    weights = {s: float(wi) for s, wi in zip(symbols, w) if wi > 1e-9}
+    weights = {s: float(wi) for s, wi in zip(symbols, w, strict=True) if wi > 1e-9}
     return PortfolioSolution(weights, exp_ret, exp_vol, sharpe,
                              int(x.sum()), "quantum-annealer")
 

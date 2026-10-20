@@ -81,7 +81,8 @@ def fuse(symbol: str, forecasts: list[ModelForecast], votes: list[StrategyVote],
     total_w = sum(weights)
     exp_ret = 0.0
     if total_w > 0:
-        exp_ret = float(sum(w * f.expected_return for w, f in zip(weights, forecasts)) / total_w)
+        exp_ret = float(sum(w * f.expected_return
+                            for w, f in zip(weights, forecasts, strict=True)) / total_w)
 
     directions = [f.direction for f in forecasts if f.direction != 0]
     model_agreement = 0.0

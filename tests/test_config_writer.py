@@ -14,7 +14,7 @@ app:
 
 js_global:
   portal_url: "https://broker.example"
-  login: "52366"
+  login: "99999"
   allow_orders: false
 """
 
@@ -31,7 +31,7 @@ def test_existing_key_is_replaced_in_place(cfg):
     text = cfg.path.read_text(encoding="utf-8")
     raw = yaml.safe_load(text)
     assert raw["js_global"]["allow_orders"] is True
-    assert raw["js_global"]["login"] == "52366"        # untouched
+    assert raw["js_global"]["login"] == "99999"        # untouched
 
 
 def test_comments_and_other_blocks_survive(cfg):

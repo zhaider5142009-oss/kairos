@@ -205,7 +205,9 @@ class TradingViewClient:
             return pd.DataFrame()
         rows = []
         for item in data.get("data", []):
-            row = dict(zip(cols, item.get("d", [])))
+            # tolerant on purpose: a short vendor row loses only trailing
+            # fields, the survivors stay aligned with their names.
+            row = dict(zip(cols, item.get("d", []), strict=False))
             row["tv_symbol"] = item.get("s", "")
             rows.append(row)
         return pd.DataFrame(rows)
@@ -229,7 +231,7 @@ class TradingViewClient:
             items = data.get("data", [])
             if not items:
                 return None
-            row = dict(zip(cols, items[0].get("d", [])))
+            row = dict(zip(cols, items[0].get("d", []), strict=False))
             row["tv_symbol"] = items[0].get("s", "")
             return row
         except Exception:

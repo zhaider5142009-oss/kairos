@@ -92,6 +92,9 @@ class AuditJournal:
 
 JOURNAL = AuditJournal()
 
+# how many client order ids stay in the idempotency window
+MAX_SEEN_CIDS = 4096
+
 
 # ---------------------------------------------------------------------------
 # Kill switch
@@ -121,23 +124,32 @@ KILL = KillSwitch()
 # Fail-closed pre-trade risk gate
 # ---------------------------------------------------------------------------
 class RiskGate:
-    """All checks must PASS with positive knowledge; errors = BLOCK (fail-closed)."""
+    """All checks must PASS with positive knowledge; errors = BLOCK (fail-closed).
+
+    Limits are read from config on every check, not snapshotted at build time:
+    the tower stays up for days, and a limit tightened mid-run has to bind on
+    the very next order, not after a restart.
+    """
 
     def __init__(self) -> None:
+        self._seen_coids: dict[str, None] = {}
+
+    @staticmethod
+    def _limits() -> dict[str, float]:
         r = CFG.risk
-        self.max_positions = int(r.get("max_positions", 5))
-        self.daily_loss_limit = float(r.get("daily_loss_limit_pct", 0.03))
-        self.max_order_value_pct = float(r.get("max_order_value_pct", 0.10))
-        self.max_qty = float(r.get("max_order_qty", 100000))
-        self._seen_coids: set[str] = set()
+        return {"max_positions": int(r.get("max_positions", 5)),
+                "daily_loss_limit": float(r.get("daily_loss_limit_pct", 0.03)),
+                "max_order_value_pct": float(r.get("max_order_value_pct", 0.10)),
+                "max_qty": float(r.get("max_order_qty", 100000))}
 
     def check(self, intent: OrderIntent, account: dict[str, Any] | None,
               open_positions: list[dict[str, Any]] | None) -> tuple[bool, str]:
+        lim = self._limits()
         if KILL.engaged():
             return False, "kill switch engaged"
         if intent.client_order_id in self._seen_coids:
             return False, f"duplicate order {intent.client_order_id}"
-        if intent.quantity <= 0 or intent.quantity > self.max_qty:
+        if intent.quantity <= 0 or intent.quantity > lim["max_qty"]:
             return False, f"quantity out of bounds: {intent.quantity}"
         if intent.side not in ("BUY", "SELL"):
             return False, f"invalid side {intent.side}"
@@ -148,19 +160,24 @@ class RiskGate:
             return False, "no position snapshot (bridge down) — fail-closed"
         if account.get("equity") in (None, 0):
             return False, "zero/absent equity"
-        if len(open_positions) >= self.max_positions and intent.order_type == "MARKET":
-            return False, f"max positions reached ({self.max_positions})"
+        if len(open_positions) >= lim["max_positions"] and intent.order_type == "MARKET":
+            return False, f"max positions reached ({lim['max_positions']})"
         day_pnl = float(account.get("day_pnl") or 0.0)
         equity = float(account.get("equity") or 0.0)
-        if equity > 0 and day_pnl < -self.daily_loss_limit * equity:
+        if equity > 0 and day_pnl < -lim["daily_loss_limit"] * equity:
             return False, (f"daily loss limit hit: {day_pnl:,.0f} "
-                           f"< -{self.daily_loss_limit:.0%} x {equity:,.0f}")
+                           f"< -{lim['daily_loss_limit']:.0%} x {equity:,.0f}")
         order_value = intent.quantity * (intent.limit_price or 0.0)
         if intent.order_type == "MARKET":
             order_value = None                       # market: rely on qty checks
-        elif order_value and equity > 0 and order_value > self.max_order_value_pct * 10 * equity:
+        elif (order_value and equity > 0
+              and order_value > lim["max_order_value_pct"] * 10 * equity):
             return False, "limit order value absurdly large vs equity"
-        self._seen_coids.add(intent.client_order_id)
+        # an idempotency window, not a lifetime ledger: a 24/7 process would
+        # otherwise accumulate every coid it ever saw.
+        self._seen_coids[intent.client_order_id] = None
+        while len(self._seen_coids) > MAX_SEEN_CIDS:
+            self._seen_coids.pop(next(iter(self._seen_coids)))
         return True, "ok"
 
 
@@ -531,7 +548,7 @@ class Mt5Bridge:
             return None
         fill = Fill(intent.client_order_id, str(result.order), symbol, intent.side,
                     intent.quantity, float(result.price), 0.0,
-                    abs(float(result.price) - price), 
+                    abs(float(result.price) - price),
                     datetime.now().isoformat(timespec="seconds"), "MT5")
         JOURNAL.log("MT5_FILL", {"coid": fill.client_order_id, "order": fill.broker_order_id,
                                  "symbol": fill.symbol, "side": fill.side,

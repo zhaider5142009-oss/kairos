@@ -40,9 +40,9 @@ class _RealCfg:
 def _book(cash=6500.52, holdings=None):
     h = holdings if holdings is not None else [
         {"symbol": "OGDC", "qty": 3.0, "avg": 316.92, "mtm": 299.47,
-         "value": 898.41, "pending_sell": 0.0, "account": "52366"},
+         "value": 898.41, "pending_sell": 0.0, "account": "99999"},
         {"symbol": "PPL", "qty": 15.0, "avg": 227.39, "mtm": 218.85,
-         "value": 3282.75, "pending_sell": 0.0, "account": "52366"},
+         "value": 3282.75, "pending_sell": 0.0, "account": "99999"},
     ]
     value = round(sum(x["value"] for x in h), 2)
     return {"ok": True, "venue": "JS_GLOBAL", "accounts": ["MAIMOONA FARRUKH"],
@@ -228,10 +228,10 @@ def test_sellable_close_does_reach_the_bridge(ap, monkeypatch):
     monkeypatch.setattr(jsgtrade, "enabled", lambda: True)
     monkeypatch.setattr(jsgtrade, "place_now", lambda *a, **kw:
                         sent.append(a) or {"ok": True, "order_no": 1,
-                                           "account": "52366"})
+                                           "account": "99999"})
     ap._psx_live = _book()
     out = ap._psx_auto_place(_Inst("PPL"), "SELL", 15, 219.0, _intent(), True)
-    assert out == ("PLACED", "order 1 at 52366")
+    assert out == ("PLACED", "order 1 at 99999")
     assert sent[0][1] == "SELL"
 
 

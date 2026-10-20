@@ -89,13 +89,12 @@ def _hurst(close: pd.Series, max_lag: int = 20) -> float:
     lags = np.arange(2, min(max_lag + 1, len(prices) // 4))
     if len(lags) < 4:
         return 0.5
-    tau = [np.std(prices[lag:] - prices[:-lag]) for lag in lags]
-    tau = np.array([t for t in tau if t > 0])
-    lags = np.array([l for t, l in zip([np.std(prices[l:] - prices[:-l]) for l in lags], lags) if t > 0]) \
-        if len(tau) else lags
+    tau = np.array([np.std(prices[lag:] - prices[:-lag]) for lag in lags])
+    keep = tau > 0
+    tau, lags = tau[keep], lags[keep]
     if len(tau) < 4:
         return 0.5
-    poly = np.polyfit(np.log(lags[:len(tau)]), np.log(tau), 1)
+    poly = np.polyfit(np.log(lags), np.log(tau), 1)
     h = poly[0]
     return float(np.clip(h, 0.05, 0.95))
 
