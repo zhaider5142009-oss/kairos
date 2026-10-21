@@ -29,12 +29,12 @@ Built by one operator, running 24/7, publishing its own losses.
 
 | | |
 |---|---|
-| Code | 12,424 lines Python · 37 modules · public repo |
+| Code | 12,459 lines Python · 37 modules · public repo |
 | Strategies | 100 voting into the live consensus; the sweep fits one blended signal, not the library |
 | Council | 6 configured LLM seats across 2 providers; a dead seat shrinks the council |
 | Execution | paper + JS Global PSX bridge + MT5 |
 | Uptime | 24/7 daemon, watchdog, token-gated public API |
-| Tests | 289 passing, money path included |
+| Tests | 295 passing, money path included |
 
 Not a fund. No client money. No licence. No AUM.
 
@@ -67,9 +67,9 @@ conviction.
 
 ## 6. What is *not* proven
 
-- **No forward track record.** 1,613 predictions journaled, 140 horizons matured, all 140 were
+- **No forward track record.** 1,646 predictions journaled, 140 horizons matured, all 140 were
   non-trades. A directional hit rate does not yet exist.
-- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 218 cycles, 2 fills.
+- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 221 cycles, 2 fills.
 - Live execution path is built and gated, not exercised at scale.
 - No audit, no team, no third-party capital.
 
@@ -158,6 +158,18 @@ third was that neither of those failures could have been seen — the pulse that
 swallowed its exceptions in a thread nobody watches, next to a ledger sentence that reads the
 same whether the record is unripe or stalled. It is recorded, served on the desk and printed on
 the page now.
+
+Four more came from the live risk path, and they share one shape. Every guard that protects an
+account compares against equity, so each was written as `if equity > 0` — and a broker portal
+that answers with nothing (zero cash, no holdings, no error raised) produces an equity of zero,
+which reads to those guards as *nothing to check*. Such a read at the open also set that day's
+baseline, and a baseline of zero is never recovered: the account reports a flat day from then on,
+and both loss brakes are comparisons against that single figure. One degraded morning read
+therefore switched the daily-loss breaker off for the rest of a session in which the account was
+losing money, with nothing raised and a calm number on the desk. The pre-trade gate below it had
+the same blind spot pointed the other way: it accepted a **negative** equity as usable knowledge,
+which is the one account state that should stop everything. Each now refuses rather than skips,
+and a cycle running with no brakes reports that as a blocker instead of reporting health.
 
 **A system that audits its own performance numbers is the product.** Everything else is a
 chart.

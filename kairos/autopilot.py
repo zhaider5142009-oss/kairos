@@ -484,23 +484,37 @@ class Autopilot:
                 JOURNAL.log("AUTOPILOT_RECONCILE", {"symbol": key})
 
     def _psx_book(self) -> dict[str, Any] | None:
-        """The funded JS Global book, fresh, or None if the portal is down.
+        """The funded JS Global book, fresh, or None if it cannot be trusted.
 
         None must never be read as an empty account: an outage that looked
-        like zero equity would have let every circuit breaker pass.
+        like zero equity would have let every circuit breaker pass. So a book
+        that does not describe a funded account is a venue loss too, even when
+        the portal raised nothing on the way out — `ledger_balance` answers a
+        mis-keyed query with 0.0 instead of an error and `open_positions`
+        swallows a transport failure into an empty list, which together can
+        hand back exactly the outage-shaped zero this function exists to stop.
         """
         from . import jsgsync
         try:
             book = jsgsync.real_book()
         except Exception as exc:
-            if not getattr(self, "_psx_down", False):
-                self._psx_down = True
-                self._act("PSX", "VENUE-DOWN", str(exc)[:160])
-                JOURNAL.log("AUTOPILOT_VENUE_LOSS", {"venue": "JS_GLOBAL",
-                                                     "error": str(exc)[:200]})
-            return None
+            return self._psx_lost(str(exc)[:200])
+        if float(book.get("equity") or 0) <= 0:
+            return self._psx_lost(
+                "portal returned a zero-equity book (cash "
+                f"{book.get('cash')!r}, "
+                f"{len(book.get('holdings') or [])} holdings)")
         self._psx_down = False
         return book
+
+    def _psx_lost(self, why: str) -> None:
+        """Mark the PKR venue lost, once, and hand back None to fail closed."""
+        if not getattr(self, "_psx_down", False):
+            self._psx_down = True
+            self._act("PSX", "VENUE-DOWN", why[:160])
+            JOURNAL.log("AUTOPILOT_VENUE_LOSS", {"venue": "JS_GLOBAL",
+                                                 "error": why})
+        return None
 
     def _psx_day_pnl(self, book: dict[str, Any]) -> float:
         """Today's move on the real PKR book.
@@ -508,15 +522,24 @@ class Autopilot:
         The portal reports no day P&L, so it is measured against the first
         equity snapshot of the calendar day. Deposits would read as profit —
         the loop never funds the account, so that never happens here.
+
+        Only a positive equity may set that baseline. A zero stamped here is
+        sticky: measuring any later reading against it produces no loss figure
+        at all, so one degraded read at the open would have kept the daily-loss
+        breaker silent for the rest of the session on a book that was losing
+        money the whole time.
         """
         today = datetime.now().strftime("%Y-%m-%d")
         eq = round(float(book.get("equity") or 0), 2)
+        if eq <= 0:
+            return 0.0                       # unusable read; stamp nothing
         snap = self.st.get("psx_day_start") or {}
-        if snap.get("date") != today:
+        if snap.get("date") != today or float(snap.get("equity") or 0) <= 0:
+            # The second half also heals a baseline an earlier build latched
+            # at zero, which otherwise pinned this figure forever.
             self.st["psx_day_start"] = {"date": today, "equity": eq}
             return 0.0
-        base = float(snap.get("equity") or 0)
-        return round(eq - base, 2) if base > 0 else 0.0
+        return round(eq - float(snap["equity"]), 2)
 
     def _psx_part(self, book: dict[str, Any]) -> dict[str, Any]:
         """The PKR book in account-snapshot shape (what the gates read)."""
@@ -573,6 +596,12 @@ class Autopilot:
         exposure_pct = gross / eq * 100 if eq > 0 else 0.0
         consec = int(self.st.get("consec_losses") or 0)
         blockers = []
+        if eq <= 0:
+            # Every guard below needs a positive amount to compare against, so
+            # a cycle that cannot read equity has NO breakers rather than
+            # working ones. The gate still refuses the order; the posture says
+            # so too, instead of reporting a clean risk picture it never had.
+            blockers.append("no usable equity figure — venues unreadable")
         if eq > 0 and day < -float(r["max_daily_loss_pct"]) / 100 * eq:
             blockers.append(f"daily loss {day:,.0f} breached the "
                             f"-{r['max_daily_loss_pct']}% breaker")

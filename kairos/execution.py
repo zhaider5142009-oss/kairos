@@ -159,20 +159,26 @@ class RiskGate:
             return False, "no account snapshot (bridge down) — fail-closed"
         if open_positions is None:
             return False, "no position snapshot (bridge down) — fail-closed"
-        if account.get("equity") in (None, 0):
-            return False, "zero/absent equity"
+        # Everything below compares against equity as a positive amount. A
+        # reading that is not a number, or is negative — a margin call — used
+        # to count as positive knowledge and then opt out of the loss check.
+        raw_eq = account.get("equity")
+        try:
+            equity = float(0.0 if raw_eq is None else raw_eq)
+        except (TypeError, ValueError):
+            return False, f"unreadable equity {raw_eq!r}"
+        if equity <= 0:
+            return False, f"no usable equity ({equity:,.2f})"
         if len(open_positions) >= lim["max_positions"] and intent.order_type == "MARKET":
             return False, f"max positions reached ({lim['max_positions']})"
         day_pnl = float(account.get("day_pnl") or 0.0)
-        equity = float(account.get("equity") or 0.0)
-        if equity > 0 and day_pnl < -lim["daily_loss_limit"] * equity:
+        if day_pnl < -lim["daily_loss_limit"] * equity:
             return False, (f"daily loss limit hit: {day_pnl:,.0f} "
                            f"< -{lim['daily_loss_limit']:.0%} x {equity:,.0f}")
         order_value = intent.quantity * (intent.limit_price or 0.0)
         if intent.order_type == "MARKET":
             order_value = None                       # market: rely on qty checks
-        elif (order_value and equity > 0
-              and order_value > lim["max_order_value_pct"] * 10 * equity):
+        elif order_value and order_value > lim["max_order_value_pct"] * 10 * equity:
             return False, "limit order value absurdly large vs equity"
         # an idempotency window, not a lifetime ledger: a 24/7 process would
         # otherwise accumulate every coid it ever saw.

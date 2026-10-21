@@ -144,7 +144,7 @@ exist is a way to lose money faster than the market teaches you.
 - Logs rotate; state persists across restarts; RAM, startup and per-cycle cost were profiled
   on a 2015-era i5 / 8 GB machine, which is a deliberate constraint — if it runs there, the
   infrastructure argument is cheap.
-- 289 regression tests, including the money path and the integrity cases below.
+- 295 regression tests, including the money path and the integrity cases below.
 
 ## 7. What the numbers say, and what they do not
 
@@ -157,13 +157,13 @@ and 9 instruments reported as losses.
 important finding in the project: the edge, if any, is in the global and commodity books,
 and any PSX strategy must be sized against costs before it is sized against conviction.
 
-The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 218
+The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 221
 autopilot cycles) with two fills. That is a system working as designed on a low-conviction
 market, not a strategy proving itself.
 
 ## 8. The integrity bugs, documented because they are the credibility
 
-An investor kit is only worth its willingness to publish its own audit. Twenty-six defects are
+An investor kit is only worth its willingness to publish its own audit. Thirty defects are
 tabled below, each with what it would have cost had it shipped. Eight of them were in the
 machinery that produces the numbers an investor would read — the scorer that turns a journal
 into a hit rate, the command that regenerates the evidence, the ledger repair meant to keep
@@ -171,7 +171,7 @@ that history honest, and the guardrail built to keep the pack's figures current.
 worth naming first, because nothing about it was flattering: three were in code we had already
 declared finished, two were in numbers we had already printed, and three were inside an earlier
 repair or the guardrail we built for one — which is why the last ones were found at all.
-Ten more were on the money path or the trail that records it, five were a provider or a
+Thirteen more were on the money path or the trail that records it, six were a provider or a
 bridge answering in a way the desk then reported as health, and three were credentials — or the
 guard that was supposed to catch them — sitting in tracked files.
 
@@ -203,6 +203,10 @@ guard that was supposed to catch them — sitting in tracked files.
 | A snapshot journaled while the record was being rewritten was deleted from it | `resolve_outcomes` reads the journal, walks its own copy for as long as the bars take, then overwrites the **whole file** from that copy — while `record` appends to the same file from any thread that finishes a prediction, which includes a visitor on the public dashboard, the desk's own auto-refresh, and a second terminal running `kairos predict`. A row landing inside that window was not marked unresolved or mis-scored, it was never in the file again. The atomic rename shipped in v2.5.0 made this *harder to notice*: the file is always well-formed, merely short one call. And resolution had had no reason to write at all, because nothing had matured yet — so the defect armed itself on the first day the record becomes measurable instead of announcing itself in the weeks before | the write merges onto a fresh read of the file rather than onto the stale copy, and both writers take one lock so an append cannot land between that read and the rename. The merge is positional, because the journal is append-only: keying it on a row's own fields collides on two snapshots of one symbol in the same second, and different cache entries — `use_llm` on the desk, off in the autopilot — make that pair ordinary rather than rare, which is how the first version of this fix lost a verdict it had just computed |
 | The pass that grades the forward record said nothing when it failed | the resolve pulse sat inside `except Exception: pass`, in a thread nobody watches, so a failure there neither stopped the desk nor appeared anywhere — while the ledger's own queue sentence ("*N* calls waiting until *date*") stayed true-looking and simply aged. A stalled track record and an unripe one render as the same words, and only one of them is honest | the failure is recorded in the autopilot state as `feedback_error`, appended to the audit journal as its own event, cleared when a pass succeeds, and served by `/api/autopilot`. The ledger reads that field before it prints the queue's date, so a record that stopped maturing says so on the page rather than leaving a reader to work it out |
 | One copied journal line could make the whole record unreadable | `record` appended without checking that the line below it was finished. A track record restored from backup, copied onto a fresh deploy, or hand-edited — all three are paths this pack describes — welded the new snapshot onto the last row into a single line no parser accepts. The damage was not one row: the resolver raises before it scores anything and the desk raises behind it, and the swallow above hid both, so the record stopped growing while still displaying yesterday's calls | the appender closes an unterminated last line before writing, so a copied journal repairs itself on the next snapshot with nothing lost on either side of it |
+| A portal that answered with nothing was read as an account that owned nothing | the function that reads the funded book documents that an outage-shaped zero must never reach the risk guards — and then honoured that only for an outage which **raised**. `ledger_balance` answers a mis-keyed balance query with `0.0` rather than an error, and `open_positions` turns a transport failure into an empty list, so a portal in pieces hands back free cash of zero, no holdings and `ok: true` without raising anything. That is the exact shape the guard existed for, arriving through the one door it did not watch | a book that cannot describe a funded account is now a venue loss like any other: journalled once, stood the auto-place path down to a human-confirmed ticket, and never reaches the arithmetic that sizes an order |
+| One degraded read at the open switched the daily loss breaker off until the close | the PKR day's profit is measured against the first equity snapshot of the calendar day, because the portal reports no day figure. A zero stamped there is never lifted: every later reading compares against it, the comparison declines to run on a zero base, and the day reports flat forever after. So a portal that answered nothing once at the open, followed by a healthy book and a real five percent loss, showed a day P&L of zero — and both loss brakes, the autopilot's and the pre-trade gate's, are comparisons against that one number. Nothing raised and nothing was logged; the desk displayed a calm day on an account that was losing money | only a positive equity may set the baseline, and a baseline an earlier build latched at zero re-stamps from the first usable read rather than poisoning the day. One test walks the whole shape: outage at the open, healthy book, real loss, breaker fires |
+| The pre-trade gate accepted a negative equity as a usable figure | the gate's own rule is that it needs **positive knowledge**, which it tested as "an equity that is neither absent nor zero" — then every check below compared against equity only `if equity > 0`. A margin call is a real account state, and it was the one state that satisfied the first test and opted out of every check that followed. An equity that was not a number at all raised out of the middle of the gate instead of answering no | the figure is read once, must parse, and must be positive; anything else is a refusal that names what it saw. A test walks four unusable readings and requires all four to stop the order |
+| A live cycle with no risk figures at all reported no blockers | each circuit breaker divides by equity, so a cycle holding none — every venue unreadable — came back with an empty blocker list and entries unblocked. The order itself still failed closed at the gate, so nothing moved; but the posture is the thing `/api/autopilot` and the desk publish, and "no brake is running" was displayed as "nothing is wrong" | an unusable equity is now itself a blocker, so a cycle with no brakes says so on the page instead of leaving the reader to work out that the clean report was an empty one |
 
 Nothing moved money. The journal now says so itself: rebuilt from `data/audit_journal.jsonl`,
 the track record publishes the count of lines carrying the test signature and the count of
@@ -235,7 +239,7 @@ be mis-sized because of it.
 git clone https://github.com/zhaider5142009-oss/kairos && cd kairos
 cp config.example.yaml config.yaml      # add your own keys; config.yaml is git-ignored
 pip install -r requirements.txt
-python -m pytest tests -q                    # 289 tests
+python -m pytest tests -q                    # 295 tests
 python -m kairos.cli backtest GOLD WTI HBL   # walk-forward sweep, costs modelled
 python -m kairos.cli health                  # subsystem health, dead council seats
 python -m kairos.cli feedback                # realized track record, live from the journal

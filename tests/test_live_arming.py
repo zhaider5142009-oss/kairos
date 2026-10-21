@@ -162,6 +162,116 @@ def test_breaker_opens_on_a_real_daily_loss(ap, monkeypatch):
     assert any("daily loss" in b for b in posture["blockers"])
 
 
+def _zero_book():
+    """What the portal hands back when it answers 200 but reads nothing.
+
+    `ledger_balance` turns a mis-keyed `GetAccountBalance` into 0.0 rather than
+    an error and `open_positions` swallows a transport failure into an empty
+    list, so a fully degraded account arrives as a healthy-looking zero that
+    raises nothing on the way out.
+    """
+    return {"ok": True, "venue": "JS_GLOBAL", "accounts": ["MAIMOONA FARRUKH"],
+            "cash": 0.0, "holdings_value": 0.0, "equity": 0.0,
+            "equity_basis": "free cash + mark-to-market holdings",
+            "holdings": [], "ts": "2026-10-20 09:00:00"}
+
+
+def _logged(ap, monkeypatch):
+    calls: list = []
+
+    class _J:
+        @staticmethod
+        def log(tag, payload):
+            calls.append((tag, payload))
+
+    monkeypatch.setattr(AP, "JOURNAL", _J())
+    return calls
+
+
+def _loss_rules(monkeypatch):
+    from kairos import rules as R
+    monkeypatch.setattr(R, "rules", lambda: {
+        "max_daily_loss_pct": 3.0, "max_total_exposure_pct": 95.0,
+        "max_consecutive_losses": 4})
+
+
+# ------------------------------------------------------- degraded live reads
+def test_a_zero_book_is_a_venue_loss_not_an_empty_account(ap, monkeypatch):
+    """The docstring of `_psx_book` promises this and the code did not do it.
+
+    A raising outage already became None. A zeroing outage did not, and every
+    `if eq > 0` guard downstream reads zero equity as "nothing to check".
+    """
+    calls = _logged(ap, monkeypatch)
+    monkeypatch.setattr(jsgsync, "real_book", lambda *a, **kw: _zero_book())
+    assert ap._psx_book() is None
+    assert [c[0] for c in calls] == ["AUTOPILOT_VENUE_LOSS"]
+    assert ap._psx_down is True          # and so the auto-place path stands down
+
+
+def test_a_degraded_read_never_stamps_the_day_baseline(ap):
+    """A zero baseline is never restored: it pins day P&L at zero all day."""
+    assert ap._psx_day_pnl(_zero_book()) == 0.0
+    assert ap.st["psx_day_start"] is None            # nothing latched from it
+    base = _book()
+    assert ap._psx_day_pnl(base) == 0.0              # first usable read stamps
+    assert ap.st["psx_day_start"]["equity"] == base["equity"]
+
+
+def test_a_morning_outage_cannot_inert_the_daily_breaker_all_day(ap, monkeypatch):
+    """The money path this guards, end to end.
+
+    Degraded read at the open, healthy book the rest of the day, real -5%
+    loss. Before the fix the outage stamped a zero baseline, day P&L measured
+    against zero forever after, and neither the autopilot breaker nor the
+    pre-trade gate could see a loss the account was actually carrying.
+    """
+    _loss_rules(monkeypatch)
+    monkeypatch.setattr(jsgsync, "real_book", lambda *a, **kw: _zero_book())
+    assert ap._psx_book() is None
+
+    base = _book()
+    ap.st["equity_peak"] = base["equity"]
+    down = _book()
+    down["cash"] = round(down["cash"] - 0.05 * base["equity"], 2)
+    down["equity"] = round(base["equity"] * 0.95, 2)
+    acct = ap._psx_part(down)                        # day baseline set here
+    assert acct["equity"] > 0
+    down2 = _book()
+    down2["cash"] = round(down["cash"] - 1200.0, 2)
+    down2["equity"] = round(down["equity"] - 1200.0, 2)
+    acct = ap._psx_part(down2)
+    assert acct["day_pnl"] == pytest.approx(-1200.0)
+    posture = ap._risk_posture(acct, ap._venue_positions(False, down2))
+    assert posture["block_entries"] is True
+    assert any("daily loss" in b for b in posture["blockers"])
+
+
+def test_a_baseline_latched_at_zero_by_an_older_build_self_heals(ap):
+    """State already written before this fix must not stay poison forever."""
+    from datetime import datetime
+    ap.st["psx_day_start"] = {"date": datetime.now().strftime("%Y-%m-%d"),
+                              "equity": 0.0}
+    book = _book()
+    assert ap._psx_day_pnl(book) == 0.0              # re-stamped, not measured off 0
+    assert ap.st["psx_day_start"]["equity"] == book["equity"]
+
+
+def test_a_cycle_with_no_equity_figure_reports_a_blocker(ap, monkeypatch):
+    """Unreadable risk must not report as a clean risk picture.
+
+    Each breaker compares against a positive amount, so with eq at zero the
+    posture used to come back with no blockers — the gate still refused the
+    order, but the desk and /api/autopilot showed a cycle that looked safe.
+    """
+    _loss_rules(monkeypatch)
+    posture = ap._risk_posture({"venue": "JS_GLOBAL", "equity": 0.0,
+                                "day_pnl": 0.0, "balance": 0.0}, [])
+    assert posture["block_entries"] is True
+    assert any("equity" in b for b in posture["blockers"])
+    assert ap._risk_posture(None, [])["block_entries"] is True
+
+
 # ------------------------------------------------------------- positions
 def test_holdings_carry_mtm_so_stops_apply(ap):
     rows = ap._venue_positions(False, _book())

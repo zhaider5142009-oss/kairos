@@ -1,6 +1,6 @@
 """The pre-trade gate must obey the config file, not the config file's memory.
 
-Two defects these guard:
+Three defects these guard:
 
 1. `RiskGate.__init__` snapshotted the `risk:` block when the object was built.
    The autopilot builds one gate for the life of the process, so a loss limit
@@ -8,6 +8,9 @@ Two defects these guard:
    believed they were protected from the next order, and were not until a
    restart. Limits are now read on every check.
 2. `_seen_coids` was an unbounded set in a process that runs for days.
+3. The equity guards were keyed on `> 0`, so an account reading that was
+   negative — a margin call — satisfied "we have an equity figure" and then
+   opted out of every check that needed one.
 """
 
 from __future__ import annotations
@@ -110,6 +113,22 @@ def test_fail_closed_on_a_missing_account_snapshot(gate):
     assert not ok and "fail-closed" in why
     ok, why = gate.check(_intent(), {"equity": 100_000.0}, None)
     assert not ok and "fail-closed" in why
+
+
+def test_a_negative_equity_fails_closed_instead_of_blinding_the_loss_check(gate):
+    """A margin-call account is not a tradeable one.
+
+    The daily-loss comparison is guarded by `equity > 0`, so a negative reading
+    slipped past the zero/absent test and then skipped the loss check entirely —
+    the one account state that most deserves a hard stop. An unreadable equity
+    used to raise out of the middle of the gate instead of answering "no".
+    """
+    for acct in ({"equity": -250.0, "day_pnl": -90_000.0},
+                 {"equity": 0.0, "day_pnl": 0.0},
+                 {"equity": "n/a"},
+                 {"equity": None}):
+        ok, why = gate.check(_intent(), acct, [])
+        assert not ok, f"{acct} must not be allowed to trade"
 
 
 def test_same_client_order_id_is_rejected_once(gate):
