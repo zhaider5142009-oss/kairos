@@ -555,6 +555,47 @@ def _horizon_from(msg: str) -> int:
     return 5
 
 
+def _plane_reply(r: dict) -> dict:
+    """Map a command-plane result into the chat envelope the desk already renders.
+
+    The trace travels with it so the operator can see which expert produced which
+    number instead of taking a sentence on faith.
+    """
+    action = "refused" if r.get("intent") == "refused" else "command"
+    return _safe({"ok": True, "reply": r.get("answer", ""), "action": action,
+                  "data": {"kind": action, "intent": r.get("intent"),
+                           "steps": r.get("steps") or [],
+                           "trace": r.get("trace") or [],
+                           "planner": r.get("planner"), "ms": r.get("ms")}})
+
+
+# ---------------------------------------------------------------- command plane
+class CommandReq(BaseModel):
+    message: str
+    budget_s: float = 30.0
+    use_model: bool = True
+
+
+@app.post("/api/command")
+def command(req: CommandReq):
+    """Plain language in, plan → tools → trace → numbers out.
+
+    The plane carries no order, arming or kill-switch tool, so the worst a
+    confused plan can do is run an analysis. The budget is clamped because the
+    caller supplies it and a hung desk must not be able to pin the daemon.
+    """
+    from kairos import command as plane
+    msg = req.message.strip()
+    if not msg:
+        return _safe({"ok": True, "intent": "help",
+                      "answer": "Ask about an instrument, the PSX screen, the "
+                                "conductor board, a backtest, a portfolio, my "
+                                "realized record, or my health.",
+                      "steps": [], "trace": [], "ms": 0, "planner": "none"})
+    return _safe(plane.run(msg, budget_s=min(max(req.budget_s, 1.0), 120.0),
+                           use_model=bool(req.use_model)))
+
+
 @app.post("/api/chat")
 def chat(req: ChatReq):
     import re
@@ -567,6 +608,13 @@ def chat(req: ChatReq):
 
     def has(*words):
         return any(w in low for w in words)
+
+    from kairos import command as plane
+    refused = plane.guard(msg)
+    if refused is not None:
+        # one guard for every surface: an instruction to move money is refused
+        # here, before a ticker is found and turned into an advisory card
+        return _plane_reply(refused)
 
     # portfolio intent before symbol detection (lists of tickers)
     if has("my real", "js global", "live book", "livebook", "my stock account",
@@ -656,6 +704,15 @@ def chat(req: ChatReq):
 
     inst = _find_instrument(msg, name_tokens=False)
 
+    # A screen that also asks for a decision is two experts deep — ranking the
+    # cross-section is only half the answer. Hand those to the plane, which
+    # pipes the screen's own top name into the conductor and the risk posture;
+    # a bare "best PSX stocks" keeps its leaderboard card.
+    if inst is None and has("scan", "screen", "which name", "best stock", "psx") and \
+            has("worth trading", "to trade", "trade today", "worth buying",
+                "should i trade", "verdict"):
+        return _plane_reply(plane.run(msg))
+
     if inst is None and has("scan", "stock", "top name", "which name",
                             "momentum leader", "psx", "screen", "kse"):
         r = scan(top=5)
@@ -673,6 +730,14 @@ def chat(req: ChatReq):
     inst = inst or _find_instrument(msg)
 
     if inst is None:
+        # Nothing the keyword router owns — hand the ask to the command plane,
+        # which plans over the tool registry and answers with a visible trace.
+        try:
+            r = plane.run(msg)
+        except Exception as exc:
+            r = {"intent": "none", "answer": f"plane failed: {exc}"}
+        if r.get("intent") not in ("none", None):
+            return _plane_reply(r)
         return {"ok": True,
                 "reply": ("I can predict any instrument (\"is OGDC a buy?\", \"where is gold "
                           "this week\"), scan the PSX (\"best Pakistani stocks\"), build a "

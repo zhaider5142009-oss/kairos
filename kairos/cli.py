@@ -605,6 +605,40 @@ def cmd_fugu(args) -> int:
     return 0
 
 
+def cmd_ask(args) -> int:
+    """Command plane: plain language in, visible plan → tools → trace → numbers out."""
+    from rich.panel import Panel
+    from rich.table import Table
+    from . import command as plane
+    console = _console()
+    text = " ".join(args.request).strip()
+    out = plane.run(text, budget_s=float(args.budget), use_model=not args.plain)
+    if out.get("steps"):
+        tbl = Table(box=box.ROUNDED, title=f"PLAN — {out['intent']} "
+                                           f"({out['planner']} planner)")
+        for col in ("#", "tool", "args", "why"):
+            tbl.add_column(col)
+        for i, s in enumerate(out["steps"]):
+            tbl.add_row(str(i), str(s["tool"]),
+                        ", ".join(f"{k}={v}" for k, v in (s["args"] or {}).items())
+                        or "—", str(s["why"]))
+        console.print(tbl)
+    if out.get("trace"):
+        tr = Table(box=box.SIMPLE_HEAVY, title="TRACE")
+        for col in ("tool", "ok", "ms", "error"):
+            tr.add_column(col)
+        for r in out["trace"]:
+            tr.add_row(str(r["tool"]),
+                       "[green]yes[/]" if r["ok"] else "[red]no[/]",
+                       str(r.get("ms", 0)), str(r.get("error") or ""))
+        console.print(tr)
+    style = "red" if out["intent"] in ("refused", "none") else "green"
+    console.print(Panel(out.get("answer") or "—", title="KAIROS", style=style))
+    console.print(f"[dim]{out['ms']} ms · every figure above was rendered by the "
+                  f"tool that produced it[/]")
+    return 2 if out["intent"] == "none" else 0
+
+
 def cmd_share(args) -> int:
     """Render a shareable live signal card (WhatsApp/Instagram)."""
     from rich.panel import Panel
@@ -747,6 +781,18 @@ def main() -> int:
     sp = sub.add_parser("fugu", help="Fugu conductor verdicts (fused experts + edge)")
     sp.add_argument("symbol", nargs="?", help="one instrument, or the watchlist board")
     sp.set_defaults(fn=cmd_fugu)
+
+    sp = sub.add_parser("ask",
+                        help="command plane: ask anything in plain language, "
+                             "see the plan and the trace")
+    sp.add_argument("request", nargs="+", help="e.g. ask screen the PSX and which "
+                                               "name is worth trading")
+    sp.add_argument("--budget", type=float, default=30.0,
+                    help="wall-clock seconds for the whole plan (default 30)")
+    sp.add_argument("--plain", action="store_true",
+                    help="skip the language model's rephrasing — same numbers, "
+                         "engineer's voice")
+    sp.set_defaults(fn=cmd_ask)
 
     sp = sub.add_parser("livebook",
                         help="watch your REAL JS Global holdings (verdicts + exit tickets)")

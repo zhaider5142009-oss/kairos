@@ -477,7 +477,7 @@ async function loadUniverse(){
 function predictGo(sym){$('#psym').value=sym;$$('#nav button')[1].click();runPredict()}
 
 /* ---------- chat console ---------- */
-const CHAT_STARTERS=['Where is gold heading this week?','Is WTI tradable right now?','Best Pakistani stocks?','Allocate 1M across GOLD WTI SPX','How good is your track record?'];
+const CHAT_STARTERS=['Where is gold heading this week?','Is WTI tradable right now?','Best Pakistani stocks?','Allocate 1M across GOLD WTI SPX','How good is your track record?','Screen the PSX and tell me which name is worth trading','Backtest HBL over 120 days','Are your providers actually answering?'];
 function chatBubble(who,html,cls){
   const d=document.createElement('div');d.className='msg '+cls;
   d.innerHTML=`<span class="who">${who}</span>${html}`;
@@ -501,6 +501,16 @@ function chatCard(d){
   if(d.kind==='scan'){
     return `<div class="chatcard">${(d.rows||[]).slice(0,5).map(t=>`<div class="ccrow"><span>${esc(t.name)} <span class="faint">${esc(t.sector||'')}</span></span><b>${num(t.composite_score,2)}</b></div>`).join('')}
       <span class="cclink" onclick="$$('#nav button')[2].click()">Full PSX leaderboard →</span></div>`}
+  if(d.kind==='command'){
+    const st=d.trace||[],plan=d.steps||[];
+    if(!st.length)return '';
+    const rows=st.map((r,i)=>{const why=(plan[i]&&plan[i].why)||'';
+      const args=Object.entries((plan[i]&&plan[i].args)||{}).map(([k,v])=>`${esc(k)}=${esc(String(v))}`).join(' · ');
+      return `<div class="ccrow"><span class="mono" style="color:var(--blue)">${i} · ${esc(r.tool)}</span>`+
+        `<b class="${r.ok?'up':'down'}">${r.ok?'ran '+esc(String(r.ms||0))+'ms':'FAILED'}</b></div>`+
+        `<div class="ccrow"><span class="faint" style="padding-left:14px">${esc(args||'no args')} — ${esc(why)}</span></div>`}).join('');
+    return `<div class="chatcard"><details><summary class="cclink" style="cursor:pointer">`+
+      `${st.length} expert step(s) · ${esc(String(d.planner||'rule'))} planner · ${esc(String(d.ms||0))} ms</summary>${rows}</details></div>`}
   return ''}
 async function sendChat(text){
   chatBubble('You',esc(text),'user');
