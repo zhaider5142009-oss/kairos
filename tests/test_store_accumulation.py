@@ -124,7 +124,9 @@ def test_a_bad_row_in_the_scan_does_not_stop_the_sweep(tmp_store, monkeypatch):
     monkeypatch.setattr(md.tv, "scan_psx", md._scan_psx)
     md.psx_snapshot()
     _drain_sweep()
-    assert [p.name for p in tmp_store.dir.glob("*.csv")] == ["S0.csv", "S1.csv", "S4.csv"]
+    # sorted: glob order is the filesystem's, and ext4 gave these back in a
+    # different order than NTFS did — the claim is which files landed, not when
+    assert sorted(p.name for p in tmp_store.dir.glob("*.csv")) == ["S0.csv", "S1.csv", "S4.csv"]
 
 
 def test_the_sweep_does_not_raise_out_of_a_worker(tmp_store, monkeypatch):
