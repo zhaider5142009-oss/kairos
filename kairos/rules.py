@@ -18,6 +18,7 @@ it is the discipline layer that keeps an autonomous system alive.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 from .config import CFG
@@ -126,6 +127,42 @@ def rules() -> dict[str, Any]:
 
 def get_rule(name: str, default: Any = None) -> Any:
     return rules().get(name, DEFAULT_RULES.get(name, default))
+
+
+def daily_loss_fraction(risk_cfg: dict[str, Any] | None = None,
+                        rules_cfg: dict[str, Any] | None = None) -> tuple[float, str]:
+    """The daily loss brake as a fraction of equity, and which knob governs.
+
+    One instruction has two names in this project: `rules.max_daily_loss_pct`
+    is a percentage and used to stop the autopilot from opening anything after a
+    bad day, while `risk.daily_loss_limit_pct` is a fraction and is what the
+    pre-trade gate refuses an order on. Two brakes on one number is how an
+    operator ends up believing they tightened a limit they did not touch, so
+    the tighter reading governs at both places and the answer names the key that
+    produced it — a refusal can then say which brake actually fired.
+
+    A reading that is not a positive finite number is a limit of zero. An
+    unreadable risk figure has to stop the next order, not disappear into a
+    default; and the two units differ by a factor of one hundred, so a value
+    pasted from one key into the other lands on the conservative side.
+    """
+    rc = CFG.risk if risk_cfg is None else risk_cfg
+    rl = rules() if rules_cfg is None else rules_cfg
+    readings: list[tuple[float, str]] = []
+    for name, raw, as_percent in (
+            ("rules.max_daily_loss_pct", rl.get("max_daily_loss_pct",
+                                                DEFAULT_RULES["max_daily_loss_pct"]), True),
+            ("risk.daily_loss_limit_pct", rc.get("daily_loss_limit_pct",
+                                                 DEFAULT_RULES["max_daily_loss_pct"] / 100.0),
+             False)):
+        try:
+            value = float(raw) / (100.0 if as_percent else 1.0)
+        except (TypeError, ValueError):
+            return 0.0, f"{name} is not a readable limit"
+        if not math.isfinite(value) or value <= 0:
+            return 0.0, f"{name} is not a usable limit"
+        readings.append((value, name))
+    return min(readings)
 
 
 def save_overrides(overrides: dict[str, Any]) -> None:

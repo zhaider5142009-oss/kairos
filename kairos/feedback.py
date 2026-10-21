@@ -91,9 +91,16 @@ def _direction_threshold() -> float:
     return float((CFG.section("autopilot") or {}).get("entry_threshold", 0.18))
 
 
-def resolve_outcomes(md, lookback_days: int = 90) -> int:
+def resolve_outcomes(md) -> int:
     """Match unresolved snapshots against realized prices once the horizon has
-    elapsed; rewrite the journal with outcomes. Returns count newly resolved."""
+    elapsed; rewrite the journal with outcomes. Returns count newly resolved.
+
+    There is deliberately no lookback window here. The parameter that used to
+    accept one was never read, so it promised the caller a bound on how far the
+    scan reached while the code actually walked the whole journal — and the
+    journal only holds rows that are still unresolved, which is the queue the
+    operator is waiting on regardless of its age.
+    """
     if not JOURNAL.exists():
         return 0
     lines = _read_lines()

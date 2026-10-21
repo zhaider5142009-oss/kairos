@@ -81,9 +81,23 @@ def _bollinger(close: pd.Series, n: int = 20, k: float = 2.0):
     return mid, upper, lower, width, pct_b
 
 
+def _log_close(close: pd.Series) -> np.ndarray:
+    """log of the close, with a non-positive print left as a hole, not as -inf.
+
+    `np.log(0)` is -inf, and one -inf is enough to make `np.histogram` raise and
+    `np.polyfit` answer with a garbage slope — on the scan path that is an
+    exception out of the middle of the instrument loop, ending the cycle every
+    other position's stop was meant to be managed in. Dropping the bar is the
+    honest reading: the series is shorter, not wrong.
+    """
+    with np.errstate(divide="ignore", invalid="ignore"):
+        lp = np.log(close.values.astype(float))
+    return lp[np.isfinite(lp)]
+
+
 def _hurst(close: pd.Series, max_lag: int = 20) -> float:
     """Rescaled-range Hurst exponent — >0.55 trending, <0.45 mean-reverting."""
-    prices = np.log(close.values.astype(float))
+    prices = _log_close(close)
     if len(prices) < 32:
         return 0.5
     lags = np.arange(2, min(max_lag + 1, len(prices) // 4))
@@ -100,7 +114,8 @@ def _hurst(close: pd.Series, max_lag: int = 20) -> float:
 
 
 def _entropy(close: pd.Series, bins: int = 8) -> float:
-    rets = np.diff(np.log(close.values.astype(float)))
+    rets = np.diff(_log_close(close))
+    rets = rets[np.isfinite(rets)]
     if len(rets) < 20:
         return 0.0
     counts, _ = np.histogram(rets[-120:], bins=bins)
@@ -110,7 +125,9 @@ def _entropy(close: pd.Series, bins: int = 8) -> float:
 
 
 def _linreg_slope(close: pd.Series, n: int = 20) -> tuple[float, float]:
-    y = np.log(close.values.astype(float)[-n:])
+    # A hole inside the window is not a flat bar: fitting through it would read
+    # -inf as a collapse. Short data is the honest answer, and short data is 0.
+    y = _log_close(close)[-n:]
     if len(y) < n:
         return 0.0, 0.0
     x = np.arange(len(y), dtype=float)
@@ -151,7 +168,13 @@ def compute_features(df: pd.DataFrame) -> dict[str, float]:
     k, d = _stoch(df)
     f["stoch_k"], f["stoch_d"] = float(k.iloc[-1]), float(d.iloc[-1])
     macd, macd_sig, macd_hist = _macd(c)
-    px = float(c.iloc[-1]) or 1.0
+    # The last close is the denominator of every normalized feature below, so
+    # it is a hole when it is not a positive price — never a substitute one.
+    # The panel path already did this (`c.replace(0, np.nan)`); this one used to
+    # write 1.0, which turned a halted or delisted print into a one-rupee price
+    # and scaled MACD, ATR%, momentum and every candle ratio by it.
+    last = float(c.iloc[-1])
+    px = last if last > 0 else float("nan")
     f["macd_norm"] = float(macd.iloc[-1] / px)
     f["macd_hist_norm"] = float(macd_hist.iloc[-1] / px)
     f["adx14"] = float(_adx(df).iloc[-1])
@@ -173,12 +196,18 @@ def compute_features(df: pd.DataFrame) -> dict[str, float]:
     f["vol20"] = float(ret.rolling(20, min_periods=5).std().iloc[-1] or 0.0) * np.sqrt(252)
     f["vol60"] = float(ret.rolling(60, min_periods=10).std().iloc[-1] or 0.0) * np.sqrt(252)
     f["vol_ratio"] = f["vol20"] / f["vol60"] if f["vol60"] > 0 else 1.0
-    logret = np.diff(np.log(c.values.astype(float)))
+    logret = np.diff(_log_close(c))
     if len(logret) > 30:
-        gk = 0.5 * np.log((h.values / lo.values)[1:] ** 2) - (2 * np.log(2) - 1) * np.log((c.values / c.shift().values)[1:] ** 2)
-        park = np.sqrt((np.log(h.values / lo.values) ** 2)[1:].mean()) / np.sqrt(4 * np.log(2))
-        f["garman_klass"] = float(np.sqrt(np.nanmean(gk[-60:] ** 2)) if len(gk) > 0 else 0.0)
-        f["parkinson"] = float(np.nan_to_num(park))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            hl = np.log((h.values / lo.values)[1:] ** 2)
+            cc = np.log((c.values / c.shift().values)[1:] ** 2)
+        gk = 0.5 * hl - (2 * np.log(2) - 1) * cc
+        with np.errstate(divide="ignore", invalid="ignore"):
+            park = np.sqrt(np.nanmean(np.log(h.values / lo.values)[1:] ** 2)) \
+                / np.sqrt(4 * np.log(2))
+        f["garman_klass"] = float(np.sqrt(np.nanmean(np.nan_to_num(
+            gk[-60:], nan=0.0, posinf=0.0, neginf=0.0) ** 2)) if len(gk) > 0 else 0.0)
+        f["parkinson"] = float(park if np.isfinite(park) else 0.0)
         f["skew60"] = float(np.nan_to_num(pd.Series(logret[-60:]).skew()))
         f["kurt60"] = float(np.nan_to_num(pd.Series(logret[-60:]).kurt()))
         f["downside_vol"] = float(ret[ret < 0].tail(60).std() or 0.0) * np.sqrt(252)
@@ -232,7 +261,7 @@ def compute_features(df: pd.DataFrame) -> dict[str, float]:
     slope60, r2_60 = _linreg_slope(c, 60)
     f["linreg_slope60"] = slope60 * 252
     f["linreg_r2_60"] = r2_60
-    if len(logret := np.diff(np.log(c.values.astype(float)))) > 25:
+    if len(logret := np.diff(_log_close(c))) > 25:
         f["autocorr1"] = float(np.corrcoef(logret[:-1], logret[1:])[0, 1])
         f["autocorr5"] = float(np.corrcoef(logret[:-5], logret[5:])[0, 1]) if len(logret) > 15 else 0.0
     else:

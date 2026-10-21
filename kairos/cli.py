@@ -426,7 +426,10 @@ def cmd_autopilot(args) -> int:
                       f"positions: {len(st.get('paper_positions') or [])}")
         expo = rp.get("exposure_pct")
         expo_txt = "unknown" if expo is None else f"{expo:.1f}%"
-        console.print(f"exposure: {expo_txt} · "
+        brake = (f"-{rp['daily_loss_limit_pct']}% "
+                 f"({rp.get('daily_loss_limit_from')})"
+                 if rp.get("daily_loss_limit_pct") is not None else "unreadable")
+        console.print(f"exposure: {expo_txt} · loss brake: {brake} · "
                       f"consec losses: {rp.get('consec_losses', 0)} · "
                       + ("[yellow]breakers: " + "; ".join(rp.get("blockers") or [])
                          + "[/]" if rp.get("block_entries")

@@ -30,6 +30,7 @@ import pandas as pd
 
 from .config import CFG
 from .store import atomic_write
+from . import rules as _R
 
 
 # ---------------------------------------------------------------------------
@@ -191,18 +192,33 @@ class RiskGate:
         self._seen_coids: dict[str, None] = {}
 
     @staticmethod
-    def _limits() -> dict[str, float]:
+    def _limits() -> dict[str, Any]:
         r = CFG.risk
+        limit, source = _R.daily_loss_fraction(r)
         return {"max_positions": int(r.get("max_positions", 5)),
-                "daily_loss_limit": float(r.get("daily_loss_limit_pct", 0.03)),
+                "daily_loss_limit": limit,
+                "daily_loss_source": source,
                 "max_order_value_pct": float(r.get("max_order_value_pct", 0.10)),
                 "max_qty": float(r.get("max_order_qty", 100000))}
 
     def check(self, intent: OrderIntent, account: dict[str, Any] | None,
               open_positions: list[dict[str, Any]] | None) -> tuple[bool, str]:
-        lim = self._limits()
         if KILL.engaged():
             return False, "kill switch engaged"
+        try:
+            lim = self._limits()
+        except (TypeError, ValueError, OverflowError) as exc:
+            return False, f"risk limits unreadable — fail-closed ({type(exc).__name__})"
+        # A limit that is not a number is not an unlimited order. `qty > nan` is
+        # false, so a NaN in the `risk:` block used to clear the quantity bound
+        # and the position cap the same way a NaN in the order cleared its
+        # bounds — this is the last gate every venue's order passes through.
+        bad = sorted(k for k, v in lim.items()
+                     if k != "daily_loss_source"
+                     and not (isinstance(v, (int, float))
+                              and math.isfinite(float(v)) and float(v) >= 0))
+        if bad:
+            return False, f"unusable risk limit(s): {', '.join(bad)} — fail-closed"
         if intent.client_order_id in self._seen_coids:
             return False, f"duplicate order {intent.client_order_id}"
         # Finiteness before bounds. Every check on this path asks whether one
@@ -240,10 +256,17 @@ class RiskGate:
             return False, f"no usable equity ({equity:,.2f})"
         if len(open_positions) >= lim["max_positions"] and intent.order_type == "MARKET":
             return False, f"max positions reached ({lim['max_positions']})"
-        day_pnl = float(account.get("day_pnl") or 0.0)
+        raw_day = account.get("day_pnl")
+        try:
+            day_pnl = float(raw_day or 0.0)
+        except (TypeError, ValueError):
+            return False, f"unreadable day P&L {raw_day!r}"
+        if not math.isfinite(day_pnl):
+            return False, f"unusable day P&L ({raw_day!r})"
         if day_pnl < -lim["daily_loss_limit"] * equity:
             return False, (f"daily loss limit hit: {day_pnl:,.0f} "
-                           f"< -{lim['daily_loss_limit']:.0%} x {equity:,.0f}")
+                           f"< -{lim['daily_loss_limit']:.2%} x {equity:,.0f} "
+                           f"({lim['daily_loss_source']})")
         order_value = qty * (lp or 0.0)
         if intent.order_type == "MARKET":
             order_value = None                       # market: rely on qty checks

@@ -144,7 +144,7 @@ exist is a way to lose money faster than the market teaches you.
 - Logs rotate; state persists across restarts; RAM, startup and per-cycle cost were profiled
   on a 2015-era i5 / 8 GB machine, which is a deliberate constraint — if it runs there, the
   infrastructure argument is cheap.
-- 330 regression tests, including the money path and the integrity cases below.
+- 357 regression tests, including the money path and the integrity cases below.
 
 ## 7. What the numbers say, and what they do not
 
@@ -157,13 +157,13 @@ and 9 instruments reported as losses.
 important finding in the project: the edge, if any, is in the global and commodity books,
 and any PSX strategy must be sized against costs before it is sized against conviction.
 
-The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 228
+The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 231
 autopilot cycles) with two fills. That is a system working as designed on a low-conviction
 market, not a strategy proving itself.
 
 ## 8. The integrity bugs, documented because they are the credibility
 
-An investor kit is only worth its willingness to publish its own audit. Forty-two defects
+An investor kit is only worth its willingness to publish its own audit. Forty-seven defects
 are tabled below, each with what it would have cost had it shipped. Eight of them were in the
 machinery that produces the numbers an investor would read — the scorer that turns a journal
 into a hit rate, the command that regenerates the evidence, the ledger repair meant to keep
@@ -171,7 +171,8 @@ that history honest, and the guardrail built to keep the pack's figures current.
 worth naming first, because nothing about it was flattering: three were in code we had already
 declared finished, two were in numbers we had already printed, and three were inside an earlier
 repair or the guardrail we built for one — which is why the last ones were found at all.
-Twenty-two more were on the money path or the trail that records it, nine were a provider or a
+Twenty-seven more were on the money path, the trail that records it, or a limit that
+read as a control and was not wired to one; nine were a provider or a
 bridge answering in a way the desk then reported as health, and three were credentials — or the
 guard that was supposed to catch them — sitting in tracked files.
 
@@ -219,6 +220,11 @@ guard that was supposed to catch them — sitting in tracked files.
 | The audit trail could stop, and stop quietly | every append in `AuditJournal.log` ran inside `except Exception: pass`. A full disk, a file held open by another process on Windows, a data directory replaced by a regular file — any one of them ends the record for good, and nothing anywhere notices. The desk reads the same file and prints "no entries yet", which is also the sentence a healthy, quiet session prints. Every fail-closed gate above the trail kept working; the evidence that they had fired simply stopped existing — and the pack's central claim, that every decision, order and fill is appended to an on-disk journal before it happens, became unfalsifiable precisely in the situation an investor would most want to check it | `log` now answers whether the record landed: it returns a yes-or-no, remembers the failure with the event that could not be written, and clears it when the trail recovers. Both live order doors consume that answer and **refuse the trade** when it is no — the PSX bridge before the ticket is staged, the MT5 bridge before the order request is assembled — because an order with no record behind it cannot be audited, explained or reversed. The MT5 door now writes the intent line the doctrine always claimed it wrote |
 | One half-written row in the trail swallowed the row after it | a crash mid-append, a journal copied to a fresh deploy or a backup restored by hand leaves a last line with no terminator. The appender wrote straight onto it, welding two records into one line no parser accepts, so one recovery cost the trail the damaged record *and* the new one. The prediction journal had this exact flaw and was fixed; the audit trail, which is the file the deck calls immutable, never got the same treatment | the appender closes an unterminated last line before it writes, under a lock, so a torn trail repairs itself on the next record with both sides intact and nothing is silently concatenated |
 | One bad line cost the whole trail, on the page | `tail` read the file and parsed it in one expression, so a row it could not parse — or a file it could not open — made it return an empty list, indistinguishable from a trail with nothing in it. The endpoint behind the desk's journal panel re-implemented the same read by hand, with an unguarded whole-file read and a silent `continue` per line, so a locked or non-UTF-8 journal answered as an HTTP error and a merely ugly line vanished without a trace | the endpoint asks the journal object instead of the path, and the journal parses one line at a time: every readable row survives, the unreadable ones are counted, and the response carries the trail's own health beside the entries, so the panel prints a red "audit trail damaged" band naming the reason instead of a clean-looking empty table — eleven new tests |
+| One limit, two names, and only one of them armed | `rules.max_daily_loss_pct` is a percentage and stops the autopilot from opening anything after a bad day; `risk.daily_loss_limit_pct` is a fraction and is what the pre-trade gate refuses an order on. Nothing connected them. An operator who tightened the doctrine to half a percent kept trading through a ten-percent loss, because the number they changed fed the breaker that only pauses and the number they did not know about fed the door | the two readings resolve through one function that returns the tighter value and names the key that produced it, so both doors stop on the same day and every refusal on the page, in the terminal and in the audit trail says which brake fired. A pasted value cannot loosen the other side: `3.0` written into the fraction key reads as 300 percent of equity and the doctrine knob still holds the line. A non-positive or unreadable reading is a limit of zero, which means the next order is refused rather than waved through |
+| The risk block's own numbers were not checked, only the order's | The gate learned to reject a NaN quantity before it compared it, then read its limits with `float(cfg value)` and trusted them. `qty > nan` is false, so a NaN quantity cap let every order through and a NaN position cap did the same to the count; a string answered with a TypeError raised out of the middle of the gate, which the caller sees as a crash, not as a no | every limit is validated as data before it is used as a bound, and the two failure modes are separate answers — "risk limits unreadable — fail-closed" and "unusable risk limit(s): max_qty". The kill switch still outranks both, so an engaged stop never reports a config problem |
+| A hole in the account feed read as a flat day | The posture that decides whether any order may go out computed equity, day P&L and exposure with bare float conversions. A feed returning `"n/a"` raised out of the cycle — the same cycle that manages every held stop and target — and a NaN day P&L answered no to the one comparison that asks whether we are past the brake, which is the same fail-open the equity guards had, on the other side of the ledger | the readings that already have a "no usable figure" blocker (equity, peak) coerce to zero, and the ones where zero would be a lie are allowed to stay absent: an unreadable day is its own blocker, the desk prints *unreadable* instead of `+0`, and a held position with no readable price is reported as understated exposure rather than as a free one. The gate refuses the same account outright |
+| A halted print was scaled as if it cost one rupee | The feature engine divided every normalized feature by `float(last_close) or 1.0`. A zero close is not a missing divisor — it is a hole — and the substitution turned MACD, ATR percent, momentum and each candle ratio into numbers a hundred times their size, which a model consumes without asking. The same print inside `np.log` for the Hurst, entropy and regression helpers became `-inf`: enough to make the histogram raise, so one delisted scrip could end the scan loop for every instrument behind it | the denominator is a hole when it is not a positive price, and the features built on it come back as holes — the panel path already did this, the single-instrument path now matches. The log helpers drop non-positive prints before any statistic sees them, so a short series is short data rather than a fabricated collapse |
+| A control that reported a bound it never applied | `resolve_outcomes(lookback_days=90)` accepted a window and ignored it, and `Autopilot._live_pos` copied the venue's position list into instance state that nothing read — a second copy of a live book, free to go stale, and a parameter that made a scan look bounded when it walked the whole journal | both are gone. The journal's unresolved rows are the queue the operator is waiting on regardless of age, so a bound that does not exist should not be offered; and the venue list is the only copy of the venue's answer |
 
 Nothing moved money. The journal now says so itself: rebuilt from `data/audit_journal.jsonl`,
 the track record publishes the count of lines carrying the test signature and the count of
@@ -251,7 +257,7 @@ be mis-sized because of it.
 git clone https://github.com/zhaider5142009-oss/kairos && cd kairos
 cp config.example.yaml config.yaml      # add your own keys; config.yaml is git-ignored
 pip install -r requirements.txt
-python -m pytest tests -q                    # 330 tests
+python -m pytest tests -q                    # 357 tests
 python -m kairos.cli backtest GOLD WTI HBL   # walk-forward sweep, costs modelled
 python -m kairos.cli health                  # subsystem health, dead council seats
 python -m kairos.cli feedback                # realized track record, live from the journal

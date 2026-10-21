@@ -385,7 +385,7 @@ tbody tr:hover td{background:#f9f9f9}
     <div class="card"><div class="sectiontitle" style="margin-top:0">Book &amp; positions <span class="dim" id="dposmeta"></span></div><div id="dpos"><span class="dim">loading…</span></div></div>
     <div class="card"><div class="sectiontitle" style="margin-top:0">Actions &amp; audit feed</div><div id="dfeed" style="max-height:300px;overflow:auto"><span class="dim">no actions yet</span></div></div>
   </div>
-  <div class="explain">Doctrine: paper-first, fail-closed. Every open passes plan-check (R:R, risk-per-trade, confidence, model agreement) and the risk gate; every held position is actively managed — hard stops, targets, a trailing ratchet in R-multiples, venue reconciliation. Circuit breakers pause entries on a −3% day, 60% gross exposure, or four straight losses; exits are never rate-limited. A live session never resurrects after a restart — you must re-arm it consciously.</div>
+  <div class="explain">Doctrine: paper-first, fail-closed. Every open passes plan-check (R:R, risk-per-trade, confidence, model agreement) and the risk gate; every held position is actively managed — hard stops, targets, a trailing ratchet in R-multiples, venue reconciliation. Circuit breakers pause entries on a day past the loss brake — the tighter of <code>risk.daily_loss_limit_pct</code> and <code>rules.max_daily_loss_pct</code>, whichever key the config sets — at 60% gross exposure, or four straight losses; exits are never rate-limited. A live session never resurrects after a restart — you must re-arm it consciously.</div>
 </section>
 
 <!-- ================= NEWS ================= -->
@@ -746,7 +746,7 @@ async function loadDesk(){
     const rp=d.risk_posture||{};
     $('#driskmeta').textContent=`as of cycle ${d.cycles}`;
     $('#drisk').innerHTML=`<div class="grid g4">
-      <div><div class="dim" style="font-size:12px">Day P&L</div><div class="big ${((rp.day_pnl||0)>=0)?'up':'down'}" style="font-size:20px">${(rp.day_pnl||0)>=0?'+':''}${num(rp.day_pnl||0,0)}</div></div>
+      <div><div class="dim" style="font-size:12px">Day P&L</div><div class="big ${rp.day_pnl==null?'down':((rp.day_pnl>=0)?'up':'down')}" style="font-size:20px">${rp.day_pnl==null?'unreadable':(rp.day_pnl>=0?'+':'')+num(rp.day_pnl,0)}</div>${rp.daily_loss_limit_pct==null?'':`<div class="dim" style="font-size:11px">brake −${rp.daily_loss_limit_pct}% · ${esc(rp.daily_loss_limit_from||'')}</div>`}</div>
       <div><div class="dim" style="font-size:12px">Gross exposure</div><div class="big" style="font-size:20px">${rp.exposure_pct==null?'unreadable':rp.exposure_pct+'%'}</div></div>
       <div><div class="dim" style="font-size:12px">Consecutive losses</div><div class="big" style="font-size:20px">${rp.consec_losses??0}</div></div>
       <div><div class="dim" style="font-size:12px">Circuit breakers</div><div style="margin-top:4px">${rp.block_entries?'<span class="tag warn">ENTRIES PAUSED</span>':'<span class="tag ok">clear</span>'}</div></div>

@@ -1,6 +1,6 @@
 """The pre-trade gate must obey the config file, not the config file's memory.
 
-Three defects these guard:
+Five defects these guard:
 
 1. `RiskGate.__init__` snapshotted the `risk:` block when the object was built.
    The autopilot builds one gate for the life of the process, so a loss limit
@@ -11,6 +11,14 @@ Three defects these guard:
 3. The equity guards were keyed on `> 0`, so an account reading that was
    negative — a margin call — satisfied "we have an equity figure" and then
    opted out of every check that needed one.
+4. One instruction had two names. `rules.max_daily_loss_pct` (a percent) armed
+   the autopilot's entry breaker while `risk.daily_loss_limit_pct` (a fraction)
+   armed the gate, so tightening the knob the operator meant stopped one door
+   and left the other open. The tighter reading now governs both, and a refusal
+   says which key produced it.
+5. A garbage value in the `risk:` block was not a tight limit but no limit at
+   all: `qty > nan` is false, so the quantity bound and the position cap both
+   cleared, and a non-numeric one raised out of the middle of the gate.
 """
 
 from __future__ import annotations
@@ -32,6 +40,8 @@ risk:
   daily_loss_limit_pct: 0.10
   max_order_value_pct: 0.10
   max_order_qty: 100000
+rules:
+  max_daily_loss_pct: 10.0
 """
 
 
@@ -45,7 +55,11 @@ class _Kill:
 def gate(tmp_path, monkeypatch):
     f = tmp_path / "config.yaml"
     f.write_text(BASE, encoding="utf-8")
-    monkeypatch.setattr(E, "CFG", Config(f))
+    cfg = Config(f)
+    monkeypatch.setattr(E, "CFG", cfg)
+    # the brake is resolved through `rules` now, and that module binds its own
+    # config object at import — both must be looking at the same file
+    monkeypatch.setattr(E._R, "CFG", cfg)
     monkeypatch.setattr(E, "KILL", _Kill())
     return E.RiskGate()
 
@@ -173,5 +187,107 @@ def test_kill_switch_still_blocks_before_any_config_read(gate, monkeypatch):
             return True
 
     monkeypatch.setattr(E, "KILL", _Engaged())
+    _rewrite(risk={"max_order_qty": float("nan")})
     ok, why = gate.check(_intent(), {"equity": 100_000.0}, [])
     assert not ok and "kill switch" in why
+
+
+# ------------------------------------------------------------------ one brake
+_NEXT_MTIME = [0.0]
+
+
+def _rewrite(**sections):
+    """Replace the config file with BASE plus these per-section overrides.
+
+    Always from BASE — a test that leaves a poisoned value in the file would
+    otherwise be read by the next assertion in the same test. And each rewrite
+    gets its own mtime: two writes inside one clock tick are the same file to
+    the hot-reload check, and the override silently does not land.
+    """
+    raw = yaml.safe_load(BASE)
+    for section, values in sections.items():
+        raw.setdefault(section, {}).update(values)
+    E.CFG.path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    st = E.CFG.path.stat()
+    _NEXT_MTIME[0] = max(st.st_mtime, _NEXT_MTIME[0]) + 60.0
+    os.utime(E.CFG.path, (st.st_atime, _NEXT_MTIME[0]))
+    E.CFG._next_check = time.monotonic() - 1
+
+
+def test_the_rules_knob_moves_the_brake_the_gate_refuses_on(gate):
+    """One instruction, two names, and only one of them was armed.
+
+    `rules.max_daily_loss_pct` used to feed the autopilot's entry breaker while
+    the gate read `risk.daily_loss_limit_pct` alone, so an operator who set the
+    doctrine to half a percent kept trading through a ten-percent loss and saw
+    nothing but a paused tower.
+    """
+    assert _check(gate)[0], "10% is the reading on both keys"
+    _rewrite(rules={"max_daily_loss_pct": 0.5})
+    ok, why = _check(gate)
+    assert not ok and "daily loss limit" in why
+    assert "rules.max_daily_loss_pct" in why, why
+
+
+def test_a_refusal_names_the_brake_that_fired(gate):
+    _rewrite(risk={"daily_loss_limit_pct": 0.01})
+    ok, why = _check(gate)
+    assert not ok and "risk.daily_loss_limit_pct" in why
+
+
+def test_a_runaway_value_in_one_key_cannot_loosen_the_brake_below_the_other(gate):
+    """The two keys differ by a factor of one hundred.
+
+    `daily_loss_limit_pct: 3.0` pasted from the percent key reads as 300% of
+    equity — an off switch with the label still on it. The other knob holds the
+    line, so the mistake is visible as a limit rather than as the absence of
+    one.
+    """
+    _rewrite(risk={"daily_loss_limit_pct": 3.0})
+    assert _check(gate)[0]                    # 300% never fires; rules holds 10%
+    _rewrite(risk={"daily_loss_limit_pct": 3.0}, rules={"max_daily_loss_pct": 1.0})
+    ok, why = _check(gate)
+    assert not ok and "rules.max_daily_loss_pct" in why
+
+
+def test_a_limit_of_zero_stops_orders_instead_of_turning_the_brake_off(gate):
+    """`0` is a finite number, so it used to clear the usability screen —
+    and `-0 < -0 x equity` is false for any loss, i.e. unlimited."""
+    for risk_value, rules_value in ((0.0, 10.0), (-0.05, 10.0), (0.10, 0.0)):
+        _rewrite(risk={"daily_loss_limit_pct": risk_value},
+                 rules={"max_daily_loss_pct": rules_value})
+        ok, why = _check(gate)
+        assert not ok, f"{risk_value}/{rules_value} must not be tradable"
+        assert "not a usable limit" in why or "daily loss limit" in why, why
+
+
+def test_garbage_in_the_risk_block_refuses_instead_of_clearing(gate):
+    """The bounds are comparisons, and a broken limit loses them all.
+
+    A NaN quantity cap reads `qty > nan` — false — so every order cleared it,
+    and a position cap of NaN did the same to the count. A string raised
+    TypeError out of the middle of the gate, which is not the same as a refusal:
+    the caller sees a crash, not a no.
+    """
+    for key, value in (("max_order_qty", float("nan")),
+                       ("max_order_qty", "unlimited"),
+                       ("max_order_qty", float("inf")),
+                       ("max_positions", float("nan")),
+                       ("max_order_value_pct", "wide open"),
+                       ("daily_loss_limit_pct", None)):
+        _rewrite(risk={key: value})
+        ok, why = _check(gate)
+        assert not ok, f"risk.{key}={value!r} must not be tradable"
+        assert "fail-closed" in why or "not a" in why, why
+
+
+def test_day_pnl_that_is_not_a_number_refuses_the_order(gate):
+    """A hole in the account feed used to read as a day with nothing lost.
+
+    `float(raw or 0)` swallows None, but NaN and a string passed straight
+    through the one comparison that decides whether we are past the brake.
+    """
+    for raw in (float("nan"), float("inf"), "n/a", object()):
+        ok, why = gate.check(_intent(), {"equity": 100_000.0, "day_pnl": raw}, [])
+        assert not ok, f"day_pnl={raw!r} must not be tradable"
+    assert gate.check(_intent(), {"equity": 100_000.0, "day_pnl": None}, [])[0]

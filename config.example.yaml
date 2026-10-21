@@ -173,6 +173,11 @@ risk:
   max_sector_weight: 0.40
   var_confidence: 0.95
   kelly_fraction_cap: 0.25
+  # One daily loss brake, expressed twice. This is a FRACTION of equity (0.03 =
+  # 3%); rules.max_daily_loss_pct below is the same instruction as a PERCENT.
+  # The tighter of the two governs both the pre-trade gate and the autopilot's
+  # entry breaker, and every refusal names the key that fired. A value that is
+  # not a positive number is read as a limit of zero: no new orders.
   daily_loss_limit_pct: 0.03
   psx_cost_bps: 60
   global_cost_bps: 12
@@ -204,6 +209,8 @@ rules:
   min_risk_reward_ratio: 2.0
   max_position_pct: 15.0
   # institutional circuit breakers (autopilot pauses ENTRIES; exits always run)
+  # PERCENT, not fraction — same brake as risk.daily_loss_limit_pct above.
+  # Whichever of the two is tighter is the one that stops the next order.
   max_daily_loss_pct: 3.0            # stop opening after a -3% day
   max_total_exposure_pct: 60.0       # gross exposure ceiling
   max_consecutive_losses: 4          # cool off entries after 4 red trades

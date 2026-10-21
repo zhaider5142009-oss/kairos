@@ -29,12 +29,12 @@ Built by one operator, running 24/7, publishing its own losses.
 
 | | |
 |---|---|
-| Code | 12,668 lines Python · 37 modules · public repo |
+| Code | 12,809 lines Python · 37 modules · public repo |
 | Strategies | 100 voting into the live consensus; the sweep fits one blended signal, not the library |
 | Council | 6 configured LLM seats across 2 providers; a dead seat shrinks the council |
 | Execution | paper + JS Global PSX bridge + MT5 |
 | Uptime | 24/7 daemon, watchdog, token-gated public API |
-| Tests | 330 passing, money path included |
+| Tests | 357 passing, money path included |
 
 Not a fund. No client money. No licence. No AUM.
 
@@ -67,9 +67,9 @@ conviction.
 
 ## 6. What is *not* proven
 
-- **No forward track record.** 1,731 predictions journaled, 140 horizons matured, all 140 were
+- **No forward track record.** 1,764 predictions journaled, 140 horizons matured, all 140 were
   non-trades. A directional hit rate does not yet exist.
-- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 228 cycles, 2 fills.
+- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 231 cycles, 2 fills.
 - Live execution path is built and gated, not exercised at scale.
 - No audit, no team, no third-party capital.
 
@@ -211,6 +211,33 @@ that does not land now returns a no and names the event that could not be record
 live order doors refuse the trade when the answer is no** — the PSX bridge before a ticket
 exists, the MT5 bridge before an order request is assembled. An order with no record behind it
 cannot be audited, explained or reversed, so it does not go out.
+
+The round before this one asked whether a check could be *fooled*. This one asked whether the
+checks are bolted to anything, and five of them were not. **One limit had two names and only
+one of them was armed**: `rules.max_daily_loss_pct` is a percentage and feeds the breaker that
+pauses entries, `risk.daily_loss_limit_pct` is a fraction and feeds the gate that refuses the
+order, and nothing connected them — an operator who tightened the doctrine to half a percent
+kept trading through a ten-percent loss, because the knob they turned was not the knob on the
+door. The two readings now resolve through one function that returns the tighter value and
+**names the key that produced it**, in the refusal on the page, in the terminal and in the
+audit trail, so a brake that fired is a brake you can find. The same function makes an
+unreadable limit a limit of zero: pasted nonsense stops the next order instead of removing it.
+
+Three shared that shape one level down. The gate validated the numbers in an *order* and read
+its own *limits* by trust, so a NaN quantity cap cleared every order and a string in the risk
+block raised out of the gate instead of answering no. The posture that decides whether an order
+may go out at all converted account figures with bare float calls, so a feed returning `n/a`
+ended the cycle that manages every held stop, and a NaN day P&L answered *no* to the single
+comparison that asks whether we are past the brake — which is the same fail-open, on the other
+side of the ledger. A figure that is not one is now either a zero where zero already means "no
+usable figure", or its own blocker where zero would be a lie: an unreadable day reports the
+loss brake as blind, and a held position with no readable price reports exposure as
+understated rather than as free. And in the feature engine, `float(last_close) or 1.0` turned a
+halted print into a one-rupee price and scaled every normalized feature by it — a *value*, which
+is what a model consumes without asking — while the same zero inside `np.log` became `-inf` and
+made a histogram raise, so one delisted scrip could end the scan for every instrument behind
+it. A hole is now a hole: the denominator is absent, the features built on it are absent, and
+the log helpers drop non-positive prints before any statistic touches them.
 
 **A system that audits its own performance numbers is the product.** Everything else is a
 chart.

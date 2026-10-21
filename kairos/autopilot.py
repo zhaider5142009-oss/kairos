@@ -48,6 +48,36 @@ def _psx_live_ready() -> bool:
     return bool((CFG.section("autopilot") or {}).get("auto_place")) and _jsg_auto_ok()
 
 
+def _figure(raw: Any) -> float:
+    """A risk reading as a number, or zero when it is not one.
+
+    Zero is the value the posture already reports as "no usable figure", so an
+    unreadable account reading becomes a blocker instead of an exception that
+    ends the cycle — and a NaN, which answers no comparison at all, never
+    reaches the guards.
+    """
+    try:
+        v = float(raw or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return v if math.isfinite(v) else 0.0
+
+
+def _reading(raw: Any) -> float | None:
+    """A risk figure that is allowed to have no answer.
+
+    For the readings where an absence must stay visible: the day's P&L. `_figure`
+    turns a hole into zero, and zero is the one value the daily loss brake cannot
+    afford to invent — it is "flat day, keep opening", which is the fail-open this
+    whole path exists to close. `None` here becomes a blocker that says so.
+    """
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) else None
+
+
 class Autopilot:
     """A single supervised thread that repeatedly:
        scan watchlist -> engine verdicts -> size -> gate -> execute -> journal.
@@ -74,7 +104,6 @@ class Autopilot:
         # this cycle's live venue snapshots — never persisted, the real book
         # carries account numbers
         self._live_acct: dict[str, Any] | None = None
-        self._live_pos: list[dict[str, Any]] | None = None
         self._psx_live: dict[str, Any] | None = None
         self._psx_down = False
         self.st = self._load()
@@ -221,7 +250,7 @@ class Autopilot:
         acct = self._live_account(mt5_up, psx_book) if live else broker.account()
         pos_list = self._venue_positions(mt5_up, psx_book) if live \
             else broker.open_positions()
-        self._live_acct, self._live_pos = (acct, pos_list) if live else (None, None)
+        self._live_acct = acct if live else None
         self._psx_live = psx_book
         held = {p["symbol"].upper(): p for p in (pos_list or [])}
         # the venue is the source of truth: drop managed entries it no
@@ -617,12 +646,18 @@ class Autopilot:
         """Circuit breakers computed from fresh venue data every cycle."""
         from . import rules as _R
         r = _R.rules()
-        eq = float((acct or {}).get("equity") or 0)
-        day = float((acct or {}).get("day_pnl") or 0)
+        eq = _figure((acct or {}).get("equity"))
+        day = _reading((acct or {}).get("day_pnl"))
+        dl_frac, dl_src = _R.daily_loss_fraction(CFG.risk, r)
         pos_unknown = pos_list is None
-        gross = sum(abs(float(p.get("qty") or 0))
-                    * float(p.get("last") or p.get("entry") or 0)
-                    for p in (pos_list or []))
+        rows = [(abs(_figure(p.get("qty"))),
+                 _figure(p.get("last") or p.get("entry"))) for p in (pos_list or [])]
+        # A held position whose price cannot be read is not a free one: summing
+        # zero for it reports an exposure smaller than the book, and the gross
+        # cap is the only brake on how much is at risk. A row with no quantity is
+        # genuinely nothing at risk (a pending ticket), so it is not blindness.
+        blind_rows = sum(1 for q, px in rows if q > 0 and px <= 0)
+        gross = sum(q * px for q, px in rows)
         exposure_pct = (None if pos_unknown or eq <= 0
                         else gross / eq * 100)
         consec = int(self.st.get("consec_losses") or 0)
@@ -636,9 +671,14 @@ class Autopilot:
         if pos_unknown:
             blockers.append("position list unreadable — exposure unknown, "
                             "not flat")
-        if eq > 0 and day < -float(r["max_daily_loss_pct"]) / 100 * eq:
+        elif blind_rows:
+            blockers.append(f"{blind_rows} position row(s) unreadable — gross "
+                            "exposure understated, not zero")
+        if day is None:
+            blockers.append("day P&L unreadable — the daily loss brake is blind")
+        elif eq > 0 and day < -dl_frac * eq:
             blockers.append(f"daily loss {day:,.0f} breached the "
-                            f"-{r['max_daily_loss_pct']}% breaker")
+                            f"-{dl_frac * 100:.2f}% breaker ({dl_src})")
         if exposure_pct is not None and \
                 exposure_pct > float(r["max_total_exposure_pct"]):
             blockers.append(f"gross exposure {exposure_pct:.0f}% past the "
@@ -648,7 +688,7 @@ class Autopilot:
         # cross-day equity drawdown guard (merged from JARVIS v1
         # profit_engine.DrawdownGuard): persistent peak tracker, de-risk after
         # a multi-day trough even when each individual day looked fine.
-        peak = float(self.st.get("equity_peak") or 0)
+        peak = _figure(self.st.get("equity_peak"))
         dd_pct = 0.0
         if eq > 0:
             if eq > peak:
@@ -660,6 +700,8 @@ class Autopilot:
                     blockers.append(f"equity {dd_pct:.1f}% under peak "
                                     f"{peak:,.0f} — drawdown guard active")
         return {"equity": eq, "day_pnl": day,
+                "daily_loss_limit_pct": round(dl_frac * 100, 2),
+                "daily_loss_limit_from": dl_src,
                 "exposure_pct": None if exposure_pct is None
                                     else round(exposure_pct, 1),
                 "consec_losses": consec,
