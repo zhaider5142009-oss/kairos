@@ -7,8 +7,12 @@ name: Pages
 #
 # One-time manual step: Settings → Pages → Build and deployment → Source:
 # "GitHub Actions". The token this workstation is configured with has no `pages`
-# scope, so the switch cannot be flipped from here; the deploy job then fails
-# loudly instead of reporting a site that does not exist.
+# scope, so the switch cannot be flipped from here. Until it is, the two gates
+# below still run on every push — they are the reason this workflow exists even
+# when nothing publishes — and the three steps that need a site are skipped with
+# a notice. They used to fail instead, which put a red ✗ on the commit an
+# investor reads first and hid the fact that both gates had passed: a switch
+# nobody has flipped is not a failing build.
 
 on:
   push:
@@ -34,6 +38,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      site: ${{ steps.site.outputs.enabled }}
     steps:
       - uses: actions/checkout@v4
 
@@ -69,7 +75,26 @@ jobs:
           print("disclaimers present, source linked, no promised returns")
           PY
 
+      - name: Is a Pages site actually switched on?
+        id: site
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # A token that cannot *see* the site and a site that does not exist both
+          # fail this call, and reading them as one thing would silently disable
+          # publishing forever after the switch is flipped. Print what the API said.
+          if gh api "repos/$GITHUB_REPOSITORY/pages" >/dev/null 2>/tmp/pages.err; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            sed 's/^/api said: /' /tmp/pages.err
+            echo "::notice title=Not published::no Pages site is visible to this run, so" \
+                 "the gates above were the whole job. To host the landing page: Settings" \
+                 "-> Pages -> Source -> GitHub Actions, then re-run this workflow."
+          fi
+
       - name: Assemble the site
+        if: steps.site.outputs.enabled == 'true'
         run: |
           mkdir -p _site
           cp docs/investors/landing.html _site/index.html
@@ -81,13 +106,16 @@ jobs:
           ls -la _site
 
       - uses: actions/configure-pages@v4
+        if: steps.site.outputs.enabled == 'true'
 
       - uses: actions/upload-pages-artifact@v3
+        if: steps.site.outputs.enabled == 'true'
         with:
           path: _site
 
   deploy:
     needs: build
+    if: needs.build.outputs.site == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
