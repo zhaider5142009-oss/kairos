@@ -174,14 +174,15 @@ else's time-series storage library (Aaron Westendorf, 0.10.1), so `pip install
 kairos` would install an unrelated package into a machine that then trusts it
 with broker credentials. Install from the checkout, or pull the container.
 
-Two switches are GitHub settings, not code, and each is one click:
+One switch is a GitHub setting, not code, and it is one click:
 
 - **Pages** → Settings → Pages → Build and deployment → Source: **GitHub
   Actions**. Until it is set, the Pages workflow's deploy job fails with a clear
   error instead of reporting a site that does not exist.
-- **Container visibility** → the `kairos` package under your profile's Packages
-  → Package settings → Make public. GHCR defaults new packages to private, so a
-  stranger's `docker pull` gets denied until that is flipped.
+
+The container needs no such click: `ghcr.io/zhaider5142009-oss/kairos:latest`
+answers an unauthenticated manifest request with `200`, so `docker pull` works
+for anyone, and that is the route the free hosts use.
 
 Both are gated rather than assumed: the Pages workflow refuses to publish a page
 that advertises a guaranteed return, and the Container workflow refuses to leave
