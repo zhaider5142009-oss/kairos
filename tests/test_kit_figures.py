@@ -97,13 +97,44 @@ def figures():
 @pytest.mark.parametrize("path", PACK, ids=lambda p: p.name)
 def test_pack_figures_match_the_repository(path, figures):
     body = _text(path)
+    bad = _stale_figures(body, figures)
+    assert not bad, f"{path.relative_to(ROOT)} contradicts the repository: {bad}"
+
+
+def _stale_figures(body: str, figures) -> list[str]:
+    """Every place the rules find a figure that the repository no longer agrees with."""
     bad: list[str] = []
     for pattern, key, _keep in kit_stats.RULES:
         want = figures[key]
         for m in re.finditer(pattern, body):
             if _digits(m) != want:
                 bad.append(f"{m.group(0)!r} — the repository says {want:,} {key}")
-    assert not bad, f"{path.relative_to(ROOT)} contradicts the repository: {bad}"
+    return bad
+
+
+def test_the_powerpoint_deck_quotes_the_same_figures(figures):
+    """The .pptx is the copy that gets emailed, and `--write` cannot rewrite it.
+
+    A slide puts "121" and "passing tests" in separate text runs, so the pack's
+    rewriter has no safe way to touch the binary and this is the only check it
+    gets — read-only, and it names the value the slide has to be rebuilt with.
+    It found the deck six passes stale: 10,691 lines, 35 modules, 121 tests and a
+    v2.5.0 stamp, under a footer claiming the figures were verified that day.
+    """
+    path = PACK_DIR / "KAIROS_Investor_Deck.pptx"
+    if not path.is_file():
+        pytest.skip("no pptx in this checkout")
+    body = kit_stats.pptx_text(path)
+    assert len(body) > 2_000, "the extractor read an empty deck"
+    bad = _stale_figures(body, figures)
+    want = kit_stats.stamps(kit_stats.ledger())
+    for pattern, key, _keep in kit_stats.STAMP_RULES:
+        for m in re.finditer(pattern, body):
+            tail = re.search(r"(\d{4}-\d{2}-\d{2}|\d+\.\d+\.\d+)$", m.group(0))
+            if tail.group() != want[key]:
+                bad.append(f"{m.group(0)!r} — {key} is {want[key]}")
+    assert not bad, (f"{path.relative_to(ROOT)} contradicts the repository; rebuild "
+                     f"it from DECK.md: {bad}")
 
 
 @pytest.mark.parametrize("path", PACK, ids=lambda p: p.name)

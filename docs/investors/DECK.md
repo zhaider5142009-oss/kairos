@@ -34,7 +34,7 @@ Built by one operator, running 24/7, publishing its own losses.
 | Council | 6 configured LLM seats across 2 providers; a dead seat shrinks the council |
 | Execution | paper + JS Global PSX bridge + MT5 |
 | Uptime | 24/7 daemon, watchdog, token-gated public API |
-| Tests | 258 passing, money path included |
+| Tests | 259 passing, money path included |
 
 Not a fund. No client money. No licence. No AUM.
 
@@ -66,9 +66,9 @@ conviction.
 
 ## 6. What is *not* proven
 
-- **No forward track record.** 1,415 predictions journaled, 140 horizons matured, all 140 were
+- **No forward track record.** 1,437 predictions journaled, 140 horizons matured, all 140 were
   non-trades. A directional hit rate does not yet exist.
-- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 200 cycles, 2 fills.
+- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 202 cycles, 2 fills.
 - Live execution path is built and gated, not exercised at scale.
 - No audit, no team, no third-party capital.
 
@@ -129,7 +129,11 @@ A test walks the package's syntax tree for that sum shape, because it never rais
 The other was this pack's own footer: the figures were regenerated on every pass while the date
 printed beside them, and the version the whitepaper named, were typed by hand and had gone stale.
 Both are generated from the ledger and the package now, and the new guard failed the first time it
-ran — which is the only proof of a staleness check that counts.
+ran — which is the only proof of a staleness check that counts. The same pass found the pack's
+PowerPoint, the copy that actually gets attached to an email, sitting outside the guard altogether
+and staler than the markdown it shipped beside; its text is now read out of the zip and put through
+the same rules. A version written as "v2.6.0" was invisible to a rule that only recognised the word
+"Version", which is the same blind spot as a test count written as "passing".
 
 **A system that audits its own performance numbers is the product.** Everything else is a
 chart.

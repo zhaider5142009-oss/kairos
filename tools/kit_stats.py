@@ -145,7 +145,50 @@ STAMP_RULES = [
     (r"(\bdated )\d{4}-\d{2}-\d{2}", "pack_date", 1),
     (r"(Version )\d+\.\d+\.\d+", "version", 1),
     (r"(Version \d+\.\d+\.\d+ · )\d{4}-\d{2}-\d{2}", "pack_date", 1),
+    # The PowerPoint stamps its version as "KAIROS v2.5.0", not "Version 2.5.0",
+    # and its footer says "verified against the repository on <date>" rather than
+    # "dated <date>". Both phrasings sat inside the guardrail's own vocabulary
+    # blind spot: a checker that lists the forms it knows reports a stale version
+    # as absent, not as wrong.
+    (r"(KAIROS v)\d+\.\d+\.\d+", "version", 1),
+    (r"(KAIROS v\d+\.\d+\.\d+ · )\d{4}-\d{2}-\d{2}", "pack_date", 1),
+    (r"(repository on )\d{4}-\d{2}-\d{2}", "pack_date", 1),
 ]
+
+
+# The pack's twelfth artifact is a PowerPoint, and it is the copy that gets
+# attached to an email, so it is the one that actually reaches a reader. `--write`
+# cannot reach it back: a slide splits "121" and "passing tests" into separate
+# text runs, and rewriting run boundaries inside a zip is how a deck gets
+# corrupted. So this is a read-only check, and it earned its place — when the
+# markdown was found to be four passes stale, the .pptx turned out to be six,
+# quoting 10,691 lines, 35 modules, 121 tests and a v2.5.0 stamp under a footer
+# that said the figures were verified the day the deck was built.
+#
+# The consequence for the deck's own text: a binary cannot chase a number that
+# moves every ten minutes, so it quotes the figures that are stable inside a
+# release (lines, modules, tests, strategies, matured horizons, fills) and points
+# at the dated ledger for the ones that tick (predictions journaled, autopilot
+# cycles). That is why `journaled` and `cycles` never appear in a slide.
+DECK_PPTX = f"{PACK_DIR}/KAIROS_Investor_Deck.pptx"
+
+
+def pptx_text(path: Path) -> str:
+    """Every text run in a .pptx, in slide order, flattened so the rules match.
+
+    Stdlib only: the figures live in `<a:t>` elements and a zip is a zip.
+    """
+    import zipfile
+    from html import unescape
+    with zipfile.ZipFile(path) as z:
+        slides = [n for n in z.namelist()
+                  if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)]
+        slides.sort(key=lambda n: int(re.search(r"\d+", n.rsplit("/", 1)[-1]).group()))
+        runs = []
+        for name in slides:
+            xml = z.read(name).decode("utf-8", errors="replace")
+            runs.append(" ".join(re.findall(r"<a:t>(.*?)</a:t>", xml)))
+    return re.sub(r"\s+", " ", unescape(" ".join(runs)))
 
 
 def stamps(facts: dict | None = None) -> dict[str, str]:

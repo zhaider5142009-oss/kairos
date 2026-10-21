@@ -12,10 +12,11 @@ appears in one document and not in another, the journals win — and the mistake
 | `TARGETS.md` | internally | who to approach, in what order, through which channel |
 | `OUTREACH.md` | internally | drafts per channel, prohibited claims, send log |
 | `landing.html` | public web | self-contained page; deploy only with explicit approval |
+| `KAIROS_Investor_Deck.pptx` | a meeting, by email | the same slides as a file. `--write` cannot rewrite a binary, so it carries only the figures that are stable inside a release and points at `TRACK_RECORD.md` for the ones that tick |
 
 ## Standing rules for this pack
 
-1. **No forward track record exists.** 1,415 predictions journaled, 140 horizons matured,
+1. **No forward track record exists.** 1,437 predictions journaled, 140 horizons matured,
    and all 140 were non-trades. Never quote a hit rate; the ledger says "not yet measurable"
    and so must every other document.
 2. **Backtests are labelled backtests**, per instrument, including the 6 unprofitable ones.
@@ -28,6 +29,10 @@ appears in one document and not in another, the journals win — and the mistake
 6. **The integrity bugs stay in the documents.** Publishing the 100%-hit-rate fabrication is
    the most persuasive thing in the pack, because it is the one claim a reviewer can verify
    from the git history and the tests.
+7. **A slide may not hold a number that moves.** The journal grows every ten minutes, and a
+   binary deck cannot be re-run on that clock, so the deck quotes the dated ledger for
+   predictions journaled and autopilot cycles instead of printing them. Every figure the deck
+   does print is checked against the repository by `tests/test_kit_figures.py`.
 
 ## Update discipline
 
