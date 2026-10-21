@@ -12,13 +12,16 @@ honestly and the engine degrades gracefully.
 
 from __future__ import annotations
 
+import io
 import json
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -28,6 +31,7 @@ import numpy as np
 import pandas as pd
 
 from .config import CFG
+from .store import atomic_write
 from .universe import Instrument, resolve
 
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -96,7 +100,12 @@ class Store:
             return
         out = df[["date", "open", "high", "low", "close", "volume"]].copy()
         out["date"] = pd.to_datetime(out["date"]).dt.strftime("%Y-%m-%d")
-        out.to_csv(self._path(key), index=False)
+        # through the atomic writer, and through a string first: the bar store
+        # is now filled by several fetches at once, and a half-written CSV is
+        # read back by `load` as "no state yet" — history that looks absent
+        buf = io.StringIO()
+        out.to_csv(buf, index=False)
+        atomic_write(self._path(key), buf.getvalue())
 
     def upsert_row(self, key: str, date: str, open_: float, high: float, low: float,
                    close: float, volume: float) -> pd.DataFrame | None:
@@ -107,6 +116,16 @@ class Store:
         if df is None:
             df = row
         else:
+            # A snapshot refresh restates the same bar for every symbol on the
+            # exchange, and rewriting 484 unchanged CSVs cost more than the
+            # quote fetch itself — on a disk that is already failing. Only the
+            # latest row can match, and a match means the file already says
+            # exactly this, so leave it alone.
+            last = df.iloc[-1]
+            if (last["date"] == row["date"].iloc[0]
+                    and float(last["open"]) == open_ and float(last["close"]) == close
+                    and float(last["volume"]) == volume):
+                return df
             df = pd.concat([df[df["date"] != pd.to_datetime(date)], row], ignore_index=True)
             df = df.sort_values("date").reset_index(drop=True)
         self.save(key, df)
@@ -114,6 +133,52 @@ class Store:
 
 
 STORE = Store(CFG.cache_dir)
+
+# PSX history accumulation runs here, off the read path. One lock means only a
+# single sweep is ever in flight; `concurrent.futures` installs an exit hook
+# that joins submitted work, so a fire-and-forget sweep still finishes its
+# writes before a normal process exit.
+_BAR_WRITER = ThreadPoolExecutor(max_workers=2, thread_name_prefix="psx-bars")
+_bar_sweep = threading.Semaphore(1)
+
+
+def _accumulate_bars(store: Store, df: pd.DataFrame, today: str) -> None:
+    for _, row in df.iterrows():
+        sym = str(row.get("name") or "")
+        if not sym:
+            continue
+        close = row.get("close")
+        if close is None or (isinstance(close, float) and np.isnan(close)):
+            continue
+        try:
+            change = float(row.get("change") or 0.0) / 100.0
+            c = float(close)
+            prev = c / (1 + change) if (1 + change) != 0 else c
+            store.upsert_row(sym, today, prev, c, prev, c,
+                             float(row.get("volume") or 0))
+        except Exception:  # noqa: BLE001 — one bad row cannot stop the sweep
+            continue
+
+
+def _schedule_bar_accumulation(df: pd.DataFrame) -> None:
+    # both the store and the date are bound when the snapshot is taken, not
+    # when the worker gets to it: a sweep that runs across midnight must not
+    # relabel yesterday's quotes as today's bar, and it must never discover a
+    # different cache directory mid-flight.
+    store, today = STORE, datetime.now().strftime("%Y-%m-%d")
+    if not _bar_sweep.acquire(blocking=False):
+        return
+
+    def run() -> None:
+        try:
+            _accumulate_bars(store, df, today)
+        finally:
+            _bar_sweep.release()
+
+    try:
+        _BAR_WRITER.submit(run)
+    except RuntimeError:      # pool already shut down (interpreter exiting)
+        _bar_sweep.release()
 
 
 # ---------------------------------------------------------------------------
@@ -149,10 +214,10 @@ class YahooClient:
                     continue
                 o = quote["open"][i] if quote["open"][i] is not None else close
                 h = quote["high"][i] if quote["high"][i] is not None else close
-                l = quote["low"][i] if quote["low"][i] is not None else close
+                lo = quote["low"][i] if quote["low"][i] is not None else close
                 v = quote["volume"][i] if quote["volume"][i] is not None else 0
                 rows.append({"date": datetime.fromtimestamp(ts, tz=timezone.utc).date(),
-                             "open": o, "high": h, "low": l, "close": close, "volume": v})
+                             "open": o, "high": h, "low": lo, "close": close, "volume": v})
             df = pd.DataFrame(rows)
             if df.empty:
                 return None
@@ -346,11 +411,29 @@ class NewsService:
         self.max_per_feed = int(CFG.section("news").get("max_items_per_feed", 25))
 
     def fetch(self, limit_per_feed: int | None = None) -> list[NewsItem]:
+        from concurrent.futures import ThreadPoolExecutor
+
         limit = limit_per_feed or self.max_per_feed
-        items: list[NewsItem] = []
-        for feed in self.feeds:
+
+        def get(feed: dict) -> bytes | None:
             try:
-                raw = _http_get(feed["url"], timeout=12, retries=1)
+                return _http_get(feed["url"], timeout=12, retries=1)
+            except Exception:
+                return None
+
+        # every feed is a separate host waiting on a separate socket; the
+        # downloads are parallel but the assembly below walks the feeds in
+        # declared order, so the item list (and which headlines tie in
+        # `relevant`) is byte-for-byte what the sequential version produced.
+        with ThreadPoolExecutor(max_workers=min(5, max(1, len(self.feeds))),
+                                thread_name_prefix="news") as ex:
+            raws = list(ex.map(get, self.feeds))
+
+        items: list[NewsItem] = []
+        for feed, raw in zip(self.feeds, raws):
+            if raw is None:
+                continue
+            try:
                 root = ET.fromstring(raw)
             except Exception:
                 continue
@@ -500,15 +583,28 @@ class MarketData:
         return merged
 
     def _kse100_composite(self, days: int | None = None) -> pd.DataFrame | None:
+        from concurrent.futures import ThreadPoolExecutor
+
         ts, cached = self._kse100_cache
         if cached is not None and time.time() - ts < 3600.0:
             return cached
+        # 16 heavyweight histories, and every one of them is a socket wait. The
+        # assembly below walks the declared basket order rather than the order
+        # the fetches finished in, because the mean/slope math is float-summed
+        # column-by-column: a different column order could move the third
+        # decimal of the index, and the index gates every PSX position size.
+        wanted = [k for k in self.KSE100_BASKET
+                  if (resolve(k) is not None and resolve(k).yahoo)]
+
+        def get(key: str) -> tuple[str, pd.DataFrame | None]:
+            return key, self.history(resolve(key), days=days)
+
+        with ThreadPoolExecutor(max_workers=min(5, max(1, len(wanted))),
+                                thread_name_prefix="kse100") as ex:
+            frames = dict(ex.map(get, wanted))
         closes, highs, lows, vols = {}, {}, {}, {}
-        for key in self.KSE100_BASKET:
-            inst = resolve(key)
-            if inst is None or not inst.yahoo:
-                continue
-            df = self.history(inst, days=days)
+        for key in wanted:
+            df = frames[key]
             if df is None or len(df) < 80:
                 continue
             s = df.set_index("date")
@@ -520,7 +616,7 @@ class MarketData:
             return None
         c = pd.DataFrame(closes).dropna()
         h = pd.DataFrame(highs).reindex(c.index).fillna(1.0)
-        l = pd.DataFrame(lows).reindex(c.index).fillna(1.0)
+        lo = pd.DataFrame(lows).reindex(c.index).fillna(1.0)
         v = pd.DataFrame(vols).reindex(c.index).fillna(0.0)
         ret = c.pct_change().dropna()
         if len(ret) < 60:
@@ -528,7 +624,7 @@ class MarketData:
         close = 100.0 * (1.0 + ret.mean(axis=1)).cumprod()
         open_ = close.shift(1).fillna(100.0)
         high = (open_ * h.loc[ret.index].mean(axis=1)).clip(lower=close)
-        low = (open_ * l.loc[ret.index].mean(axis=1)).clip(upper=close)
+        low = (open_ * lo.loc[ret.index].mean(axis=1)).clip(upper=close)
         out = pd.DataFrame({
             "date": close.index,
             "open": open_.values,
@@ -562,19 +658,10 @@ class MarketData:
         if not df.empty:
             self._tv_universe = df
             self._tv_fetched_at = time.time()
-            for _, row in df.iterrows():
-                sym = str(row.get("name") or "")
-                if sym:
-                    close = row.get("close")
-                    if close is not None and not (isinstance(close, float) and np.isnan(close)):
-                        try:
-                            change = float(row.get("change") or 0.0) / 100.0
-                            c = float(close)
-                            prev = c / (1 + change) if (1 + change) != 0 else c
-                            STORE.upsert_row(sym, datetime.now().strftime("%Y-%m-%d"),
-                                             prev, c, prev, c, float(row.get("volume") or 0))
-                        except Exception:
-                            continue
+            # accumulate today's bar for the whole exchange, but not on this
+            # thread: the caller wants the snapshot, and 484 read/merge/write
+            # round-trips used to be paid by every factor row and desk refresh
+            _schedule_bar_accumulation(df)
         return self._tv_universe if self._tv_universe is not None else pd.DataFrame()
 
     # -- convenience ----------------------------------------------------------

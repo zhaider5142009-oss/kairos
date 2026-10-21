@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any
 
@@ -52,14 +53,23 @@ class PredictionEngine:
     # ------------------------------------------------------------- context
     def intermarket(self, force: bool = False) -> dict[str, pd.DataFrame]:
         if self._intermarket is None or force:
-            ctx: dict[str, pd.DataFrame] = {}
-            for key in INTERMARKET_KEYS:
+            # 9 independent HTTP fetches, and the wait is entirely on the
+            # network, not the CPU: sequentially this cost ~16s of a ~53s
+            # prediction. Order of the result is the declared key order, and
+            # an unreachable symbol still lands as "absent" rather than a
+            # partial dict, so the strategies see exactly what they saw before.
+            def one(key: str) -> tuple[str, pd.DataFrame | None]:
                 inst = resolve(key)
                 if inst is None:
-                    continue
-                df = self.md.history(inst)
-                if df is not None and len(df) >= 40:
-                    ctx[key] = df
+                    return key, None
+                return key, self.md.history(inst)
+
+            ctx: dict[str, pd.DataFrame] = {}
+            with ThreadPoolExecutor(max_workers=5,
+                                    thread_name_prefix="intermarket") as ex:
+                for key, df in ex.map(one, INTERMARKET_KEYS):
+                    if df is not None and len(df) >= 40:
+                        ctx[key] = df
             self._intermarket = ctx
         return self._intermarket
 
@@ -173,26 +183,41 @@ class PredictionEngine:
         regime_info = detect_regime(df)
         patterns = detect_patterns(df)
 
-        # --- model battery ---------------------------------------------------
-        forecasts: list[ModelForecast] = self._battery(instrument, df, horizon)
-        if use_wsl:
-            series = [float(x) for x in close.tail(400).values]
-            try:
-                fc = WSL.chronos_forecast(series, horizon)
-                if fc:
-                    forecasts.append(fc)
-                fc = WSL.timesfm_forecast(series, horizon)
-                if fc:
-                    forecasts.append(fc)
-            except Exception:
-                pass
+        # --- model battery + market context, together --------------------------
+        # the batteries are CPU and the context is sockets. Sequentially, a PSX
+        # prediction spent ~22s fitting and then ~11s waiting for intermarket,
+        # the exchange snapshot and the index regime, one after the other. The
+        # three fetches are independent of each other and of the fits, so they
+        # run while the fits run; every value below is the same object the
+        # sequential code would have produced.
+        with ThreadPoolExecutor(max_workers=3, thread_name_prefix="context") as ex:
+            fut_intermarket = ex.submit(self.intermarket)
+            fut_factors = ex.submit(self.factor_row, instrument)
+            fut_kse = ex.submit(kse_regime, self.md) if instrument.market == "PSX" else None
+
+            forecasts: list[ModelForecast] = self._battery(instrument, df, horizon)
+            if use_wsl:
+                series = [float(x) for x in close.tail(400).values]
+                try:
+                    fc = WSL.chronos_forecast(series, horizon)
+                    if fc:
+                        forecasts.append(fc)
+                    fc = WSL.timesfm_forecast(series, horizon)
+                    if fc:
+                        forecasts.append(fc)
+                except Exception:
+                    pass
+
+            intermarket_ctx = fut_intermarket.result()
+            factor_row = fut_factors.result()
+            kse = fut_kse.result() if fut_kse is not None else None
 
         # --- strategy battery --------------------------------------------------
         ctx: dict[str, Any] = {
             "regime": regime_info["regime"],
-            "intermarket": self.intermarket(),
+            "intermarket": intermarket_ctx,
             "date_today": df["date"].iloc[-1],
-            "factor_row": self.factor_row(instrument),
+            "factor_row": factor_row,
             "patterns": patterns,
             "tags": instrument.tags,
         }
@@ -220,10 +245,10 @@ class PredictionEngine:
         cal = risk_calendar()
         if cal["position_multiplier"] < 1.0:
             risk.suggested_weight *= cal["position_multiplier"]
-        kse_mult = 1.0
-        if instrument.market == "PSX":
-            kse = kse_regime(self.md)
-            kse_mult = kse.position_multiplier
+        # one KSE regime per prediction, asked for alongside the rest of the
+        # market context; only PSX positions are scaled by it.
+        kse_mult = kse.position_multiplier if kse is not None else 1.0
+        if kse is not None:
             risk.suggested_weight *= kse_mult
         vol = risk.annual_vol if risk.annual_vol > 0 else 0.2
         sigma_h = vol / math.sqrt(252) * math.sqrt(horizon)
@@ -303,9 +328,6 @@ class PredictionEngine:
             },
             "event_risk": cal,
             "kse_regime_multiplier": round(kse_mult, 2),
-            "features_snapshot": {k: (round(v, 5) if isinstance(v, (int, float)) and
-                                      np.isfinite(v) else v)
-                                  for k, v in list(features.items())[:0]},  # omitted for size
             "computation_ms": int((time.perf_counter() - t0) * 1000),
         }
 

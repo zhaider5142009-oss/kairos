@@ -127,7 +127,7 @@ def _linreg_slope(close: pd.Series, n: int = 20) -> tuple[float, float]:
 # ---------------------------------------------------------------------------
 def compute_features(df: pd.DataFrame) -> dict[str, float]:
     """Compute the full feature vector from the LAST row of each indicator."""
-    c, h, l, v = df["close"], df["high"], df["low"], df["volume"].fillna(0)
+    c, h, lo, v = df["close"], df["high"], df["low"], df["volume"].fillna(0)
     f: dict[str, float] = {}
 
     # returns over horizons
@@ -175,8 +175,8 @@ def compute_features(df: pd.DataFrame) -> dict[str, float]:
     f["vol_ratio"] = f["vol20"] / f["vol60"] if f["vol60"] > 0 else 1.0
     logret = np.diff(np.log(c.values.astype(float)))
     if len(logret) > 30:
-        gk = 0.5 * np.log((h.values / l.values)[1:] ** 2) - (2 * np.log(2) - 1) * np.log((c.values / c.shift().values)[1:] ** 2)
-        park = np.sqrt((np.log(h.values / l.values) ** 2)[1:].mean()) / np.sqrt(4 * np.log(2))
+        gk = 0.5 * np.log((h.values / lo.values)[1:] ** 2) - (2 * np.log(2) - 1) * np.log((c.values / c.shift().values)[1:] ** 2)
+        park = np.sqrt((np.log(h.values / lo.values) ** 2)[1:].mean()) / np.sqrt(4 * np.log(2))
         f["garman_klass"] = float(np.sqrt(np.nanmean(gk[-60:] ** 2)) if len(gk) > 0 else 0.0)
         f["parkinson"] = float(np.nan_to_num(park))
         f["skew60"] = float(np.nan_to_num(pd.Series(logret[-60:]).skew()))
@@ -197,10 +197,10 @@ def compute_features(df: pd.DataFrame) -> dict[str, float]:
     f["keltner_neg"] = float((c.iloc[-1] - (ema20.iloc[-1] - 2 * atr14.iloc[-1])) /
                              (4 * atr14.iloc[-1] or 1e-9))
     don_hi = h.rolling(20, min_periods=1).max().iloc[-1]
-    don_lo = l.rolling(20, min_periods=1).min().iloc[-1]
+    don_lo = lo.rolling(20, min_periods=1).min().iloc[-1]
     f["donchian_pos"] = float((c.iloc[-1] - don_lo) / ((don_hi - don_lo) or 1e-9))
     f["dist_52w_high"] = float(c.iloc[-1] / (h.rolling(252, min_periods=60).max().iloc[-1] or px) - 1)
-    f["dist_52w_low"] = float(c.iloc[-1] / (l.rolling(252, min_periods=60).min().iloc[-1] or px) - 1)
+    f["dist_52w_low"] = float(c.iloc[-1] / (lo.rolling(252, min_periods=60).min().iloc[-1] or px) - 1)
 
     # volume behavior
     if v.sum() > 0:
@@ -209,12 +209,12 @@ def compute_features(df: pd.DataFrame) -> dict[str, float]:
         f["volume_trend"] = float(v_ma.iloc[-1] / (v.rolling(60, min_periods=1).mean().iloc[-1] or 1.0))
         obv = (np.sign(c.diff().fillna(0.0)) * v).cumsum()
         f["obv_slope"] = float((obv.iloc[-1] - obv.iloc[-6]) / (abs(obv.iloc[-1]) + 1e-9))
-        mfi_tp = (h + l + c) / 3
+        mfi_tp = (h + lo + c) / 3
         mf = mfi_tp.diff().fillna(0.0) * v
         pos = mf.clip(lower=0).rolling(14, min_periods=1).sum()
         neg = (-mf).clip(lower=0).rolling(14, min_periods=1).sum()
         f["mfi14"] = float((100 * pos / (pos + neg).replace(0, np.nan)).iloc[-1] or 50.0)
-        f["cmf20"] = float((((c - l) - (h - c)) / ((h - l).replace(0, np.nan)) * v).rolling(20, min_periods=1).sum().iloc[-1] /
+        f["cmf20"] = float((((c - lo) - (h - c)) / ((h - lo).replace(0, np.nan)) * v).rolling(20, min_periods=1).sum().iloc[-1] /
                            (v.rolling(20, min_periods=1).sum().iloc[-1] or 1e-9))
         dollar = c * v
         f["amihud"] = float((ret.abs() / (dollar + 1e-9)).rolling(21, min_periods=5).mean().iloc[-1] * 1e9)
@@ -252,10 +252,10 @@ def compute_features(df: pd.DataFrame) -> dict[str, float]:
     # candlestick anatomy (last bar)
     o = df["open"]
     body = float(abs(c.iloc[-1] - o.iloc[-1]) / px)
-    rng = float((h.iloc[-1] - l.iloc[-1]) / px) or 1e-9
+    rng = float((h.iloc[-1] - lo.iloc[-1]) / px) or 1e-9
     f["body_ratio"] = body / rng
     f["upper_shadow"] = float((h.iloc[-1] - max(c.iloc[-1], o.iloc[-1])) / px) / rng
-    f["lower_shadow"] = float((min(c.iloc[-1], o.iloc[-1]) - l.iloc[-1]) / px) / rng
+    f["lower_shadow"] = float((min(c.iloc[-1], o.iloc[-1]) - lo.iloc[-1]) / px) / rng
 
     return f
 
@@ -267,10 +267,10 @@ def detect_patterns(df: pd.DataFrame) -> list[str]:
     if len(df) < 3:
         return []
     o, c = df["open"].values, df["close"].values
-    h, l = df["high"].values, df["low"].values
+    h, lo = df["high"].values, df["low"].values
     c1, c2, c3 = c[-1], c[-2], c[-3]
     o1, o2, o3 = o[-1], o[-2], o[-3]
-    h1, l1 = h[-1], l[-1]
+    h1, l1 = h[-1], lo[-1]
     body1 = abs(c1 - o1)
     rng1 = h1 - l1 or 1e-12
     body2 = abs(c2 - o2)
@@ -299,7 +299,7 @@ def detect_patterns(df: pd.DataFrame) -> list[str]:
         pats.append("bullish_marubozu")
     if body1 / rng1 > 0.9 and c1 < o1:
         pats.append("bearish_marubozu")
-    if abs(c1 - c2) / max(c1, c2) < 0.002 and abs(l1 - l[-2]) / max(l1, l[-2]) < 0.004:
+    if abs(c1 - c2) / max(c1, c2) < 0.002 and abs(l1 - lo[-2]) / max(l1, lo[-2]) < 0.004:
         pats.append("tweezer_bottom")
     if abs(c1 - c2) / max(c1, c2) < 0.002 and abs(h1 - h[-2]) / max(h1, h[-2]) < 0.004:
         pats.append("tweezer_top")
@@ -311,7 +311,7 @@ def detect_patterns(df: pd.DataFrame) -> list[str]:
 # ---------------------------------------------------------------------------
 def feature_panel(df: pd.DataFrame) -> pd.DataFrame:
     """Build the ML feature matrix: one row per bar, all indicators vectorized."""
-    c, h, l, v = df["close"], df["high"], df["low"], df["volume"].fillna(0)
+    c, h, lo, v = df["close"], df["high"], df["low"], df["volume"].fillna(0)
     ret = c.pct_change()
     panel = pd.DataFrame(index=df.index)
     for n in (1, 2, 3, 5, 10, 21, 63, 126):
@@ -337,7 +337,7 @@ def feature_panel(df: pd.DataFrame) -> pd.DataFrame:
     panel["bb_w"] = width
     panel["bb_b"] = pct_b
     don_hi = h.rolling(20, min_periods=1).max()
-    don_lo = l.rolling(20, min_periods=1).min()
+    don_lo = lo.rolling(20, min_periods=1).min()
     panel["don_p"] = (c - don_lo) / (don_hi - don_lo).replace(0, np.nan)
     panel["dd"] = c / c.cummax() - 1
     panel["gap"] = df["open"] / c.shift() - 1
@@ -350,10 +350,10 @@ def feature_panel(df: pd.DataFrame) -> pd.DataFrame:
     else:
         panel["vol_z"] = 0.0
         panel["obv_sl"] = 0.0
-    panel["body"] = (c - df["open"]) / (h - l).replace(0, np.nan)
+    panel["body"] = (c - df["open"]) / (h - lo).replace(0, np.nan)
     panel["up_ratio"] = ret.gt(0).rolling(10, min_periods=1).mean()
     panel["dist_h52"] = c / h.rolling(252, min_periods=60).max() - 1
-    panel["dist_l52"] = c / l.rolling(252, min_periods=60).min() - 1
+    panel["dist_l52"] = c / lo.rolling(252, min_periods=60).min() - 1
     panel = panel.replace([np.inf, -np.inf], np.nan).fillna(0.0)
     return panel
 

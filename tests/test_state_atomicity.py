@@ -47,7 +47,7 @@ def test_a_failed_write_leaves_the_previous_file_intact(tmp_path, monkeypatch):
     with pytest.raises(OSError):
         atomic_write(p, "GONE\n")
     assert p.read_text(encoding="utf-8") == '{"a": 1}\n'
-    assert not (tmp_path / "journal.jsonl.tmp").exists()
+    assert not [f for f in tmp_path.iterdir() if f.name.endswith(".tmp")]
 
 
 def test_no_temp_file_survives_a_good_write(tmp_path):
@@ -55,6 +55,39 @@ def test_no_temp_file_survives_a_good_write(tmp_path):
     atomic_write(p, "{}")
     assert p.read_text(encoding="utf-8") == "{}"
     assert [f.name for f in tmp_path.iterdir()] == ["book.json"]
+
+
+def test_two_writers_of_one_file_never_leave_a_half_written_file(tmp_path):
+    """The bar store now fills several symbols at once, so the same file can be
+    written from two threads. A shared temp name let one writer truncate the
+    other's payload mid-write, and Windows then refused the rename outright —
+    a lost bar file that no caller would have noticed. Each writer gets its own
+    temp, the replace retries through the momentary lock, and no writer is
+    allowed to fail quietly."""
+    import threading
+
+    p = tmp_path / "GOLD.csv"
+    long_a, short_b = "a" * 200_000, "b" * 20
+    for _ in range(6):
+        errors: list[BaseException] = []
+
+        def write(payload: str) -> None:
+            try:
+                atomic_write(p, payload)
+            except BaseException as exc:          # noqa: BLE001 — the point of the test
+                errors.append(exc)
+
+        threads = [threading.Thread(target=write, args=(v,))
+                   for v in (long_a, short_b, long_a, short_b)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert not errors, f"a writer failed: {errors[0]!r}"
+        body = p.read_text(encoding="utf-8")
+        assert len(body) in (len(long_a), len(short_b)), "a mixed payload landed"
+        assert set(body) <= {"a"} or set(body) <= {"b"}
+    assert not [f for f in tmp_path.iterdir() if f.name.endswith(".tmp")]
 
 
 # -------------------------------------------------------------------- the book

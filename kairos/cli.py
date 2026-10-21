@@ -16,6 +16,7 @@ import warnings
 from rich import box
 
 from .config import CFG
+from . import __version__
 
 # BLAS/OpenMP default to one thread per LOGICAL core; on a small box the fitting
 # storm then oversubscribes and a refit takes minutes instead of seconds.
@@ -774,9 +775,13 @@ def cmd_feedback(args) -> int:
     return 0
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="kairos", description="KAIROS — market prediction & execution engine")
+    # --version has to answer before the subcommand is required: a supporter
+    # following a README link types `kairos --version` first and gets rc=2 if it
+    # is missing, which reads as a broken install rather than an unknown flag.
+    p.add_argument("--version", action="version", version=f"KAIROS {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sp = sub.add_parser("predict", help="full dossier for one or more symbols")
@@ -939,7 +944,7 @@ def main() -> int:
     sp = sub.add_parser("feedback", help="resolve outcomes + realized track record")
     sp.set_defaults(fn=cmd_feedback)
 
-    args = p.parse_args()
+    args = p.parse_args(argv)
     try:
         return args.fn(args)
     except KeyboardInterrupt:

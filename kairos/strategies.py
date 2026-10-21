@@ -170,13 +170,17 @@ def s14(df, f, ctx):
 def s15(df, f, ctx):
     if len(df) < 52:
         return None
-    h, l, c = df["high"], df["low"], df["close"]
-    tenkan = (h.rolling(9).max() + l.rolling(9).min()) / 2
-    kijun = (h.rolling(26).max() + l.rolling(26).min()) / 2
-    span_b = (h.rolling(52).max() + l.rolling(52).min()) / 2
+    h, lo, c = df["high"], df["low"], df["close"]
+    tenkan = (h.rolling(9).max() + lo.rolling(9).min()) / 2
+    kijun = (h.rolling(26).max() + lo.rolling(26).min()) / 2
+    span_b = (h.rolling(52).max() + lo.rolling(52).min()) / 2
     t, k, b = tenkan.iloc[-1], kijun.iloc[-1], span_b.iloc[-1]
     px = c.iloc[-1]
-    score = (px > b) + (px > k) + (t > k)
+    # int() is not decoration: px, b, k and t are numpy scalars, and numpy adds
+    # bool scalars as *xor*, so this sum used to be True/False, never 0..3.
+    # `score >= 2` was then unreachable and the strategy voted bearish on every
+    # symbol with 52+ bars — a permanent short vote inside the consensus.
+    score = int(px > b) + int(px > k) + int(t > k)
     if score >= 2:
         return _vote(1, score / 3 + 0.2, "ichimoku bullish stack")
     if score <= 1:
@@ -209,9 +213,9 @@ def s16(df, f, ctx):
 def s17(df, f, ctx):
     if len(df) < 30:
         return None
-    c, h, l = df["close"], df["high"], df["low"]
-    atr = (h - l).rolling(10).mean()
-    mid = (h + l) / 2
+    c, h, lo = df["close"], df["high"], df["low"]
+    atr = (h - lo).rolling(10).mean()
+    mid = (h + lo) / 2
     upper, lower = mid + 3 * atr, mid - 3 * atr
     direction, stop = 1, lower.iloc[10]
     for i in range(11, len(df)):
@@ -1107,9 +1111,9 @@ def s94(df, f, ctx):
 def s95(df, f, ctx):
     if len(df) < 30:
         return None
-    h, l = df["high"], df["low"]
+    h, lo = df["high"], df["low"]
     since_high = 25 - int(np.argmax(h.tail(25).values))
-    since_low = 25 - int(np.argmin(l.tail(25).values))
+    since_low = 25 - int(np.argmin(lo.tail(25).values))
     up = (25 - since_high) / 25 * 100
     dn = (25 - since_low) / 25 * 100
     if up > 70 and up > dn:

@@ -235,3 +235,20 @@ def test_config_has_dirs():
     # config must load even without config.yaml present
     assert CFG.data_dir is not None
     assert CFG.root is not None
+
+
+def test_version_flag_answers_without_a_subcommand(capsys):
+    # `kairos --version` is the first thing a reader tries after a pip install;
+    # with only required subparsers it exited 2 and looked like a broken build.
+    from kairos.cli import main
+    with pytest.raises(SystemExit) as exc:
+        main(["--version"])
+    assert exc.value.code == 0
+    assert capsys.readouterr().out.strip() == f"KAIROS {kairos.__version__}"
+
+
+def test_a_subcommand_is_still_required():
+    from kairos.cli import main
+    with pytest.raises(SystemExit) as exc:
+        main([])
+    assert exc.value.code == 2
