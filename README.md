@@ -30,6 +30,7 @@ KAIROS forecasts **crypto** (22 majors: BTC, ETH, SOL, BNB, XRP, ADA, DOGE, AVAX
 | **LLM council** | Multi-model deliberation across OpenRouter + direct Kimi/Moonshot, median consensus with dissent recorded — optional per prediction |
 | **Fugu conductor** | One fused verdict per instrument from all experts — ensemble score, model agreement, regime, realized calibration, doctrine R:R geometry, risk posture — emitting probability-weighted edge in R-multiples; the entry bar adapts automatically to KAIROS' own realized hit-rate |
 | **Execution** | Paper broker (true cash ledger, slippage + market-aware commission + immutable JSONL journal), MT5 bridge (commodities/FX, attach-only — never launches or blocks the terminal), JS Global bridge (PSX: read-only sync + **double-keyed order desk** — stage→ack with the broker PIN, human tickets by default), PMX futures scaffold (tickets-only, account-ready) |
+| **Command plane** | Fugu-style orchestration tailored to a quant desk: plain language → a 1–4 step plan over a frozen registry of 12 read-only tools → executed under a wall-clock budget → answered with the trace. Cross-step references resolve from the previous step's own output. **No tool in the registry can place, cancel, arm or move anything**, so no plan — human, deterministic or model-invented — can reach money; verbs that ask for movement get directions instead. Every figure is rendered by the tool that produced it; the LLM may change the voice, never the numbers, and the plane answers in full with no provider enabled |
 | **Validation** | Walk-forward backtests with hysteresis, cost hurdle, vol targeting; paper sessions with a proper cash ledger + PSX commission model; realized outcomes feed back every 12 cycles so the system's own hit-rate tunes its entry bar |
 
 ## Quick start
@@ -44,6 +45,19 @@ pip install -e ".[all]"
 
 # or invoke the console script once installed
 kairos --help
+
+# FIRST RUN — three commands, no documentation required
+kairos setup      # writes git-ignored config.yaml from the example, pulls keys
+                  # from the environment, prompts (masked) for the rest
+kairos doctor     # what it actually checked: python floor, deps, the config file
+                  # AND whether .gitignore really covers it, key slots still
+                  # placeholder, writable state dirs, market feeds, live posture
+kairos up         # start the tower and open the desk
+
+# ask the engine a question in plain language — it plans which experts to run,
+# executes them read-only, and prints the trace
+kairos ask "screen the PSX and tell me which name is worth trading today"
+kairos ask "backtest HBL over 120 days" --plain
 
 # one-shot predictions
 python -m kairos predict BTC ETH SOL          # crypto
@@ -83,7 +97,7 @@ python -m kairos serve
 
 `python -m kairos serve` (or the **KAIROS** desktop shortcut) opens http://127.0.0.1:8600 — a single-page command center:
 
-- **Home** — ChatGPT-style chat console: ask anything ("where is gold this week?", "best Pakistani stocks?", "allocate 1M across GOLD WTI SPX") and the full engine answers in bubbles with inline verdict cards
+- **Home** — ChatGPT-style chat console: ask anything ("where is gold this week?", "best Pakistani stocks?", "allocate 1M across GOLD WTI SPX") and the full engine answers in bubbles with inline verdict cards. Harder questions are compiled into expert steps by the command plane and the reply carries an expandable trace — which tool ran, what it argued, how long it took, and what it said
 - **Predict** — full dossier per instrument: verdict, targets, models, strategies, risk, council
 - **PSX Scan** — factor leaderboard over the whole exchange
 - **Portfolio** — annealed allocation with per-instrument metrics
@@ -171,16 +185,27 @@ staging, acking and cancelling alike.
 
 ## Configuration
 
-Copy `config.example.yaml` to `config.yaml` and fill in your keys (OpenRouter etc.). The file is git-ignored — **never commit real keys**.
+`kairos setup` writes `config.yaml` from `config.example.yaml`, filling each provider's key
+slot from the environment (`OPENROUTER_API_KEY`, `MOONSHOT_API_KEY`, `DEEPSEEK_API_KEY`) and
+prompting with masked input for the rest. Doing it by hand is still fine — copy the example
+and fill in your keys.
+
+**`config.yaml` is git-ignored and is the only file that may hold a credential.** It is
+never committed, printed, or logged: `doctor` reports which slots are filled and which are
+still placeholders, and counts keys without reading one aloud. `kairos doctor` fails loudly
+if the ignore rule ever stops covering the file — that rule is the only thing between your
+keys and a public repository. MT5 and JS Global credentials belong in the same file, under
+their own blocks.
 
 ## Architecture
 
 ```
-python -m kairos             CLI entry (predict/scan/portfolio/backtest/paper/mt5/fugu/autopilot/rules/share/livebook/order/feedback/serve/…)
+python -m kairos             CLI entry (setup/doctor/up/ask · predict/scan/portfolio/backtest/paper/mt5/fugu/autopilot/rules/share/livebook/order/feedback/serve/…)
 launch_kairos.bat            one-click launcher (desktop shortcut target; icon in tools/kairos.ico)
-config.yaml                  all keys + engine tunables (git-ignored)
+config.yaml                  all keys + engine tunables (git-ignored; created by `kairos setup`)
 kairos/
   config.py universe.py      config singleton · 100-instrument registry (22 crypto + commodities/FX/indices/PSX)
+  onboard.py                 setup · doctor · up — the first run, answered by code instead of by a document
   data.py                    Yahoo v8 + TradingView PSX scanner + local PSX API + news + CSV store
   features.py                78 features · patterns · regimes · cross-sectional factors
   models_stat.py models_ml.py   statistical + ML + neural batteries
@@ -197,6 +222,7 @@ kairos/
   jsgsync.py                 read-only Web Trade Cast sync: login → import real portfolio
   jsgtrade.py                double-keyed order desk: stage → ack → PlaceOrder/CancelOrder, broker price band + notional cap
   fugu.py                    Fugu conductor: fused expert verdicts, calibrated P(win), edge in R, adaptive entry bar
+  command.py                 read-only command plane: plan → 12-tool registry → trace; refuses movement before planning
   pmx.py                     PMX (Pakistan Mercantile Exchange) futures scaffold — venue + human-confirmed tickets, account-ready
   backtest.py                walk-forward validation + paper sessions
   execution.py               OrderIntent → RiskGate → PaperBroker / Mt5Bridge (attach-only) / JsGlobalTicket + audit journal
@@ -252,7 +278,7 @@ python -m kairos.cli feedback       # realized record, live
 ```
 
 [docs/investors/](docs/investors/) holds the ledger, a one-pager, the whitepaper and the
-deck. Read the ledger first: there is **no forward track record yet** — 1,183 predictions
+deck. Read the ledger first: there is **no forward track record yet** — 1,216 predictions
 journaled, 140 horizons matured, all 140 non-trades — and 6 of 14 instruments in the
 walk-forward sweep lost money. That is the honest state of the project, and it is the reason
 the risk layer exists.
@@ -274,7 +300,10 @@ with attribution. See [CONTRIBUTING.md](CONTRIBUTING.md) to get involved and
 
 ## Lineage
 
-JARVIS v1/v1.5 (MiniMax build) → **KAIROS v2** (this repo). Full v1.5 source preserved in git history on GitHub: `zhaider5142009-oss/jarvis-reborn`.
+JARVIS v1/v1.5 (MiniMax build) → **KAIROS v2** (this repository). The v1 sources were
+committed here as `jarvis/` before the rename, so the lineage is auditable in this repo's
+own git history — the useful parts of it (doctrine, regime work, execution discipline) are
+merged into `kairos/`, and the rest was rebuilt from first principles.
 
 **Single project (2026-10-17 merge disposition).** Every jarvis component found on this machine was audited against KAIROS:
 - *Merged in*: `trading_rules.py` doctrine → `kairos/rules.py` (risk-per-trade, R:R floor, ATR stops, Kelly, wisdom corpus — enforced by the autopilot's pre-trade plan check); v1 state (paper ledgers, backtest reports) mirrored to `data/v1_legacy/`.

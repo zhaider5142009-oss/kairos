@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
+from kairos import __version__ as KAIROS_VERSION
 from kairos.config import CFG  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -19,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 from kairos.engine import ENGINE  # noqa: E402
 from kairos.universe import resolve, universe  # noqa: E402
 
-app = FastAPI(title="KAIROS Control Tower", version="2.6.0")
+app = FastAPI(title="KAIROS Control Tower", version=KAIROS_VERSION)
 BOOT_TS = time.time()
 
 

@@ -37,6 +37,50 @@ def test_version_is_string():
     assert kairos.__version__.count(".") >= 1
 
 
+def test_the_version_declared_everywhere_is_the_one_the_package_carries():
+    """Four files state a version and only one of them is read by code. This
+    repository's recurring defect is a change in one place leaving a stale copy
+    in another, and a release tag that disagrees with `pip show kairos` is the
+    same bug wearing a suit."""
+    import re
+    from pathlib import Path
+
+    root = Path(kairos.__file__).resolve().parent.parent
+    want = kairos.__version__
+
+    def read(name: str) -> str:
+        return (root / name).read_text(encoding="utf-8")
+
+    assert re.search(r'^version = "([^"]+)"', read("pyproject.toml"), re.M).group(1) == want
+    assert re.search(r'^Version: "([^"]+)"', read("config.example.yaml"), re.M).group(1) == want
+    # the server must stop hardcoding it, so the API schema is never a fifth copy
+    assert 'version="2.' not in read("kairos/api/server.py")
+    assert re.search(r'^__version__ = "([^"]+)"', read("kairos/__init__.py"), re.M).group(1) == want
+    from kairos.api.server import app
+
+    assert app.version == want
+
+
+def test_the_public_repository_urls_are_the_public_repo():
+    """`origin` is the private working repository. A stranger who installs the
+    package reads `[project.urls]` from `pip show kairos`, and pointing them at
+    a repository they cannot see is worse than pointing them nowhere."""
+    from pathlib import Path
+
+    root = Path(kairos.__file__).resolve().parent.parent
+    text = (root / "pyproject.toml").read_text(encoding="utf-8")
+    lines = []
+    for ln in text.split("[project.urls]")[1].splitlines():
+        if ln.startswith("["):          # next table — the urls block is over
+            break
+        if ln.strip():
+            lines.append(ln)
+    assert lines, "the package declares no project URLs"
+    for line in lines:
+        assert "jarvis-reborn" not in line, line
+        assert "zhaider5142009-oss/kairos" in line, line
+
+
 def test_universe_is_populated():
     # the curated seed is 100; scan-driven PSX rotation can add more
     assert len(universe.ALL) >= 100
@@ -78,6 +122,18 @@ def test_registered_cache_is_bounded(isolated_registry):
     for i in range(60):
         universe.register_psx(f"ZZB{i}", name=f"Bound {i}")
     assert len(json.loads(isolated_registry.read_text(encoding="utf-8"))) == 40
+
+
+def test_a_missing_cell_never_becomes_a_company_name(isolated_registry):
+    """A PSX feed's blank sector/label arrives as float NaN, `str()` of which is
+    "nan" — truthy, so it used to be admitted as the scrip's name and printed on
+    the desk and in the watchlist log. A label that reads like a gap is a gap."""
+    for i, bad in enumerate((float("nan"), "nan", "N/A", None, "  ", "None")):
+        inst = universe.register_psx(f"ZZMISS{i}", name=bad, sector=bad)
+        assert inst.name == inst.key == f"ZZMISS{i}"
+        assert inst.sector == "Unregistered"
+    assert universe._clean("United Ceramic") == "United Ceramic"
+    assert universe._clean(0.0) == "0.0"         # a real zero is a real value
 
 
 def test_universe_has_expected_crypto():
