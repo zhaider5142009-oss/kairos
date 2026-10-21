@@ -678,7 +678,8 @@ $('#btrun').onclick=async()=>{
 /* ---------- journal ---------- */
 async function loadJournal(){
   try{const r=await api('/api/journal?last=60');
-    $('#journalbody').innerHTML=r.entries.length?`<table><tbody>${r.entries.slice().reverse().map(j=>`<tr><td class="mono dim" style="font-size:12px">${esc(j.ts||j.timestamp||'')}</td><td class="mono" style="color:var(--blue)">${esc(j.event||j.type||'')}</td><td style="white-space:normal">${esc(typeof j.detail==='string'?j.detail:JSON.stringify(j.detail||j))}</td></tr>`).join('')}</tbody></table>`:'<span class="dim">no entries yet — place a paper order above</span>';
+    const warn=(r.error||r.skipped)?`<div class="card" style="border-color:var(--red);background:var(--red-soft);margin:0 0 10px"><b class="down">Audit trail damaged</b><div class="dim mono" style="font-size:12px;margin-top:4px">${esc(r.error||'')}${r.skipped?` ${r.skipped} unparseable line${r.skipped===1?'':'s'} skipped`:''}</div></div>`:'';
+    $('#journalbody').innerHTML=warn+(r.entries.length?`<table><tbody>${r.entries.slice().reverse().map(j=>`<tr><td class="mono dim" style="font-size:12px">${esc(j.ts||j.timestamp||'')}</td><td class="mono" style="color:var(--blue)">${esc(j.event||j.type||'')}</td><td style="white-space:normal">${esc(typeof j.detail==='string'?j.detail:JSON.stringify(j.detail||j))}</td></tr>`).join('')}</tbody></table>`:'<span class="dim">no entries yet — place a paper order above</span>');
   }catch(e){$('#journalbody').innerHTML='<span class="dim">journal unavailable</span>'}
 }
 

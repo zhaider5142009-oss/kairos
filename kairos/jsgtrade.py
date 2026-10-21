@@ -248,6 +248,14 @@ def place_now(symbol: str, side: str, qty: float, price: float,
               order_type: str = "LIMIT", market: str | None = None,
               note: str = "KAIROS-auto") -> dict[str, Any]:
     """stage + ack with the stored PIN — the explicitly armed autopilot path."""
+    if JOURNAL.log("JSG_INTENT", {"symbol": symbol, "side": side, "qty": qty,
+                                  "price": price, "order_type": order_type,
+                                  "market": market, "note": note}) is not True:
+        # Same rule as the MT5 door: an order the trail cannot record is an
+        # order that cannot later be audited or reversed. Refuse it before the
+        # ticket exists, not after the broker has it.
+        raise JsGlobalError(f"audit trail is not accepting writes "
+                            f"({JOURNAL.last_error}) — order refused")
     row = stage(symbol, side, qty, price, order_type, market, note)
     return ack(row["id"])
 

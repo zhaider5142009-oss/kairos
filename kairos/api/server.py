@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import secrets
 import time
@@ -806,18 +805,16 @@ def chat(req: ChatReq):
 
 @app.get("/api/journal")
 def journal(last: int = 50):
-    from kairos.config import CFG
-    p = CFG.data_dir / "audit_journal.jsonl"
-    if not p.exists():
-        return {"ok": True, "entries": []}
-    lines = p.read_text(encoding="utf-8", errors="replace").strip().splitlines()
-    out = []
-    for line in lines[-last:]:
-        try:
-            out.append(json.loads(line))
-        except Exception:
-            continue
-    return {"ok": True, "entries": out}
+    """The trail, plus the trail's own health.
+
+    An empty list and a dead trail used to print the same words in the desk.
+    The reader is the journal object itself, so a locked or half-written file
+    shows up as an error string instead of a silent empty table or a 500.
+    """
+    from kairos.execution import JOURNAL
+    entries = JOURNAL.tail(max(1, int(last)))
+    return {"ok": JOURNAL.last_error is None, "entries": entries,
+            "error": JOURNAL.last_error, "skipped": JOURNAL.skipped}
 
 
 # ---------------------------------------------------------------- feedback

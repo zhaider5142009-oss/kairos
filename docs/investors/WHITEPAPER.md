@@ -144,7 +144,7 @@ exist is a way to lose money faster than the market teaches you.
 - Logs rotate; state persists across restarts; RAM, startup and per-cycle cost were profiled
   on a 2015-era i5 / 8 GB machine, which is a deliberate constraint — if it runs there, the
   infrastructure argument is cheap.
-- 319 regression tests, including the money path and the integrity cases below.
+- 330 regression tests, including the money path and the integrity cases below.
 
 ## 7. What the numbers say, and what they do not
 
@@ -157,13 +157,13 @@ and 9 instruments reported as losses.
 important finding in the project: the edge, if any, is in the global and commodity books,
 and any PSX strategy must be sized against costs before it is sized against conviction.
 
-The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 226
+The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 228
 autopilot cycles) with two fills. That is a system working as designed on a low-conviction
 market, not a strategy proving itself.
 
 ## 8. The integrity bugs, documented because they are the credibility
 
-An investor kit is only worth its willingness to publish its own audit. Thirty-nine defects
+An investor kit is only worth its willingness to publish its own audit. Forty-two defects
 are tabled below, each with what it would have cost had it shipped. Eight of them were in the
 machinery that produces the numbers an investor would read — the scorer that turns a journal
 into a hit rate, the command that regenerates the evidence, the ledger repair meant to keep
@@ -171,7 +171,7 @@ that history honest, and the guardrail built to keep the pack's figures current.
 worth naming first, because nothing about it was flattering: three were in code we had already
 declared finished, two were in numbers we had already printed, and three were inside an earlier
 repair or the guardrail we built for one — which is why the last ones were found at all.
-Nineteen more were on the money path or the trail that records it, nine were a provider or a
+Twenty-two more were on the money path or the trail that records it, nine were a provider or a
 bridge answering in a way the desk then reported as health, and three were credentials — or the
 guard that was supposed to catch them — sitting in tracked files.
 
@@ -216,6 +216,9 @@ guard that was supposed to catch them — sitting in tracked files.
 | A broker view that failed to answer was filed as an account holding nothing | the zero-equity guard catches an outage only when it arrives shaped like a zero, and this one did not: both holdings views wrapped their portal call in `except Exception: data = None`, so a timeout, a gateway error or a body that was not a list contributed no rows and raised nothing. With the cash leg still readable the funded book came back plausible and **flat** — no zero for the guard to see, no exception for the desk to stand down on — and every exposure, sizing and reconciliation decision that lap went on to make was made about an account nobody had actually read | the two views are read through one helper that keeps three answers apart: a list is the holdings, a null on a successful call is the broker's own "nothing here", and anything else raises as a venue loss. The import that prunes the watched book against what the broker reports now stops before it prunes anything |
 | MetaTrader's "the request failed" was translated into "you hold nothing" | the terminal's own API distinguishes the two — it answers None when a retrieve could not be made and an empty sequence when the account really is flat — and the bridge collapsed the first into the second. Both are read downstream as facts: gross exposure summed to nothing, the simultaneous-position cap cleared, and the account snapshot published a position count of zero for a terminal that had not answered at all | None travels all the way to the pre-trade gate, which already refuses an order on a missing position snapshot, and the account snapshot carries the unknown instead of inventing a count |
 | The desk showed a flat book for a venue that had not answered, then forgot the trades it was managing | the posture's exposure and position count were a sum and a length over that same collapsed list, so the live page printed zero percent gross exposure on a fused read while the cap that consumes the figure had just cleared it. Reconciliation — whose documented rule is that an unreachable venue must not erase memory — applied that rule to the *terminal* but not to the *read*, and dropped the managed entries whose stop, trail and target nobody then owned | an unreadable position list is its own answer: exposure and count publish as unknown, the posture carries a blocker naming the fused read so it can never report a clean risk picture it did not have, reconciliation declines to forget anything, and the desk prints "unreadable" where it used to print a zero |
+| The audit trail could stop, and stop quietly | every append in `AuditJournal.log` ran inside `except Exception: pass`. A full disk, a file held open by another process on Windows, a data directory replaced by a regular file — any one of them ends the record for good, and nothing anywhere notices. The desk reads the same file and prints "no entries yet", which is also the sentence a healthy, quiet session prints. Every fail-closed gate above the trail kept working; the evidence that they had fired simply stopped existing — and the pack's central claim, that every decision, order and fill is appended to an on-disk journal before it happens, became unfalsifiable precisely in the situation an investor would most want to check it | `log` now answers whether the record landed: it returns a yes-or-no, remembers the failure with the event that could not be written, and clears it when the trail recovers. Both live order doors consume that answer and **refuse the trade** when it is no — the PSX bridge before the ticket is staged, the MT5 bridge before the order request is assembled — because an order with no record behind it cannot be audited, explained or reversed. The MT5 door now writes the intent line the doctrine always claimed it wrote |
+| One half-written row in the trail swallowed the row after it | a crash mid-append, a journal copied to a fresh deploy or a backup restored by hand leaves a last line with no terminator. The appender wrote straight onto it, welding two records into one line no parser accepts, so one recovery cost the trail the damaged record *and* the new one. The prediction journal had this exact flaw and was fixed; the audit trail, which is the file the deck calls immutable, never got the same treatment | the appender closes an unterminated last line before it writes, under a lock, so a torn trail repairs itself on the next record with both sides intact and nothing is silently concatenated |
+| One bad line cost the whole trail, on the page | `tail` read the file and parsed it in one expression, so a row it could not parse — or a file it could not open — made it return an empty list, indistinguishable from a trail with nothing in it. The endpoint behind the desk's journal panel re-implemented the same read by hand, with an unguarded whole-file read and a silent `continue` per line, so a locked or non-UTF-8 journal answered as an HTTP error and a merely ugly line vanished without a trace | the endpoint asks the journal object instead of the path, and the journal parses one line at a time: every readable row survives, the unreadable ones are counted, and the response carries the trail's own health beside the entries, so the panel prints a red "audit trail damaged" band naming the reason instead of a clean-looking empty table — eleven new tests |
 
 Nothing moved money. The journal now says so itself: rebuilt from `data/audit_journal.jsonl`,
 the track record publishes the count of lines carrying the test signature and the count of
@@ -248,7 +251,7 @@ be mis-sized because of it.
 git clone https://github.com/zhaider5142009-oss/kairos && cd kairos
 cp config.example.yaml config.yaml      # add your own keys; config.yaml is git-ignored
 pip install -r requirements.txt
-python -m pytest tests -q                    # 319 tests
+python -m pytest tests -q                    # 330 tests
 python -m kairos.cli backtest GOLD WTI HBL   # walk-forward sweep, costs modelled
 python -m kairos.cli health                  # subsystem health, dead council seats
 python -m kairos.cli feedback                # realized track record, live from the journal

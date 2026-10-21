@@ -29,12 +29,12 @@ Built by one operator, running 24/7, publishing its own losses.
 
 | | |
 |---|---|
-| Code | 12,596 lines Python · 37 modules · public repo |
+| Code | 12,668 lines Python · 37 modules · public repo |
 | Strategies | 100 voting into the live consensus; the sweep fits one blended signal, not the library |
 | Council | 6 configured LLM seats across 2 providers; a dead seat shrinks the council |
 | Execution | paper + JS Global PSX bridge + MT5 |
 | Uptime | 24/7 daemon, watchdog, token-gated public API |
-| Tests | 319 passing, money path included |
+| Tests | 330 passing, money path included |
 
 Not a fund. No client money. No licence. No AUM.
 
@@ -67,9 +67,9 @@ conviction.
 
 ## 6. What is *not* proven
 
-- **No forward track record.** 1,709 predictions journaled, 140 horizons matured, all 140 were
+- **No forward track record.** 1,731 predictions journaled, 140 horizons matured, all 140 were
   non-trades. A directional hit rate does not yet exist.
-- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 226 cycles, 2 fills.
+- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 228 cycles, 2 fills.
 - Live execution path is built and gated, not exercised at scale.
 - No audit, no team, no third-party capital.
 
@@ -198,6 +198,19 @@ and dropped live trades whose stop nobody then owned. None is now its own answer
 the gate: an unknown exposure blocks entries and says so on the page, a view that could not be
 read raises instead of arriving empty, and forgetting a managed trade requires a read to base it
 on.
+
+The last round walked one level further out again, to the trail itself. Every append to the
+audit journal ran inside `except Exception: pass`, so a full disk or a file held open ends the
+record and nothing notices — and the desk, which reads the same file, prints "no entries yet",
+the same words a quiet, healthy session prints. A half-written last line welded the next record
+onto it, costing the trail both rows, and one unparseable line made the reader give up on the
+whole file. That matters more here than anywhere else in the system, because the journal is the
+artifact an investor is being asked to believe: the claim "every decision, order and fill is
+appended before it happens" is only worth anything if the appender cannot fail quietly. A write
+that does not land now returns a no and names the event that could not be recorded, and **both
+live order doors refuse the trade when the answer is no** — the PSX bridge before a ticket
+exists, the MT5 bridge before an order request is assembled. An order with no record behind it
+cannot be audited, explained or reversed, so it does not go out.
 
 **A system that audits its own performance numbers is the product.** Everything else is a
 chart.

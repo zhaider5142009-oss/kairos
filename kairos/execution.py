@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sys
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field, asdict
@@ -69,27 +71,79 @@ class Fill:
 # Audit journal — append-only JSONL
 # ---------------------------------------------------------------------------
 class AuditJournal:
+    """The append-only trail every claim about this system is checked against.
+
+    A trail that fails quietly is worse than no trail: it reports a period of
+    no decisions to anyone who reads it. So a write that does not land is
+    reported to the caller and remembered, and a read tolerates one bad line
+    instead of surrendering the whole file.
+    """
+
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or CFG.data_dir / "audit_journal.jsonl"
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.last_error: str | None = None
+        self.skipped = 0
+        self._lock = threading.Lock()
 
-    def log(self, event: str, payload: dict[str, Any]) -> None:
+    def _open_line(self) -> str:
+        """A newline if the file ends mid-record.
+
+        A crash mid-append, a copied journal or a restored backup can leave a
+        last line with no terminator. Appending onto it welds two records into
+        one line no parser accepts, and the trail loses both of them.
+        """
+        try:
+            size = self.path.stat().st_size
+            if not size:
+                return ""
+            with open(self.path, "rb") as raw:
+                raw.seek(-1, os.SEEK_END)
+                return "" if raw.read(1) == b"\n" else "\n"
+        except OSError:
+            return ""
+
+    def log(self, event: str, payload: dict[str, Any]) -> bool:
         record = {"ts": datetime.now().isoformat(timespec="seconds"),
                   "event": event, **payload}
         try:
-            with open(self.path, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(record, default=str) + "\n")
-        except Exception:
-            pass
+            line = json.dumps(record, default=str) + "\n"
+        except (TypeError, ValueError) as exc:
+            self.last_error = f"{event} not recorded: payload is not serializable ({exc})"
+            return False
+        try:
+            with self._lock, open(self.path, "a", encoding="utf-8") as fh:
+                fh.write(self._open_line() + line)
+        except Exception as exc:
+            self.last_error = f"{event} not recorded: {type(exc).__name__}: {exc}"
+            return False
+        self.last_error = None
+        return True
 
     def tail(self, n: int = 20) -> list[dict[str, Any]]:
-        if not self.path.exists():
-            return []
+        self.skipped = 0
         try:
-            lines = self.path.read_text(encoding="utf-8").strip().splitlines()
-            return [json.loads(ln) for ln in lines[-n:]]
-        except Exception:
+            raw = self.path.read_text(encoding="utf-8")
+        except FileNotFoundError:
             return []
+        except Exception as exc:
+            self.last_error = f"audit trail unreadable: {type(exc).__name__}: {exc}"
+            return []
+        rows: list[dict[str, Any]] = []
+        for ln in raw.splitlines():
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                rec = json.loads(ln)
+            except ValueError:
+                self.skipped += 1
+                continue
+            if isinstance(rec, dict):
+                rows.append(rec)
+            else:
+                self.skipped += 1
+        return rows[max(len(rows) - int(n), 0):]
 
 
 JOURNAL = AuditJournal()
@@ -564,6 +618,19 @@ class Mt5Bridge:
             JOURNAL.log("MT5_REJECT", {"reason": "no tick", "coid": intent.client_order_id})
             return None
         price = t["ask"] if intent.side == "BUY" else t["bid"]
+        if JOURNAL.log("MT5_INTENT", {"coid": intent.client_order_id,
+                                      "symbol": symbol, "side": intent.side,
+                                      "qty": intent.quantity, "price": price,
+                                      "sl": intent.stop_loss,
+                                      "tp": intent.take_profit}) is not True:
+            # The doctrine is that the intent is recorded before it happens. An
+            # order the trail cannot record is an order that cannot be audited,
+            # explained or reversed — so the door closes before the request is
+            # ever assembled.
+            JOURNAL.log("MT5_REJECT", {"reason": f"audit trail is not accepting "
+                                                 f"writes ({JOURNAL.last_error})",
+                                       "coid": intent.client_order_id})
+            return None
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
             "symbol": symbol,
