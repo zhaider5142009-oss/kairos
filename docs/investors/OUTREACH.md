@@ -144,9 +144,13 @@ which wording converted.
 | date | channel | recipient | version | reply |
 |---|---|---|---|---|
 | 2026-10-20 | GitHub release (public repo, tag v2.6.0) | open audience — no named recipient | v2.6.0 kit | — |
+| 2026-10-21 | GitHub release (public repo, tag v2.6.1) | open audience — no named recipient | v2.6.1 kit, deck attached | — |
 
 The link every later channel points at:
-<https://github.com/zhaider5142009-oss/kairos/releases/tag/v2.6.0> — release notes, the
-whitepaper, the regenerated track record and the deck as an attachment. Nothing else has been
-published: the landing page is unhosted, and there has been no Show HN, Reddit, LinkedIn, X,
-cold email, brokerage or fund contact. Each of those still needs its own approval.
+<https://github.com/zhaider5142009-oss/kairos/releases/tag/v2.6.1> — release notes, the
+whitepaper, the regenerated track record and the deck as an attachment. v2.6.0's release body
+names v2.6.1 as the current one; its own attached deck carried figures that were stale by up to
+six passes and has been left as published rather than edited, because a corrected history is not
+a history. Nothing else has been published: the landing page is unhosted, and there has been no
+Show HN, Reddit, LinkedIn, X, cold email, brokerage or fund contact. Each of those still needs
+its own approval.
