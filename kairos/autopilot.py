@@ -414,7 +414,7 @@ class Autopilot:
                 continue
             if vol and vol < min_v:              # liquidity screen
                 continue
-            if register_psx(sym, str(row.get("sector") or "")) is None:
+            if register_psx(sym, sector=str(row.get("sector") or "")) is None:
                 continue                         # collides with a non-PSX key
             fresh.append(sym)
             if len(fresh) == 6:

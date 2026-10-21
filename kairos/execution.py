@@ -86,7 +86,7 @@ class AuditJournal:
             return []
         try:
             lines = self.path.read_text(encoding="utf-8").strip().splitlines()
-            return [json.loads(l) for l in lines[-n:]]
+            return [json.loads(ln) for ln in lines[-n:]]
         except Exception:
             return []
 

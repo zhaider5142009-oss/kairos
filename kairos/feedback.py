@@ -66,8 +66,8 @@ def resolve_outcomes(md, lookback_days: int = 90) -> int:
     elapsed; rewrite the journal with outcomes. Returns count newly resolved."""
     if not JOURNAL.exists():
         return 0
-    lines = [json.loads(l) for l in
-             JOURNAL.read_text(encoding="utf-8").strip().splitlines() if l.strip()]
+    lines = [json.loads(ln) for ln in
+             JOURNAL.read_text(encoding="utf-8").strip().splitlines() if ln.strip()]
     newly = 0
     thr = _direction_threshold()
     from .universe import resolve as resolve_inst
@@ -183,8 +183,8 @@ def track_record() -> dict[str, Any]:
     """Aggregate realized performance — the system's own reliability report."""
     if not JOURNAL.exists():
         return {"ok": False, "reason": "no predictions recorded yet"}
-    lines = [json.loads(l) for l in
-             JOURNAL.read_text(encoding="utf-8").strip().splitlines() if l.strip()]
+    lines = [json.loads(ln) for ln in
+             JOURNAL.read_text(encoding="utf-8").strip().splitlines() if ln.strip()]
     done = [e for e in lines if e.get("resolved")
             and e.get("realized_return") is not None]
     if not done:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -195,6 +196,20 @@ def resolve(symbol: str) -> Instrument | None:
     return _BY_KEY.get(s) or _BY_YAHOO.get(s) or _BY_TV.get(f"PSX:{s}")
 
 
+_MISSING = ("", "nan", "none", "null", "n/a", "-", "?")
+
+
+def _clean(raw: Any) -> str:
+    """A missing cell in a fetched table arrives as float NaN, and `str()` of it
+    is the four-letter word "nan" — which is truthy, so `name or key` happily
+    made "nan" a company name and published it on the desk. Nothing that reads
+    like a missing value is allowed to become a label."""
+    if raw is None or (isinstance(raw, float) and raw != raw):
+        return ""
+    s = str(raw).strip()
+    return "" if s.lower() in _MISSING else s
+
+
 def register_psx(symbol: str, name: str | None = None,
                  sector: str = "Unregistered", _persist: bool = True) -> Instrument | None:
     """Admit a live scan-feed PSX ticker into the tradable registry at
@@ -205,7 +220,7 @@ def register_psx(symbol: str, name: str | None = None,
     existing = resolve(key)
     if existing is not None:
         return existing if existing.market == "PSX" else None
-    inst = _psx(key, name or key, sector)
+    inst = _psx(key, _clean(name) or key, _clean(sector) or "Unregistered")
     ALL.append(inst)
     _BY_KEY[key] = inst
     if inst.yahoo:

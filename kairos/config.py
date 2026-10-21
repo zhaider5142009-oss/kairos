@@ -140,8 +140,8 @@ class Config:
                 else json.dumps(str(value)))
         lines = self.path.read_text(encoding="utf-8").splitlines()
         try:
-            start = next(n for n, l in enumerate(lines)
-                         if l.rstrip() == f"{section}:")
+            start = next(n for n, ln in enumerate(lines)
+                         if ln.rstrip() == f"{section}:")
         except StopIteration:
             if lines and lines[-1].strip():
                 lines.append("")

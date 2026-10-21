@@ -88,8 +88,8 @@ def _write(journal, rows):
 
 
 def _resolved(journal):
-    return [json.loads(l) for l in
-            journal.read_text(encoding="utf-8").splitlines() if l.strip()]
+    return [json.loads(ln) for ln in
+            journal.read_text(encoding="utf-8").splitlines() if ln.strip()]
 
 
 def test_hold_is_not_a_win(journal, monkeypatch):
