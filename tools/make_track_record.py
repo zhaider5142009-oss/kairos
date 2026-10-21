@@ -260,6 +260,15 @@ def main() -> int:
              f"bars after it was written. This table publishes a hit rate the day it "
              f"can." if tenth_day else
              ", fewer than ten so far, so no hit rate is definable yet."))
+        if ap.get("feedback_error"):
+            # The queue's dates are only a promise while the resolver runs. It
+            # scores the record inside a thread nobody watches, so a stalled
+            # forward record has to say so here rather than read as unripe.
+            w("")
+            w("Note: the process that scores these calls reported a failure on "
+              "its last pass, so this queue may be older than its dates "
+              "suggest. Stating that is the ledger's job; the failure text "
+              "stays in the audit trail.")
     w("")
     w("## 2. Walk-forward strategy sweep")
     w("")

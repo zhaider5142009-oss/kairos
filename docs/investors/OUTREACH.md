@@ -79,7 +79,7 @@ person reads a published failure and replies.*
 >
 > Fix: a snapshot only counts if the score exceeds the entry threshold, only resolves if the
 > horizon's bars exist, and the confidence multiplier is pinned to 1.0 until 10 real
-> directional calls have matured. Eight regression tests. The honest record today: 1,591
+> directional calls have matured. Eight regression tests. The honest record today: 1,613
 > predictions journaled, 140 matured, 0 directional calls, hit rate not yet measurable.
 >
 > Also in there: a council of LLM seats where a dead seat must shrink the council rather
@@ -170,3 +170,11 @@ attachment was replaced with the deck the repository now verifies against itself
 *body* still prints the totals that were true when it was written, and that is the documented
 convention for a dated note — the attachment is the copy a stranger forwards, so it is the one
 that has to match the code.
+
+**It was not refreshed a second time, and that is deliberate.** After the release shipped, three
+more defects were found on the record path itself — a whole-file rewrite that could drop a
+prediction journaled while it ran, an append that could make the journal unreadable, and the
+swallowed exception that would have hidden either one. The deck in the repository carries the
+larger totals its own guard now checks against; the published asset stays as uploaded, because
+its note prints the figures that were true when it was written and refreshing it again would
+make the attachment disagree with the body beside it. The next release carries the current deck.

@@ -144,7 +144,7 @@ exist is a way to lose money faster than the market teaches you.
 - Logs rotate; state persists across restarts; RAM, startup and per-cycle cost were profiled
   on a 2015-era i5 / 8 GB machine, which is a deliberate constraint — if it runs there, the
   infrastructure argument is cheap.
-- 287 regression tests, including the money path and the integrity cases below.
+- 289 regression tests, including the money path and the integrity cases below.
 
 ## 7. What the numbers say, and what they do not
 
@@ -157,13 +157,13 @@ and 9 instruments reported as losses.
 important finding in the project: the edge, if any, is in the global and commodity books,
 and any PSX strategy must be sized against costs before it is sized against conviction.
 
-The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 216
+The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 218
 autopilot cycles) with two fills. That is a system working as designed on a low-conviction
 market, not a strategy proving itself.
 
 ## 8. The integrity bugs, documented because they are the credibility
 
-An investor kit is only worth its willingness to publish its own audit. Twenty-three defects are
+An investor kit is only worth its willingness to publish its own audit. Twenty-six defects are
 tabled below, each with what it would have cost had it shipped. Eight of them were in the
 machinery that produces the numbers an investor would read — the scorer that turns a journal
 into a hit rate, the command that regenerates the evidence, the ledger repair meant to keep
@@ -171,7 +171,7 @@ that history honest, and the guardrail built to keep the pack's figures current.
 worth naming first, because nothing about it was flattering: three were in code we had already
 declared finished, two were in numbers we had already printed, and three were inside an earlier
 repair or the guardrail we built for one — which is why the last ones were found at all.
-Seven more were on the money path or the trail that records it, five were a provider or a
+Ten more were on the money path or the trail that records it, five were a provider or a
 bridge answering in a way the desk then reported as health, and three were credentials — or the
 guard that was supposed to catch them — sitting in tracked files.
 
@@ -200,6 +200,9 @@ guard that was supposed to catch them — sitting in tracked files.
 | The command that regenerates the evidence was reading the wrong sweep log | ties in the walk-forward log choice were broken on row count alone over a sorted glob, so the run re-executed after this release's strategy repair lost to a four-day-old run of the same width. The pack's headline count, its per-venue means and several instruments' verdicts were therefore produced by code the same release admits was defective, under a footer saying the figures were verified that day | ties go to the newest file by modification time, the ledger names the log it read and the afternoon it ran, the skipped instrument is printed outside the denominator instead of inflating it, and the verdicts that moved are listed in the release note rather than corrected quietly |
 | Every rule in the guard checked a digit, and the pack's worst false claim was a noun | the deck's cover and the ledger both wrote the sweep as `Walk-forward sweep, N strategies per instrument`. The sweep fits one blended signal, not the library, and the count beside the false noun was itself a verified figure — so a complete refresh cycle passed it. The same shape hid the headline ratio and the book means: each was read only when one particular word sat next to the number, and a sentence that put the descriptor a clause away was invisible to the rewriter and the checker alike | a ratio is read by its denominator and the nearest win/loss word decides which side it counts, a mean is read by the book named beside it, and `method_claims()` denies any sweep sentence that credits the strategy library with the evidence. Each rule ships with a test written in the opposite direction, so the guard fails if it stops seeing one of the shapes |
 | A call whose symbol the registry could not name was deleted from the record | `feedback.resolve_outcomes` marked any snapshot it could not look up **resolved**, with `outcome=no-instrument` and `directional` decided from the entry threshold configured *that day*. It recorded no realized return, so the row appeared in neither the numerator nor the denominator — the forward record just became smaller, permanently, and raised nothing. One cycle in which the dynamic PSX registry had not been rebuilt, or a journal copied to a fresh deploy without it, would erase every pending call on those names at once. At the time it was found, most of the pending calls sat on four watchlist symbols, and the first batch of them was days away from becoming the kit's first measurable hit rate | an unanswerable lookup now leaves the row pending and retries it on the next pass, which is already what an unmatured horizon does, and the row's own label is the only thing that decides whether it ever claimed a direction. The ledger prints the queue as well as the answered part — how many calls are still waiting and the first date the tenth of them can resolve — so a record that has stalled is visible instead of merely empty. One test pins the behaviour both ways: unresolved while the lookup fails, then scored normally once the symbol answers again |
+| A snapshot journaled while the record was being rewritten was deleted from it | `resolve_outcomes` reads the journal, walks its own copy for as long as the bars take, then overwrites the **whole file** from that copy — while `record` appends to the same file from any thread that finishes a prediction, which includes a visitor on the public dashboard, the desk's own auto-refresh, and a second terminal running `kairos predict`. A row landing inside that window was not marked unresolved or mis-scored, it was never in the file again. The atomic rename shipped in v2.5.0 made this *harder to notice*: the file is always well-formed, merely short one call. And resolution had had no reason to write at all, because nothing had matured yet — so the defect armed itself on the first day the record becomes measurable instead of announcing itself in the weeks before | the write merges onto a fresh read of the file rather than onto the stale copy, and both writers take one lock so an append cannot land between that read and the rename. The merge is positional, because the journal is append-only: keying it on a row's own fields collides on two snapshots of one symbol in the same second, and different cache entries — `use_llm` on the desk, off in the autopilot — make that pair ordinary rather than rare, which is how the first version of this fix lost a verdict it had just computed |
+| The pass that grades the forward record said nothing when it failed | the resolve pulse sat inside `except Exception: pass`, in a thread nobody watches, so a failure there neither stopped the desk nor appeared anywhere — while the ledger's own queue sentence ("*N* calls waiting until *date*") stayed true-looking and simply aged. A stalled track record and an unripe one render as the same words, and only one of them is honest | the failure is recorded in the autopilot state as `feedback_error`, appended to the audit journal as its own event, cleared when a pass succeeds, and served by `/api/autopilot`. The ledger reads that field before it prints the queue's date, so a record that stopped maturing says so on the page rather than leaving a reader to work it out |
+| One copied journal line could make the whole record unreadable | `record` appended without checking that the line below it was finished. A track record restored from backup, copied onto a fresh deploy, or hand-edited — all three are paths this pack describes — welded the new snapshot onto the last row into a single line no parser accepts. The damage was not one row: the resolver raises before it scores anything and the desk raises behind it, and the swallow above hid both, so the record stopped growing while still displaying yesterday's calls | the appender closes an unterminated last line before writing, so a copied journal repairs itself on the next snapshot with nothing lost on either side of it |
 
 Nothing moved money. The journal now says so itself: rebuilt from `data/audit_journal.jsonl`,
 the track record publishes the count of lines carrying the test signature and the count of
@@ -232,7 +235,7 @@ be mis-sized because of it.
 git clone https://github.com/zhaider5142009-oss/kairos && cd kairos
 cp config.example.yaml config.yaml      # add your own keys; config.yaml is git-ignored
 pip install -r requirements.txt
-python -m pytest tests -q                    # 287 tests
+python -m pytest tests -q                    # 289 tests
 python -m kairos.cli backtest GOLD WTI HBL   # walk-forward sweep, costs modelled
 python -m kairos.cli health                  # subsystem health, dead council seats
 python -m kairos.cli feedback                # realized track record, live from the journal

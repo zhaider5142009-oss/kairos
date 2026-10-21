@@ -85,7 +85,7 @@ class Autopilot:
                 "entry_threshold": 0.18, "exit_threshold": 0.05,
                 "max_trades_per_cycle": 2, "horizon_days": 5,
                 "cycles": 0, "last_cycle": None, "last_cycle_s": None,
-                "last_error": None,
+                "last_error": None, "feedback_error": None,
                 "signals": [], "actions": [], "held": {}, "consec_losses": 0,
                 "equity_peak": 0.0, "peak_since": None,
                 "last_rotation": None, "rotated": [], "psx_day_start": None}
@@ -349,8 +349,18 @@ class Autopilot:
                 n = _FB.resolve_outcomes(ENGINE.md)
                 if n:
                     JOURNAL.log("FEEDBACK_RESOLVED", {"newly_resolved": n})
-            except Exception:
-                pass
+                with self._lock:
+                    self.st["feedback_error"] = None
+                    self._save()
+            except Exception as exc:
+                # Never `pass`. A forward record that stopped maturing looks
+                # exactly like one that is simply not due yet — the ledger
+                # prints its pending queue either way — and the pulse that
+                # scores it runs twice an hour in a thread nobody watches.
+                with self._lock:
+                    self.st["feedback_error"] = str(exc)[:300]
+                    self._save()
+                JOURNAL.log("FEEDBACK_FAILED", {"error": str(exc)[:300]})
         self._maybe_rotate_psx()
         return {"trades": trades, "signals": len(rows)}
 
@@ -845,7 +855,8 @@ class Autopilot:
         return {"ok": True, **{k: self.st[k] for k in
                 ("running", "mode", "armed_live", "symbols", "interval_s",
                  "entry_threshold", "max_trades_per_cycle", "horizon_days",
-                 "cycles", "last_cycle", "last_cycle_s", "last_error", "signals", "actions",
+                 "cycles", "last_cycle", "last_cycle_s", "last_error",
+                 "feedback_error", "signals", "actions",
                  "held", "consec_losses", "psx_day_start")},
                 "risk_posture": posture,
                 "kill_switch": KILL.engaged(),

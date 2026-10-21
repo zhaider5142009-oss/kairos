@@ -85,7 +85,9 @@ def journal(tmp_path, monkeypatch):
 
 
 def _write(journal, rows):
-    journal.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+    # terminated, the way both production writers leave the file
+    journal.write_text("\n".join(json.dumps(r) for r in rows) + "\n",
+                       encoding="utf-8")
 
 
 def _resolved(journal):
@@ -325,3 +327,63 @@ def test_a_symbol_the_registry_cannot_answer_leaves_the_call_pending(journal,
                         lambda s: type("Inst", (), {"key": s})(), raising=True)
     assert F.resolve_outcomes(_Md(_bars(30, drift=0.004))) == 2
     assert [r["directional"] for r in _resolved(journal)] == [True, True]
+
+
+def test_a_snapshot_recorded_mid_resolve_survives_the_rewrite(journal, monkeypatch):
+    """The journal is rewritten whole, so a row appended during the rewrite dies.
+
+    `resolve_outcomes` reads the file, walks its in-memory copy for as long as
+    the bars take, then overwrites the journal from that copy. Every other
+    thread that finishes a fresh prediction appends to the same file — and a
+    dashboard visitor, the desk's own auto-refresh or a `kairos predict` in a
+    second terminal is such a thread. A snapshot that landed inside the window
+    was not marked unresolved or mis-scored: it was never in the file again, so
+    the forward record quietly stopped counting the call the investor was
+    promised. Resolution had written nothing until a horizon actually matured,
+    so this armed itself on the first publishable day rather than showing up
+    in the days before it.
+    """
+    monkeypatch.setattr(F, "_direction_threshold", lambda: 0.18)
+    _write(journal, [_row(symbol="OGDC", score=0.40), _row(symbol="SCB", score=0.30)])
+    late = _row(symbol="HUBC", score=0.55, ts="2026-10-21T12:00:00")
+
+    class _AppendMidResolve(_Md):
+        """Marks the point where another writer can slip a row in: after the
+        journal has been read, before it is written back."""
+
+        def __init__(self, df, row):
+            super().__init__(df)
+            self.row, self.fired = row, False
+
+        def history(self, inst, **kw):
+            if not self.fired:
+                self.fired = True
+                with journal.open("a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(self.row) + "\n")
+            return self.df
+
+    assert F.resolve_outcomes(_AppendMidResolve(_bars(30, drift=0.004), late)) == 2
+    out = _resolved(journal)
+    assert [r["symbol"] for r in out] == ["OGDC", "SCB", "HUBC"], out
+    assert [r["resolved"] for r in out] == [True, True, False], out
+    # the two matured calls keep their verdicts; the newcomer keeps its turn
+    assert [r["correct"] for r in out[:2]] == [True, True], out
+    assert F.track_record()["directional_resolved"] == 2
+
+
+def test_recording_onto_a_copied_journal_does_not_fuse_two_rows(tmp_path, monkeypatch):
+    """A journal that arrives unterminated must not swallow the next snapshot.
+
+    Restoring or copying the record onto a fresh deploy leaves the last line
+    without its newline, and a plain append then welds it to the new row: one
+    line no parser reads, which raises for the resolver and the desk alike and
+    stops the forward record while the file still looks populated.
+    """
+    path = tmp_path / "prediction_journal.jsonl"
+    monkeypatch.setattr(F, "JOURNAL", path)
+    path.write_text(json.dumps(_row(symbol="OGDC")), encoding="utf-8")
+    F.record({"ok": True, "symbol": "HUBC", "price": 100.0,
+              "signal": {"horizon_days": 5, "score": 0.5, "confidence": 0.6,
+                         "expected_return": 0.02, "direction": "BUY"}})
+    out = _resolved(path)
+    assert [r["symbol"] for r in out] == ["OGDC", "HUBC"], out

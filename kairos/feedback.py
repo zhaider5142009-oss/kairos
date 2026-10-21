@@ -9,6 +9,8 @@ the v1 predictive trader, rebuilt on the v2 architecture.
 from __future__ import annotations
 
 import json
+import os
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -20,6 +22,12 @@ from .config import CFG
 from .store import atomic_write
 
 JOURNAL = CFG.data_dir / "prediction_journal.jsonl"
+
+# Serialises the two writers of the journal against each other: `record` adds a
+# line, `resolve_outcomes` replaces the whole file. Without it a prediction
+# appended between a resolve's read and its write is overwritten out of the
+# record — see `_merge_for_write`.
+_WRITE_LOCK = threading.Lock()
 
 
 @dataclass
@@ -51,8 +59,30 @@ def record(res: dict[str, Any]) -> None:
         confidence=sig["confidence"], expected_return=sig["expected_return"],
         price=res["price"], direction=sig["direction"])
     JOURNAL.parent.mkdir(parents=True, exist_ok=True)
-    with JOURNAL.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(snap.to_dict()) + "\n")
+    with _WRITE_LOCK, JOURNAL.open("a", encoding="utf-8") as fh:
+        fh.write(_suffix_if_unterminated() + json.dumps(snap.to_dict()) + "\n")
+
+
+def _suffix_if_unterminated() -> str:
+    """Close a half-written last line before appending onto it.
+
+    Both writers end their lines with a newline, so this only fires on a
+    journal that arrived from outside — copied to a fresh deploy, restored,
+    hand-edited. Without it the append fuses two rows into one line no parser
+    accepts, and that single bad line makes the whole record unreadable: the
+    resolver raises before it scores anything, the desk raises behind it, and
+    the autopilot's own handler swallows both, so the track record stops
+    growing while the journal still shows yesterday's rows.
+    """
+    try:
+        size = JOURNAL.stat().st_size
+        if not size:
+            return ""
+        with JOURNAL.open("rb") as raw:
+            raw.seek(-1, os.SEEK_END)
+            return "" if raw.read(1) == b"\n" else "\n"
+    except OSError:
+        return ""
 
 
 def _direction_threshold() -> float:
@@ -66,8 +96,7 @@ def resolve_outcomes(md, lookback_days: int = 90) -> int:
     elapsed; rewrite the journal with outcomes. Returns count newly resolved."""
     if not JOURNAL.exists():
         return 0
-    lines = [json.loads(ln) for ln in
-             JOURNAL.read_text(encoding="utf-8").strip().splitlines() if ln.strip()]
+    lines = _read_lines()
     newly = 0
     thr = _direction_threshold()
     from .universe import resolve as resolve_inst
@@ -115,8 +144,34 @@ def resolve_outcomes(md, lookback_days: int = 90) -> int:
                  abs_err=round(err, 5))
         newly += 1
     if newly:
-        atomic_write(JOURNAL, "\n".join(json.dumps(e) for e in lines) + "\n")
+        with _WRITE_LOCK:
+            # Re-read rather than trust the copy the walk started from: a
+            # prediction can be appended by another thread (or another process
+            # running `kairos predict`) while this loop is fetching bars, and
+            # the write below replaces the entire file. Merging onto what is on
+            # disk keeps the newcomer and its turn; the lock keeps an append
+            # out of the gap between this read and the replace.
+            atomic_write(JOURNAL, "\n".join(
+                json.dumps(e) for e in _merge_for_write(lines, _read_lines())) + "\n")
     return newly
+
+
+def _read_lines() -> list[dict]:
+    return [json.loads(ln) for ln in
+            JOURNAL.read_text(encoding="utf-8").strip().splitlines() if ln.strip()]
+
+
+def _merge_for_write(updated: list[dict], on_disk: list[dict]) -> list[dict]:
+    """Apply this pass's verdicts to whatever the journal holds right now.
+
+    Positional, not keyed: the journal is append-only, so the file's first
+    `len(updated)` lines are the rows this pass read and the rest arrived while
+    it worked — which is exactly the ordering to write back. Keying the merge on
+    the row's own fields would fail on two snapshots of one symbol in one
+    second, and a different cache entry (`use_llm` on the dashboard, off in the
+    autopilot) makes that pair ordinary rather than rare.
+    """
+    return list(updated) + on_disk[len(updated):]
 
 
 def _claimed_side(e: dict) -> int | None:

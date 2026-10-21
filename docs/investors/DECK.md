@@ -29,12 +29,12 @@ Built by one operator, running 24/7, publishing its own losses.
 
 | | |
 |---|---|
-| Code | 12,358 lines Python · 37 modules · public repo |
+| Code | 12,424 lines Python · 37 modules · public repo |
 | Strategies | 100 voting into the live consensus; the sweep fits one blended signal, not the library |
 | Council | 6 configured LLM seats across 2 providers; a dead seat shrinks the council |
 | Execution | paper + JS Global PSX bridge + MT5 |
 | Uptime | 24/7 daemon, watchdog, token-gated public API |
-| Tests | 287 passing, money path included |
+| Tests | 289 passing, money path included |
 
 Not a fund. No client money. No licence. No AUM.
 
@@ -67,9 +67,9 @@ conviction.
 
 ## 6. What is *not* proven
 
-- **No forward track record.** 1,591 predictions journaled, 140 horizons matured, all 140 were
+- **No forward track record.** 1,613 predictions journaled, 140 horizons matured, all 140 were
   non-trades. A directional hit rate does not yet exist.
-- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 216 cycles, 2 fills.
+- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 218 cycles, 2 fills.
 - Live execution path is built and gated, not exercised at scale.
 - No audit, no team, no third-party capital.
 
@@ -143,6 +143,21 @@ PowerPoint, the copy that actually gets attached to an email, sitting outside th
 and staler than the markdown it shipped beside; its text is now read out of the zip and put through
 the same rules. A version written as "v2.6.0" was invisible to a rule that only recognised the word
 "Version", which is the same blind spot as a test count written as "passing".
+
+Three more came the day after, from checking whether the queue of pending calls would survive
+being graded. The command that scores them reads the journal, walks it, and writes the **whole
+file** back; the thing that adds new predictions appends to that same file from any thread
+serving a dashboard. Any call recorded during a rewrite was simply not in the file afterwards.
+It had never happened, and it could not have: nothing had matured yet, so the resolver had no
+reason to write — the defect was scheduled to switch on the day the first hit rate became
+measurable. Fixing it needed the write to merge onto a fresh read, and the test that proved the
+old behaviour then found the second one, in the same line of the same file: the appender never
+checked that the line below it was finished, so a journal copied onto a fresh deploy would weld
+two rows into one the parser rejects, and the resolver and the desk both raise on that. The
+third was that neither of those failures could have been seen — the pulse that grades the record
+swallowed its exceptions in a thread nobody watches, next to a ledger sentence that reads the
+same whether the record is unripe or stalled. It is recorded, served on the desk and printed on
+the page now.
 
 **A system that audits its own performance numbers is the product.** Everything else is a
 chart.
