@@ -17,37 +17,35 @@ SECP-licensed as an investment adviser, and has never managed third-party capita
 | | |
 |---|---|
 | Codebase | 12,354 lines of Python across 37 modules, public repo |
-| Strategy library | 100 candidate strategies, selected per instrument by walk-forward search |
+| Strategy library | 100 strategies in 10 families, voting into the live consensus |
 | Signal council | 6 configured seats across 2 providers, median consensus with named-seat integrity; a blank or dead seat casts no vote |
 | Execution | paper book + JS Global PSX order bridge + MT5 (JS Markets) |
 | Uptime | 24/7 daemon with watchdog and public token-gated API |
-| Tests | 259 passing, money-path and integrity cases included |
+| Tests | 283 passing, money-path and integrity cases included |
 
 ## What has actually been demonstrated
 
-Walk-forward, out-of-sample, costs modelled — **8 of 14 instruments profitable**:
+Walk-forward, out-of-sample, costs modelled — one blended signal per instrument, its weights chosen from 2,592 candidates on a rolling window, not the 100-strategy library — **5 of 14 instruments profitable**:
 
 | instrument | net | buy & hold | Sharpe |
 |---|---|---|---|
-| SILVER | +44.5% | +34.5% | 1.46 |
-| GOLD | +28.7% | +13.4% | **1.61** |
-| WTI | +25.1% | +61.8% | **1.68** |
-| WHEAT | +19.5% | +31.3% | 1.16 |
-| HBL | +9.3% | +14.1% | 1.19 |
-| BRENT | +6.8% | +64.0% | 0.65 |
-| NATGAS | +4.2% | +5.9% | 1.09 |
-| KSE100 | +0.0% | +7.9% | 0.58 |
+| SILVER | +43.5% | +36.1% | 1.44 |
+| GOLD | +29.3% | +11.6% | **1.57** |
+| WHEAT | +26.8% | +19.0% | 1.60 |
+| WTI | +16.0% | +50.2% | 0.77 |
+| HBL | +12.4% | +14.8% | 1.39 |
 
-BTC, EURUSD, COPPER, MCB, LUCK and OGDC were **not** profitable and are reported as losses.
+The other 9 — BTC, BRENT, COPPER, EURUSD, KSE100, LUCK, MCB, NATGAS and OGDC — were **not**
+profitable and are reported as losses, per instrument, in the dated ledger.
 Backtests are not returns; the parameter search is a known overfitting risk, which is why
 this is published per instrument and never as an average.
 
 ## What has *not* been demonstrated — stated plainly
 
-- **No forward track record yet.** 1,437 predictions journaled, 140 horizons matured, and all
+- **No forward track record yet.** 1,525 predictions journaled, 140 horizons matured, and all
   140 were non-trades. A directional hit rate does not exist until live calls mature.
 - **PSX equities are net-negative out-of-sample.** Local commission and slippage exceeded
-  the signal: mean −2.8% across the 5-stock book, versus +13.6% across the global book.
+  the signal: mean −2.2% across the 5-stock book, versus +10.0% across the global book.
 - **No audited performance, no AUM, no third-party capital, no regulatory approval.**
 
 The system publishes these limits itself. It previously reported a 100% hit rate built out

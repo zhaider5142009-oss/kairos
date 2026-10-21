@@ -25,13 +25,33 @@ from kairos.feedback import track_record  # noqa: E402
 OUT = ROOT / "docs" / "investors" / "TRACK_RECORD.md"
 LINE = re.compile(r"^(\w+): (\w+) ret=([+-][\d.]+)% bench=([+-][\d.]+)% "
                   r"sharpe=([\d.-]+) hit=([\d.]+) trades=(\d+) dd=([\d.-]+)%")
+# A run also prints the instruments it could not sweep. They are not rows, and the
+# script's own summary counts them anyway, so the log ends with "15 instruments,
+# 10 unprofitable" over a fourteen-row table — a headline that argues with its own
+# evidence. They are read out separately and named, so the reader can see the
+# coverage rather than inherit an inflated denominator.
+SKIPPED = re.compile(r"^(\w+): (insufficient history.*|ERROR.*)$")
 
 
-def _spectrum() -> tuple[list[dict], dict]:
-    """Widest completed walk-forward sweep, parsed from the run log."""
-    best: tuple[int, list[dict], dict] = (0, [], {})
+def _spectrum() -> tuple[list[dict], dict, Path | None]:
+    """Widest completed walk-forward sweep, parsed from the run log.
+
+    Ties go to the newest file. They did not: the comparison was on row count
+    alone over a sorted glob, so re-running the sweep into a new log published
+    nothing — the ledger kept reading the older run of the same width because its
+    name came first alphabetically. A refreshed table that cannot reach the
+    document is a staler table wearing a new date, which is the failure this
+    whole file exists to prevent.
+
+    The log itself is returned as well, because a sweep is evidence with a
+    vintage: it was run on one afternoon against one day's bars, and a reader has
+    to be able to tell that apart from the journal figures beside it, which are
+    current to the minute.
+    """
+    best: tuple[tuple[int, float], list[dict], dict, Path | None] = \
+        ((0, 0.0), [], {}, None)
     for log in sorted((ROOT / "reports").glob("spectrum*.log")):
-        rows, summary = [], {}
+        rows, summary, skipped = [], {}, []
         for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
             if (m := LINE.match(line.strip())):
                 sym, verdict, ret, bench, sharpe, hit, trades, dd = m.groups()
@@ -41,9 +61,33 @@ def _spectrum() -> tuple[list[dict], dict]:
                              "trades": int(trades), "max_dd": float(dd) / 100})
             elif line.startswith("summary:"):
                 summary = ast.literal_eval(line.split(":", 1)[1].strip())
-        if len(rows) > len(best[1]):
-            best = (len(rows), rows, summary)
-    return best[1], best[2]
+            elif (sk := SKIPPED.match(line.strip())):
+                skipped.append(sk.group(1))
+        if skipped:
+            summary["skipped"] = skipped
+        if (key := (len(rows), log.stat().st_mtime)) > best[0]:
+            best = (key, rows, summary, log)
+    return best[1], best[2], best[3]
+
+
+def _run_summary(rows: list[dict], summary: dict) -> str:
+    """Section 2's headline, counted off the table the reader can add up.
+
+    The sweep script's own summary line counts every instrument it was *asked* to
+    run, including the ones it gave up on for lack of history, so the log that
+    produced the fourteen-row table said "5/15 instruments profitable, 10 not" —
+    a headline arguing with its own evidence, in the direction that flatters the
+    denominator and punishes the record at the same time. The skipped instruments
+    are named instead, so the coverage gap is visible rather than absorbed.
+    """
+    wins = sum(1 for r in rows if r["verdict"] == "PROFITABLE")
+    skipped = summary.get("skipped") or []
+    out = (f"Run summary: **{wins}/{len(rows)} instruments profitable out-of-sample**, "
+           f"the other {len(rows) - wins} unprofitable.")
+    if skipped:
+        out += (f" Skipped for lack of history, and not in the table: "
+                f"{', '.join(skipped)}.")
+    return out
 
 
 def _paper() -> dict:
@@ -111,9 +155,30 @@ def _audit_trail() -> dict:
     return out
 
 
+def _method() -> dict[str, int]:
+    """How the sweep actually fits its signal, read out of the code it runs with.
+
+    The ledger used to describe this section as "100 candidate strategies per
+    instrument". It is not: `walk_forward()` blends four components into one
+    composite signal and grid-searches that blend's weights, never importing the
+    strategy library the pack elsewhere counts at 100. Every copy of the sentence
+    in the pack carried the wrong number and the wrong object, and the wrong
+    number was the smaller of the two errors — a 2,592-point search is a much
+    larger overfitting surface than the "parameter search is a known risk"
+    caveat let a reader assume. So the count is taken from `_grid()` here rather
+    than typed, and widening the grid changes the published sentence by itself.
+    """
+    from kairos.backtest import CALIB_WINDOW, REFIT_EVERY, SMOOTH_SPANS, _grid
+    grid = _grid()
+    return {"grid": len(grid) * len(SMOOTH_SPANS), "train": CALIB_WINDOW,
+            "refit": REFIT_EVERY,
+            "blend": sum(1 for k in grid[0] if k.startswith("w_"))}
+
+
 def main() -> int:
     tr = track_record()
-    rows, summary = _spectrum()
+    rows, summary, run_log = _spectrum()
+    method = _method()
     pa, ap = _paper(), _autopilot()
     lb = _live_book()
     at = _audit_trail()
@@ -154,10 +219,21 @@ def main() -> int:
     w("")
     w("## 2. Walk-forward strategy sweep")
     w("")
-    w("100 candidate strategies per instrument, parameters chosen on a rolling "
-      "training window and evaluated out-of-sample with PSX commission and "
-      "slippage modelled.")
+    w(f"One composite signal per instrument, blended from {method['blend']} components. "
+      f"Its weights, entry threshold, regime gate and short mode are chosen by a "
+      f"{method['grid']:,}-point grid search on a rolling {method['train']}-bar training "
+      f"window, re-fitted every {method['refit']} bars, and traded only out-of-sample with "
+      f"PSX commission and slippage modelled. This sweep does not evaluate the 100-strategy "
+      f"library: that votes inside the live engine, and none of the returns below come from it.")
     w("")
+    if run_log is not None:
+        run_day = datetime.fromtimestamp(run_log.stat().st_mtime)
+        age = (datetime.now() - run_day).days
+        w(f"_Sweep run on **{run_day:%Y-%m-%d}** (`reports/{run_log.name}`)"
+          + (f", **{age} day(s) before this rebuild** — re-run "
+             f"`python scripts/backtest_spectrum.py` to refresh it."
+             if age > 1 else ", the same day this ledger was rebuilt.") + "_")
+        w("")
     w("| instrument | verdict | net return | buy & hold | Sharpe | hit rate | trades | max drawdown |")
     w("|---|---|---|---|---|---|---|---|")
     for r in sorted(rows, key=lambda x: -x["sharpe"]):
@@ -165,9 +241,8 @@ def main() -> int:
           f"{r['benchmark']:+.1%} | {r['sharpe']:+.2f} | {r['hit_rate']:.3f} | "
           f"{r['trades']} | {r['max_dd']:.1%} |")
     w("")
-    if summary:
-        w(f"Run summary: **{summary.get('profitable')}/{summary.get('instruments')} "
-          f"instruments profitable out-of-sample**, {summary.get('unprofitable')} not.")
+    if rows:
+        w(_run_summary(rows, summary))
     w("")
     for venue, vr in sorted(by_venue.items()):
         net = sum(r["return"] for r in vr) / len(vr)
@@ -175,9 +250,11 @@ def main() -> int:
         w(f"- **{venue}**: mean net return {net:+.1%} across {len(vr)} instruments; "
           f"beat buy-and-hold on {beat:.0%} of them.")
     w("")
-    w("_Backtests are not returns. They include costs but not every market impact, "
-      "and the parameter search is a known overfitting risk; that is why the sweep is "
-      "reported per instrument instead of as an average._")
+    w(f"_Backtests are not returns. They include costs but not every market impact, and "
+      f"the traded parameter set is chosen from {method['grid']:,} candidates in every "
+      f"calibration window, so selection bias is stated here as a number rather than as a "
+      f"disclaimer. That is why the sweep is reported per instrument instead of as an "
+      f"average, and why section 1 — the forward record — is the figure that matters._")
     w("")
     w("## 3. Live paper book")
     w("")

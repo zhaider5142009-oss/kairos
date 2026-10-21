@@ -7,7 +7,7 @@ _Rebuilt from the on-disk journals by `tools/make_track_record.py`. Unaudited. N
 | measure | value |
 |---|---|
 | rebuilt from the journals on | 2026-10-21 |
-| predictions journaled | 1437 |
+| predictions journaled | 1525 |
 | horizons matured | 140 |
 | of which directional calls | 0 |
 | of which non-trades (HOLD) | 140 |
@@ -17,36 +17,38 @@ _Rebuilt from the on-disk journals by `tools/make_track_record.py`. Unaudited. N
 
 ## 2. Walk-forward strategy sweep
 
-100 candidate strategies per instrument, parameters chosen on a rolling training window and evaluated out-of-sample with PSX commission and slippage modelled.
+One composite signal per instrument, blended from 4 components. Its weights, entry threshold, regime gate and short mode are chosen by a 2,592-point grid search on a rolling 252-bar training window, re-fitted every 30 bars, and traded only out-of-sample with PSX commission and slippage modelled. This sweep does not evaluate the 100-strategy library: that votes inside the live engine, and none of the returns below come from it.
+
+_Sweep run on **2026-10-21** (`reports/spectrum_v261.log`), the same day this ledger was rebuilt._
 
 | instrument | verdict | net return | buy & hold | Sharpe | hit rate | trades | max drawdown |
 |---|---|---|---|---|---|---|---|
-| WTI | profitable | +25.1% | +61.8% | +1.68 | 0.577 | 11 | -7.4% |
-| GOLD | profitable | +28.7% | +13.4% | +1.61 | 0.594 | 50 | -11.6% |
-| SILVER | profitable | +44.5% | +34.5% | +1.46 | 0.622 | 39 | -21.8% |
-| HBL | profitable | +9.3% | +14.1% | +1.19 | 0.446 | 12 | -8.9% |
-| WHEAT | profitable | +19.5% | +31.3% | +1.16 | 0.519 | 18 | -7.1% |
-| NATGAS | profitable | +4.2% | +5.9% | +1.09 | 0.222 | 5 | -2.1% |
-| BRENT | profitable | +6.8% | +64.0% | +0.65 | 0.522 | 18 | -12.1% |
-| KSE100 | profitable | +0.0% | +7.9% | +0.58 | 0.534 | 11 | -14.9% |
-| MCB | unprofitable | -0.2% | +6.6% | +0.56 | 0.515 | 14 | -18.5% |
-| EURUSD | unprofitable | -0.6% | -4.1% | +0.29 | 0.523 | 15 | -4.0% |
-| BTC | unprofitable | -0.8% | -29.5% | +0.12 | 0.349 | 16 | -9.1% |
-| COPPER | unprofitable | -4.7% | +42.3% | -0.04 | 0.495 | 20 | -15.9% |
-| LUCK | unprofitable | -9.2% | -16.0% | -0.07 | 0.431 | 14 | -10.7% |
-| OGDC | unprofitable | -14.1% | +11.4% | -0.42 | 0.429 | 14 | -21.3% |
+| WHEAT | profitable | +26.8% | +19.0% | +1.60 | 0.517 | 24 | -6.0% |
+| GOLD | profitable | +29.3% | +11.6% | +1.57 | 0.630 | 18 | -9.2% |
+| SILVER | profitable | +43.5% | +36.1% | +1.44 | 0.615 | 39 | -22.3% |
+| HBL | profitable | +12.4% | +14.8% | +1.39 | 0.505 | 12 | -8.9% |
+| WTI | profitable | +16.0% | +50.2% | +0.77 | 0.400 | 10 | -12.8% |
+| KSE100 | unprofitable | -1.8% | +6.6% | +0.52 | 0.537 | 13 | -15.8% |
+| MCB | unprofitable | -1.1% | +8.1% | +0.42 | 0.419 | 11 | -16.9% |
+| EURUSD | unprofitable | -1.3% | -5.5% | +0.19 | 0.510 | 17 | -3.1% |
+| LUCK | unprofitable | -6.1% | -16.7% | +0.03 | 0.509 | 10 | -7.7% |
+| BTC | unprofitable | -3.9% | -26.8% | -0.04 | 0.280 | 21 | -9.3% |
+| NATGAS | unprofitable | -1.5% | -9.1% | -0.18 | 0.182 | 5 | -5.9% |
+| COPPER | unprofitable | -9.1% | +41.9% | -0.33 | 0.494 | 24 | -18.0% |
+| OGDC | unprofitable | -14.3% | +12.1% | -0.53 | 0.414 | 12 | -21.4% |
+| BRENT | unprofitable | -9.4% | +58.4% | -0.69 | 0.405 | 14 | -15.1% |
 
-Run summary: **8/14 instruments profitable out-of-sample**, 6 not.
+Run summary: **5/14 instruments profitable out-of-sample**, the other 9 unprofitable. Skipped for lack of history, and not in the table: ENGRO.
 
-- **Global**: mean net return +13.6% across 9 instruments; beat buy-and-hold on 44% of them.
-- **PSX**: mean net return -2.8% across 5 instruments; beat buy-and-hold on 20% of them.
+- **Global**: mean net return +10.0% across 9 instruments; beat buy-and-hold on 67% of them.
+- **PSX**: mean net return -2.2% across 5 instruments; beat buy-and-hold on 20% of them.
 
-_Backtests are not returns. They include costs but not every market impact, and the parameter search is a known overfitting risk; that is why the sweep is reported per instrument instead of as an average._
+_Backtests are not returns. They include costs but not every market impact, and the traded parameter set is chosen from 2,592 candidates in every calibration window, so selection bias is stated here as a number rather than as a disclaimer. That is why the sweep is reported per instrument instead of as an average, and why section 1 — the forward record — is the figure that matters._
 
 ## 3. Live paper book
 
 - Capital Rs 1,000,000 · equity Rs 999,992 · realized P&L Rs -13.05 since 2026-10-21T18:28:41
-- Autopilot cycles run: **202** · mode `paper` · live-armed: False
+- Autopilot cycles run: **210** · mode `paper` · live-armed: False
 - Open paper positions: 0 · fills: 2
 
 ## 4. Funded account (read-only, from the broker)

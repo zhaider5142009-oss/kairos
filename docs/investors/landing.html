@@ -71,34 +71,35 @@
     <div><b>12,354</b><small>lines of Python, 37 modules, public</small></div>
     <div><b>100</b><small>strategies selected per instrument, walk-forward</small></div>
     <div><b>6</b><small>configured council seats; a dead one shrinks the vote</small></div>
-    <div><b>259</b><small>passing tests, money path included</small></div>
+    <div><b>283</b><small>passing tests, money path included</small></div>
     <div><b>24/7</b><small>supervised daemon, watchdog, token-gated API</small></div>
   </div>
 </section>
 
 <section id="record">
   <h2>Out-of-sample results — the whole table, not the best row</h2>
-  <p class="lede">100 candidate strategies per instrument, parameters chosen on a rolling
-  training window, evaluated out-of-sample with Pakistani commission, CPDC/CDNS fees and
-  slippage modelled. 8 of 14 profitable. The other 6 are listed because hiding them would
+  <p class="lede">One composite signal per instrument: four components blended, their weights
+  chosen by a 2,592-point grid search on a rolling training window, re-fitted every 30 bars
+  and traded only out-of-sample with Pakistani commission, CPDC/CDNS fees and slippage
+  modelled. This sweep does not fit the 100-strategy library. 5 of 14 profitable. The other 9 are listed because hiding them would
   make the winners meaningless.</p>
   <table>
     <thead><tr><th>instrument</th><th>net return</th><th>buy &amp; hold</th><th>Sharpe</th><th>verdict</th></tr></thead>
     <tbody>
-      <tr><td>SILVER</td><td class="up">+44.5%</td><td>+34.5%</td><td>1.46</td><td>profitable</td></tr>
-      <tr><td>GOLD</td><td class="up">+28.7%</td><td>+13.4%</td><td>1.61</td><td>profitable</td></tr>
-      <tr><td>WTI</td><td class="up">+25.1%</td><td>+61.8%</td><td>1.68</td><td>profitable</td></tr>
-      <tr><td>WHEAT</td><td class="up">+19.5%</td><td>+31.3%</td><td>1.16</td><td>profitable</td></tr>
-      <tr><td>HBL <small>(PSX)</small></td><td class="up">+9.3%</td><td>+14.1%</td><td>1.19</td><td>profitable</td></tr>
-      <tr><td>BRENT</td><td class="up">+6.8%</td><td>+64.0%</td><td>0.65</td><td>profitable</td></tr>
-      <tr><td>NATGAS</td><td class="up">+4.2%</td><td>+5.9%</td><td>1.09</td><td>profitable</td></tr>
-      <tr><td>KSE100</td><td>+0.0%</td><td>+7.9%</td><td>0.58</td><td>flat</td></tr>
-      <tr><td>MCB <small>(PSX)</small></td><td class="dn">−0.2%</td><td>+6.6%</td><td>0.56</td><td>unprofitable</td></tr>
-      <tr><td>EURUSD</td><td class="dn">−0.6%</td><td>−4.1%</td><td>0.29</td><td>unprofitable</td></tr>
-      <tr><td>BTC</td><td class="dn">−0.8%</td><td>−29.5%</td><td>0.12</td><td>unprofitable</td></tr>
-      <tr><td>COPPER</td><td class="dn">−4.7%</td><td>+42.3%</td><td>−0.04</td><td>unprofitable</td></tr>
-      <tr><td>LUCK <small>(PSX)</small></td><td class="dn">−9.2%</td><td>−16.0%</td><td>−0.07</td><td>unprofitable</td></tr>
-      <tr><td>OGDC <small>(PSX)</small></td><td class="dn">−14.1%</td><td>+11.4%</td><td>−0.42</td><td>unprofitable</td></tr>
+      <tr><td>SILVER</td><td class="up">+43.5%</td><td>+36.1%</td><td>1.44</td><td>profitable</td></tr>
+      <tr><td>GOLD</td><td class="up">+29.3%</td><td>+11.6%</td><td>1.57</td><td>profitable</td></tr>
+      <tr><td>WTI</td><td class="up">+16.0%</td><td>+50.2%</td><td>0.77</td><td>profitable</td></tr>
+      <tr><td>WHEAT</td><td class="up">+26.8%</td><td>+19.0%</td><td>1.60</td><td>profitable</td></tr>
+      <tr><td>HBL <small>(PSX)</small></td><td class="up">+12.4%</td><td>+14.8%</td><td>1.39</td><td>profitable</td></tr>
+      <tr><td>BRENT</td><td class="dn">−9.4%</td><td>+58.4%</td><td>−0.69</td><td>unprofitable</td></tr>
+      <tr><td>NATGAS</td><td class="dn">−1.5%</td><td>−9.1%</td><td>−0.18</td><td>unprofitable</td></tr>
+      <tr><td>KSE100</td><td>−1.8%</td><td>+6.6%</td><td>0.52</td><td>unprofitable</td></tr>
+      <tr><td>MCB <small>(PSX)</small></td><td class="dn">−1.1%</td><td>+8.1%</td><td>0.42</td><td>unprofitable</td></tr>
+      <tr><td>EURUSD</td><td class="dn">−1.3%</td><td>−5.5%</td><td>0.19</td><td>unprofitable</td></tr>
+      <tr><td>BTC</td><td class="dn">−3.9%</td><td>−26.8%</td><td>−0.04</td><td>unprofitable</td></tr>
+      <tr><td>COPPER</td><td class="dn">−9.1%</td><td>+41.9%</td><td>−0.33</td><td>unprofitable</td></tr>
+      <tr><td>LUCK <small>(PSX)</small></td><td class="dn">−6.1%</td><td>−16.7%</td><td>0.03</td><td>unprofitable</td></tr>
+      <tr><td>OGDC <small>(PSX)</small></td><td class="dn">−14.3%</td><td>+12.1%</td><td>−0.53</td><td>unprofitable</td></tr>
     </tbody>
   </table>
   <p class="lede" style="margin-top:20px">Backtests are not returns. The parameter search is
@@ -118,11 +119,11 @@
 <section>
   <h2>What is <em>not</em> proven</h2>
   <ul>
-    <li><b>No directional hit rate exists.</b> 1,437 predictions journaled, 140 horizons
+    <li><b>No directional hit rate exists.</b> 1,525 predictions journaled, 140 horizons
       matured, and every one of the 140 was a non-trade. A non-trade cannot be a correct
       prediction.</li>
     <li>The live paper book is essentially flat: −Rs 13.05 realized on Rs 1,000,000 across
-      202 autopilot cycles, 2 fills.</li>
+      210 autopilot cycles, 2 fills.</li>
     <li>The live order path is built, capped and tested against staging — it has not been
       exercised at scale.</li>
     <li>No audit, no team, no AUM, no regulatory licence, no third-party capital.</li>
@@ -219,7 +220,7 @@
   numbers and the code agree.</p>
   <pre>git clone https://github.com/zhaider5142009-oss/kairos &amp;&amp; cd kairos
 pip install -r requirements.txt
-python -m pytest tests -q                     # 259 tests
+python -m pytest tests -q                     # 283 tests
 python -m kairos.cli backtest GOLD WTI HBL    # reproduce a sweep, costs modelled
 python -m kairos.cli feedback                 # realized record, live from the journal
 python tools/make_track_record.py             # rebuild the published ledger</pre>

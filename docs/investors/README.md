@@ -16,10 +16,10 @@ appears in one document and not in another, the journals win — and the mistake
 
 ## Standing rules for this pack
 
-1. **No forward track record exists.** 1,437 predictions journaled, 140 horizons matured,
+1. **No forward track record exists.** 1,525 predictions journaled, 140 horizons matured,
    and all 140 were non-trades. Never quote a hit rate; the ledger says "not yet measurable"
    and so must every other document.
-2. **Backtests are labelled backtests**, per instrument, including the 6 unprofitable ones.
+2. **Backtests are labelled backtests**, per instrument, including the 9 unprofitable ones.
 3. **No return promise, projection, or illustration of future performance** in any channel.
 4. **Nothing is sent or published without the operator's approval for that specific
    channel**, one at a time. Approvals do not cascade.
@@ -51,3 +51,14 @@ repository and each evidence figure against the regenerated ledger, so a number 
 moved and was not re-checked fails the build instead of going out in an email. That test
 exists because the published v2.6.0 deck quoted a line count and a test total three passes
 old under a footer saying they were verified that day.
+
+`--write` rewrites the sweep as well as the codebase counts: each instrument's net return,
+buy-and-hold, drawdown and Sharpe, the `profitable`/`unprofitable` verdict words, the HTML
+row colour classes, the `N of M profitable` headline ratio, the loser count and the
+per-venue means. It attributes a figure to the nearest instrument name before it, which is
+also a writing rule — a number that sits further from its own instrument than from another
+one gets charged to the wrong one and the lint says so. Two things stay outside its reach on
+purpose: the dated release notes under `releases/` (frozen at publication, so they keep the
+numbers that were true that day) and `KAIROS_Investor_Deck.pptx` (a binary no tool here
+edits). The deck is re-patched by hand, and any figure it still contradicts is reported by
+running `python tools/kit_stats.py` with no arguments.

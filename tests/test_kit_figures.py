@@ -183,6 +183,141 @@ def test_the_pack_cites_the_ledger_as_the_source():
     assert "make_track_record" in _text(PACK_DIR / "README.md")
 
 
+def test_the_pack_quotes_the_ledger_for_every_instrument_figure():
+    """The copied sweep table cannot drift from the generated one.
+
+    `RULES` rewrites a count attached to a figure word, so "259 passing" is
+    maintained and "GOLD +28.7%" was not — while that pair sits, hand-copied, in
+    the deck, the one-pager, the whitepaper, the landing page and the slides of
+    the binary. A fresh sweep run moves every one of them.
+    """
+    assert kit_stats.stale_sweep_quotes() == []
+
+
+def test_an_instrument_figure_the_ledger_no_longer_prints_is_a_failure():
+    """The check can fire, on the value the ledger actually has."""
+    real = kit_stats.sweep()
+    sym = sorted(real)[0]
+    bad = kit_stats.stale_sweep_quotes({"x.md": f"{sym} went up +99.9% last.\n"})
+    assert any(sym in m for m in bad), bad
+    ok = kit_stats.stale_sweep_quotes(
+        {f"{sym}.md": f"{sym} {real[sym]['return']}, buy & hold "
+                      f"{real[sym]['benchmark']}, drawdown {real[sym]['drawdown']}.\n"})
+    assert ok == []
+
+
+def test_a_percentage_after_a_different_instrument_is_not_claimed_by_the_first():
+    """Pairing stops at the next name, so a row cannot borrow another's return."""
+    real = kit_stats.sweep()
+    a, b = sorted(real)[:2]
+    straight = {f"{a}{b}.md": f"{a} {real[a]['return']}, {b} {real[b]['return']}.\n"}
+    assert kit_stats.stale_sweep_quotes(straight) == []
+    swapped = {f"{a}{b}.md": f"{a} {real[b]['return']}, {b} {real[a]['return']}.\n"}
+    assert kit_stats.stale_sweep_quotes(swapped), \
+        "each instrument's figure was read as the other's, and both passed"
+
+
+def test_a_venue_mean_is_checked_against_the_book_it_names():
+    """A mean is identified by the book beside it, not by the word "mean".
+
+    The pack wrote "+13.6% across the global book" and the guard let it through,
+    because it only knew two shapes: a number followed by the word "mean", and the
+    ledger's own "mean net return +13.6%". A sentence that names the venue instead
+    is still quoting that venue's mean, and it still has to move when the ledger
+    does. Binding the number to the book also catches a figure put in the wrong
+    sentence, which a set of allowed magnitudes cannot see.
+    """
+    means = kit_stats._venue_means(kit_stats.LEDGER.read_text(encoding="utf-8"))
+    good = {"x.md": f"{means['Global']}% across the global book, and "
+                    f"{means['PSX']}% across the equity book.\n"}
+    assert kit_stats.stale_sweep_quotes(good) == []
+    wrong_book = {"x.md": f"{means['Global']}% across the equity book.\n"}
+    assert kit_stats.stale_sweep_quotes(wrong_book), wrong_book
+    stale = {"x.md": f"{means['Global']}% mean across the global book, against "
+                     f"13.6% across the equity book.\n"}
+    assert kit_stats.stale_sweep_quotes(stale), stale
+
+
+def test_a_stale_sweep_headline_or_loser_count_is_a_failure():
+    """The ratio and the loser count are two claims about one table.
+
+    A run that flips a verdict moves both, and a pack that refreshes only the
+    flattering one says "9 of 14 profitable" over "the other 6 unprofitable"
+    while fourteen rows sit under it. Both are counted off the parsed ledger,
+    not read back out of the prose that is being checked.
+    """
+    wins, total, losers = kit_stats._ledger_headline()
+    good = {"x.md": f"{wins} of {total} instruments profitable, and the "
+                    f"other {losers} unprofitable ones lost money.\n"}
+    assert kit_stats.stale_sweep_quotes(good) == []
+    stale_wins = {"x.md": f"{int(wins) - 1} of {total} instruments profitable.\n"}
+    assert kit_stats.stale_sweep_quotes(stale_wins), stale_wins
+    stale_losers = {"x.md": f"the other {int(losers) + 1} unprofitable ones.\n"}
+    assert kit_stats.stale_sweep_quotes(stale_losers), stale_losers
+
+
+def test_no_denial_in_the_pack_is_contradicted_by_the_pack():
+    """A claim that the pack omits something is a figure like any other.
+
+    The published v2.6.1 release note said the kit contained no hit rate and no
+    return figure, in the same document that promised to publish a hit rate and
+    two sentences above a table whose columns are net return and hit rate. Every
+    check in this file asks whether a quoted number is right; none asked whether
+    a sentence about what is *absent* is.
+    """
+    assert kit_stats.denials() == []
+
+
+def test_a_quantified_denial_of_a_published_figure_is_a_failure():
+    """The check can fire, which is the only thing that makes the one above real.
+
+    The false sentence has to be denied over the whole corpus ("anywhere in this
+    pack"); "no hit rate exists" is a claim about the market, and no text file can
+    refute it. And the narrowing word has to sit next to the noun it narrows: the
+    release note's own cause clause, that zero directional calls have matured,
+    made the sentence read as scoped to the person who wrote it while it stayed
+    a universal claim about the pack.
+    """
+    figures = ("| instrument | net return | hit rate |\n"
+               "| GOLD | +28.7% | 0.594 |\n")
+    bad = kit_stats.denials({"a.md": "no hit rate appears anywhere in this pack.\n",
+                             "b.md": figures})
+    assert any("hit rate" in m for m in bad), bad
+    scoped = kit_stats.denials({"a.md": "no forward hit rate appears anywhere"
+                                        " in this pack.\n", "b.md": figures})
+    assert scoped == []
+    unquantified = kit_stats.denials({"a.md": "of every prediction matured, all were"
+                                              " non-trades, so no hit rate exists.\n",
+                                      "b.md": figures})
+    assert unquantified == []
+
+
+def test_a_denial_split_across_a_wrapped_line_still_reads_as_quantified():
+    """Release bodies wrap mid-sentence, and a line-by-line checker loses them.
+
+    The first version of `denials()` bounded sentences on a newline and reported
+    the real false claim as consistent, because "…appears" ended the line and
+    "anywhere in this pack" began the next one.
+    """
+    bodies = {"a.md": "so no hit rate, accuracy or return figure appears\n"
+                      "anywhere in this pack, and none is implied here.\n",
+              "b.md": "| instrument | net return | hit rate |\n"
+                      "| GOLD | +28.7% | 0.594 |\n"}
+    bad = kit_stats.denials(bodies)
+    assert any("hit rate" in m for m in bad), bad
+
+
+def test_a_release_note_is_frozen_and_not_rewritten():
+    """What GitHub published stays as published.
+
+    `--write` must not chase a note that has already been read: its journal
+    counts tick every ten minutes, and a corrected note is edited in place and
+    marked, not silently updated. So the only rule release notes are held to is
+    the one above.
+    """
+    assert not any(n in kit_stats.PACK_FILES for n in kit_stats.release_notes())
+
+
 def test_a_figure_command_value_is_reachable_from_the_pack(figures):
     """Every key the rules rewrite must be a figure this test can resolve.
 

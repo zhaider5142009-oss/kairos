@@ -46,7 +46,7 @@ account without a human in the loop *only when three independent keys are turned
 | Data | `kairos/data.py` | multi-source history, circuit breaker on dead local services |
 | Features | `kairos/features.py` | deterministic, versioned feature frames |
 | Models | `kairos/models_stat.py`, `models_ml.py` | statistical + ML + neural battery |
-| Strategy | `kairos/strategies.py` | 100 strategies, per-instrument selection |
+| Strategy | `kairos/strategies.py` | 100 strategies voting direction, strength and rationale into the live consensus |
 | Council | `kairos/llm.py` | named-seat LLM consensus with provider integrity |
 | Ensemble | `kairos/ensemble.py`, `quantum.py` | fused expert scores, portfolio weights |
 | Risk | `kairos/risk.py` | position sizing, drawdown guard, price band |
@@ -144,20 +144,20 @@ exist is a way to lose money faster than the market teaches you.
 - Logs rotate; state persists across restarts; RAM, startup and per-cycle cost were profiled
   on a 2015-era i5 / 8 GB machine, which is a deliberate constraint — if it runs there, the
   infrastructure argument is cheap.
-- 259 regression tests, including the money path and the integrity cases below.
+- 283 regression tests, including the money path and the integrity cases below.
 
 ## 7. What the numbers say, and what they do not
 
-Walk-forward, costs modelled, 8/14 instruments profitable — commodities strongest
-(SILVER +44.5%, GOLD +28.7% beating buy-and-hold with Sharpe 1.61 and 1.68-class risk
-adjustment), and six instruments reported as losses.
+Walk-forward, costs modelled, 5/14 instruments profitable — one blended signal per instrument, its weights selected from 2,592 candidates rather than the 100-strategy library — commodities strongest
+(SILVER +43.5% against +36.1% buy-and-hold, and GOLD +29.3% against +11.6% with Sharpe 1.57),
+and 9 instruments reported as losses.
 
-**PSX equities lost money net of local costs** (−2.8% mean across the equity book, and a
+**PSX equities lost money net of local costs** (−2.2% mean across the equity book, and a
 ~8% fee drag observed on the active stock trials). This is the single most commercially
 important finding in the project: the edge, if any, is in the global and commodity books,
 and any PSX strategy must be sized against costs before it is sized against conviction.
 
-The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 202
+The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 210
 autopilot cycles) with two fills. That is a system working as designed on a low-conviction
 market, not a strategy proving itself.
 
@@ -229,7 +229,7 @@ be mis-sized because of it.
 git clone https://github.com/zhaider5142009-oss/kairos && cd kairos
 cp config.example.yaml config.yaml      # add your own keys; config.yaml is git-ignored
 pip install -r requirements.txt
-python -m pytest tests -q                    # 259 tests
+python -m pytest tests -q                    # 283 tests
 python -m kairos.cli backtest GOLD WTI HBL   # walk-forward sweep, costs modelled
 python -m kairos.cli health                  # subsystem health, dead council seats
 python -m kairos.cli feedback                # realized track record, live from the journal
