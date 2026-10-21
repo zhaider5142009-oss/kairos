@@ -79,7 +79,7 @@ person reads a published failure and replies.*
 >
 > Fix: a snapshot only counts if the score exceeds the entry threshold, only resolves if the
 > horizon's bars exist, and the confidence multiplier is pinned to 1.0 until 10 real
-> directional calls have matured. Eight regression tests. The honest record today: 1,569
+> directional calls have matured. Eight regression tests. The honest record today: 1,591
 > predictions journaled, 140 matured, 0 directional calls, hit rate not yet measurable.
 >
 > Also in there: a council of LLM seats where a dead seat must shrink the council rather
@@ -164,3 +164,9 @@ and take the one attached here.
 Nothing else has been published: the landing page is unhosted, and there has been no Show HN,
 Reddit, LinkedIn, X, cold email, brokerage or fund contact. Each of those still needs its own
 approval.
+
+**Same-day asset refresh.** The suite grew by one test after v2.6.2's deck was uploaded, so the
+attachment was replaced with the deck the repository now verifies against itself. The release
+*body* still prints the totals that were true when it was written, and that is the documented
+convention for a dated note — the attachment is the copy a stranger forwards, so it is the one
+that has to match the code.

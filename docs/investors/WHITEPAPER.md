@@ -144,7 +144,7 @@ exist is a way to lose money faster than the market teaches you.
 - Logs rotate; state persists across restarts; RAM, startup and per-cycle cost were profiled
   on a 2015-era i5 / 8 GB machine, which is a deliberate constraint — if it runs there, the
   infrastructure argument is cheap.
-- 286 regression tests, including the money path and the integrity cases below.
+- 287 regression tests, including the money path and the integrity cases below.
 
 ## 7. What the numbers say, and what they do not
 
@@ -157,14 +157,14 @@ and 9 instruments reported as losses.
 important finding in the project: the edge, if any, is in the global and commodity books,
 and any PSX strategy must be sized against costs before it is sized against conviction.
 
-The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 214
+The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 216
 autopilot cycles) with two fills. That is a system working as designed on a low-conviction
 market, not a strategy proving itself.
 
 ## 8. The integrity bugs, documented because they are the credibility
 
-An investor kit is only worth its willingness to publish its own audit. Twenty-two defects are
-tabled below, each with what it would have cost had it shipped. Seven of them were in the
+An investor kit is only worth its willingness to publish its own audit. Twenty-three defects are
+tabled below, each with what it would have cost had it shipped. Eight of them were in the
 machinery that produces the numbers an investor would read — the scorer that turns a journal
 into a hit rate, the command that regenerates the evidence, the ledger repair meant to keep
 that history honest, and the guardrail built to keep the pack's figures current. That group is
@@ -199,6 +199,7 @@ guard that was supposed to catch them — sitting in tracked files.
 | The figure guard did not read the file investors actually receive | every check covered the markdown and the HTML, because those are what the rewriting command touches, and the PowerPoint deck — the copy attached to the release and forwarded to a stranger — was outside the guard entirely. It was further stale than the prose beside it: an old line count, an old module count, the same old test total in two places, an old journaled count, an old cycle count, and a version stamp two releases behind, under a footer claiming the figures were verified against the repository on a day they had not been | the deck is read as text now: a `.pptx` is a zip of XML and its runs flatten into the same vocabulary the rules already match, so the checked figures and the stamped date and version are compared against it before it can ship. Read-only deliberately — rewriting run boundaries inside a binary is how a deck gets corrupted, so the test names the value to rebuild with rather than editing the file quietly. Two phrasings had to join the stamp table first: a version written as "KAIROS vN.N.N" and a footer saying "verified against the repository on" a date. A checker that only knows the word "Version" reports a stale version as *absent*, not as wrong, which is the same failure as a checker that only knows "tests" and not "passing". Guarding the deck then cost the deck two of its numbers: the journal grows on its own every ten minutes, and a file nobody re-runs on that clock must not print a count it cannot keep current, so the slides now carry the figures that are stable inside a release and point at the dated ledger for the ones that tick. |
 | The command that regenerates the evidence was reading the wrong sweep log | ties in the walk-forward log choice were broken on row count alone over a sorted glob, so the run re-executed after this release's strategy repair lost to a four-day-old run of the same width. The pack's headline count, its per-venue means and several instruments' verdicts were therefore produced by code the same release admits was defective, under a footer saying the figures were verified that day | ties go to the newest file by modification time, the ledger names the log it read and the afternoon it ran, the skipped instrument is printed outside the denominator instead of inflating it, and the verdicts that moved are listed in the release note rather than corrected quietly |
 | Every rule in the guard checked a digit, and the pack's worst false claim was a noun | the deck's cover and the ledger both wrote the sweep as `Walk-forward sweep, N strategies per instrument`. The sweep fits one blended signal, not the library, and the count beside the false noun was itself a verified figure — so a complete refresh cycle passed it. The same shape hid the headline ratio and the book means: each was read only when one particular word sat next to the number, and a sentence that put the descriptor a clause away was invisible to the rewriter and the checker alike | a ratio is read by its denominator and the nearest win/loss word decides which side it counts, a mean is read by the book named beside it, and `method_claims()` denies any sweep sentence that credits the strategy library with the evidence. Each rule ships with a test written in the opposite direction, so the guard fails if it stops seeing one of the shapes |
+| A call whose symbol the registry could not name was deleted from the record | `feedback.resolve_outcomes` marked any snapshot it could not look up **resolved**, with `outcome=no-instrument` and `directional` decided from the entry threshold configured *that day*. It recorded no realized return, so the row appeared in neither the numerator nor the denominator — the forward record just became smaller, permanently, and raised nothing. One cycle in which the dynamic PSX registry had not been rebuilt, or a journal copied to a fresh deploy without it, would erase every pending call on those names at once. At the time it was found, most of the pending calls sat on four watchlist symbols, and the first batch of them was days away from becoming the kit's first measurable hit rate | an unanswerable lookup now leaves the row pending and retries it on the next pass, which is already what an unmatured horizon does, and the row's own label is the only thing that decides whether it ever claimed a direction. The ledger prints the queue as well as the answered part — how many calls are still waiting and the first date the tenth of them can resolve — so a record that has stalled is visible instead of merely empty. One test pins the behaviour both ways: unresolved while the lookup fails, then scored normally once the symbol answers again |
 
 Nothing moved money. The journal now says so itself: rebuilt from `data/audit_journal.jsonl`,
 the track record publishes the count of lines carrying the test signature and the count of
@@ -231,7 +232,7 @@ be mis-sized because of it.
 git clone https://github.com/zhaider5142009-oss/kairos && cd kairos
 cp config.example.yaml config.yaml      # add your own keys; config.yaml is git-ignored
 pip install -r requirements.txt
-python -m pytest tests -q                    # 286 tests
+python -m pytest tests -q                    # 287 tests
 python -m kairos.cli backtest GOLD WTI HBL   # walk-forward sweep, costs modelled
 python -m kairos.cli health                  # subsystem health, dead council seats
 python -m kairos.cli feedback                # realized track record, live from the journal

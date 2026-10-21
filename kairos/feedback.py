@@ -76,9 +76,13 @@ def resolve_outcomes(md, lookback_days: int = 90) -> int:
             continue
         inst = resolve_inst(e["symbol"])
         if inst is None:
-            e.update(resolved=True, outcome="no-instrument",
-                     directional=bool(abs(e["score"]) > thr))
-            newly += 1
+            # Leave it pending. Resolving here used to tombstone the row as
+            # "no-instrument", so one cycle in which a symbol could not be
+            # looked up — a watchlist name whose dynamic registry had not been
+            # rebuilt, a journal copied to a fresh deploy without it — deleted
+            # every call on that symbol from the forward record permanently,
+            # and stamped `directional` from the band configured that day. An
+            # unanswerable lookup is a reason to retry, not a verdict.
             continue
         df = md.history(inst)
         if df is None or len(df) < 10:

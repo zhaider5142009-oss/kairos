@@ -14,7 +14,7 @@ import json
 import re
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -103,6 +103,37 @@ def _autopilot() -> dict:
 def _live_book() -> dict:
     p = ROOT / "data" / "livebook.json"
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+
+
+def _pending_calls() -> tuple[int, str]:
+    """Directional snapshots whose horizon has not printed yet, and the first
+    date the tenth of them could resolve.
+
+    The record's central sentence — "no hit rate yet" — is only honest if the
+    reader can see the queue behind it. A journal with zero pending calls and
+    zero matured ones is a system that is not calling; a journal with hundreds
+    pending is a system that is calling and has not been graded yet. The date is
+    a lower bound, not a promise: `feedback.resolve_outcomes` waits for five
+    *bars*, and PSX prints none on a weekend or a market holiday.
+    """
+    p = ROOT / "data" / "prediction_journal.jsonl"
+    if not p.exists():
+        return 0, ""
+    out = []
+    for ln in p.read_text(encoding="utf-8").splitlines():
+        if not ln.strip():
+            continue
+        e = json.loads(ln)
+        if e.get("resolved") or str(e.get("direction", "")).upper() in (
+                "", "HOLD", "NEUTRAL", "FLAT"):
+            continue
+        try:
+            out.append(datetime.fromisoformat(e["ts"])
+                       + timedelta(days=int(e["horizon"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    out.sort()
+    return len(out), (out[9].strftime("%Y-%m-%d") if len(out) >= 10 else "")
 
 
 TEST_WINDOW_S = 30.0
@@ -210,12 +241,25 @@ def main() -> int:
     hr = tr.get("hit_rate")
     w(f"| directional hit rate | {'not yet measurable' if hr is None else f'{hr:.1%}'} |")
     w("")
+    pend, tenth_day = _pending_calls()
     if hr is None:
         w("**There is no directional hit rate yet.** Every matured snapshot was a "
           "non-trade, and a non-trade cannot be a correct prediction — the scorer "
           "used to count them as wins, which is fixed as of v2.5.0. A forward record "
           "of live calls is what this table will show, and it accumulates on its own "
           "as horizons elapse.")
+    if pend:
+        # "No track record yet" reads the same whether the engine has never made a
+        # call or has made hundreds that have not been graded. It is only an honest
+        # sentence with the queue in front of the reader, and a date they can come
+        # back on — which is also what makes a stalled record visible.
+        w("")
+        w(f"{pend} directional calls are journaled and still waiting out their "
+          f"horizon"
+          + (f", and the tenth of them cannot resolve before **{tenth_day}**, five "
+             f"bars after it was written. This table publishes a hit rate the day it "
+             f"can." if tenth_day else
+             ", fewer than ten so far, so no hit rate is definable yet."))
     w("")
     w("## 2. Walk-forward strategy sweep")
     w("")

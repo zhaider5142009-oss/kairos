@@ -70,7 +70,8 @@ def _row(symbol="OGDC", score=0.4, ts="2026-01-05T00:00:00", horizon=5,
 
 @pytest.fixture(autouse=True)
 def any_symbol(monkeypatch):
-    """resolve_outcomes() drops unknown tickers; the stub bars work for any."""
+    """The stub bars answer for any symbol, so resolution depends only on the
+    horizon having printed."""
     monkeypatch.setattr("kairos.universe.resolve",
                         lambda s: type("Inst", (), {"key": s, "name": s})(),
                         raising=True)
@@ -298,3 +299,29 @@ def test_genuine_strength_still_earns_the_bonus(journal, monkeypatch):
     F.resolve_outcomes(_Md(_bars(30, drift=0.004)))
     assert F.track_record()["hit_rate"] == 1.0
     assert F.confidence_adjustment() == 1.05
+
+
+def test_a_symbol_the_registry_cannot_answer_leaves_the_call_pending(journal,
+                                                                     monkeypatch):
+    """An unanswerable lookup is a reason to retry, not a verdict.
+
+    Rows for a symbol `universe.resolve()` could not name were resolved as
+    "no-instrument" — permanently, and with `directional` stamped from the
+    entry threshold configured that day. A watchlist ticker whose dynamic
+    registry had not been rebuilt, or a journal copied to a fresh deploy
+    without it, therefore deleted every pending call on that symbol from the
+    forward record in one cycle, and nothing raised an error to say so.
+    """
+    monkeypatch.setattr(F, "_direction_threshold", lambda: 0.18)
+    monkeypatch.setattr("kairos.universe.resolve", lambda s: None, raising=True)
+    _write(journal, [_row(score=0.40), _row(score=0.90)])
+    assert F.resolve_outcomes(_Md(_bars(30, drift=0.004))) == 0
+    out = _resolved(journal)
+    assert [r["resolved"] for r in out] == [False, False], out
+    assert not any("outcome" in r for r in out), out
+
+    # The same two calls are still scorable once the symbol answers again.
+    monkeypatch.setattr("kairos.universe.resolve",
+                        lambda s: type("Inst", (), {"key": s})(), raising=True)
+    assert F.resolve_outcomes(_Md(_bars(30, drift=0.004))) == 2
+    assert [r["directional"] for r in _resolved(journal)] == [True, True]

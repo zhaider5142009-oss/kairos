@@ -29,12 +29,12 @@ Built by one operator, running 24/7, publishing its own losses.
 
 | | |
 |---|---|
-| Code | 12,354 lines Python · 37 modules · public repo |
+| Code | 12,358 lines Python · 37 modules · public repo |
 | Strategies | 100 voting into the live consensus; the sweep fits one blended signal, not the library |
 | Council | 6 configured LLM seats across 2 providers; a dead seat shrinks the council |
 | Execution | paper + JS Global PSX bridge + MT5 |
 | Uptime | 24/7 daemon, watchdog, token-gated public API |
-| Tests | 286 passing, money path included |
+| Tests | 287 passing, money path included |
 
 Not a fund. No client money. No licence. No AUM.
 
@@ -67,9 +67,9 @@ conviction.
 
 ## 6. What is *not* proven
 
-- **No forward track record.** 1,569 predictions journaled, 140 horizons matured, all 140 were
+- **No forward track record.** 1,591 predictions journaled, 140 horizons matured, all 140 were
   non-trades. A directional hit rate does not yet exist.
-- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 214 cycles, 2 fills.
+- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 216 cycles, 2 fills.
 - Live execution path is built and gated, not exercised at scale.
 - No audit, no team, no third-party capital.
 
@@ -120,6 +120,14 @@ looked straight through them. The vocabulary now lives in one table that both th
 the test read, a fourth figure (the strategy count) joined it, and a new test fails if a number
 sits next to a figure word with no rule behind it. The journal was left as it is — the containment is
 recorded in it, because a rewritten audit trail proves nothing.
+
+The quietest one was found while checking whether those pending calls would actually be scored.
+A snapshot whose symbol the registry could not name was marked **resolved** with no realized
+return, so it left the record entirely — silently, permanently, and most of the pending calls sat
+on four watchlist symbols whose registry entries are rebuilt at runtime. An unanswerable lookup
+now leaves the row pending and retries it, which is what an unmatured horizon already does, and the
+ledger prints the queue beside the answered part: how many calls are waiting, and the first date
+the tenth of them can resolve.
 
 Two more came out of the pass that produced this version, and both were found by reading, not by
 losing money. One strategy scored its three stack conditions with `+` over numpy scalars, where `+`
