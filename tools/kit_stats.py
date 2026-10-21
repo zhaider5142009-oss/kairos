@@ -1,7 +1,8 @@
 """Print the figures the investor pack is allowed to quote.
 
 Every number in docs/investors/ is either derived from the repository or read out
-of the generated ledger. None of them may be typed from memory — the published
+of the generated ledger, and so is the date stamped beside them and the version
+they describe. None of them may be typed from memory — the published
 v2.6.0 deck carried a line count and a test total three passes old under a footer
 that said the figures were verified that day, and nothing caught it because the
 numbers were prose. tests/test_kit_figures.py now fails if the pack and these
@@ -133,6 +134,32 @@ FIGURE_WORDS = [
 ]
 
 
+# Two figures in the pack are strings, not counts: the day the evidence was
+# rebuilt, and the version the kit describes. Both were typed. The v2.6.0 deck
+# published "Figures dated 2026-10-20" beside a ledger that said 2026-10-21, and
+# the whitepaper still described a release two tags old — a date nobody regenerates
+# drifts in silence, which is the same failure the numeric rules above exist to
+# stop. The date is taken from the ledger's own rebuild stamp rather than from the
+# clock, so the pack can never claim a day the evidence was not rebuilt.
+STAMP_RULES = [
+    (r"(\bdated )\d{4}-\d{2}-\d{2}", "pack_date", 1),
+    (r"(Version )\d+\.\d+\.\d+", "version", 1),
+    (r"(Version \d+\.\d+\.\d+ · )\d{4}-\d{2}-\d{2}", "pack_date", 1),
+]
+
+
+def stamps(facts: dict | None = None) -> dict[str, str]:
+    """The string figures, resolved from the ledger and the package."""
+    facts = ledger() if facts is None else facts
+    return {"pack_date": str(facts["ledger_generated"]).strip(),
+            "version": _package_version()}
+
+
+def _package_version() -> str:
+    from kairos import __version__
+    return __version__
+
+
 def _values(facts: dict) -> dict[str, str]:
     # the ledger reports evidence figures as the strings it printed, so they are
     # re-parsed rather than trusted to already be numeric
@@ -161,13 +188,14 @@ def figures() -> dict[str, int]:
 def _rewrite(facts: dict) -> dict[str, int]:
     """Point every quoted figure in the pack at the values just recomputed."""
     vals = _values(facts)
+    vals.update(stamps(facts))
     changed: dict[str, int] = {}
     for name in PACK_FILES:
         path = ROOT / name
         if not path.is_file():
             continue
         body = original = path.read_text(encoding="utf-8", errors="replace")
-        for pattern, key, keep in RULES:
+        for pattern, key, keep in (*RULES, *STAMP_RULES):
             def sub(m, v=vals[key], k=keep):
                 return "".join(m.group(i) or "" for i in range(1, k + 1)) + v
 
@@ -192,7 +220,9 @@ def main() -> int:
             print(f"{name:34} {n} figure(s) updated")
         facts = {**codebase(), **ledger()}   # re-read, the ledger is the source
     order = ["lines", "modules", "tests", "strategies", "journaled", "matured",
-             "directional", "cycles", "fills", "realized_pnl", "ledger_generated"]
+             "directional", "cycles", "fills", "realized_pnl", "ledger_generated",
+             "pack_date", "version"]
+    facts.update(stamps(facts))
     if args.markdown:
         print("| figure | value |")
         print("|---|---|")

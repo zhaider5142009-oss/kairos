@@ -126,6 +126,27 @@ def test_no_figure_phrase_lacks_a_rule(path, figures):
     assert not bad, f"{path.relative_to(ROOT)}: {bad}"
 
 
+@pytest.mark.parametrize("path", PACK, ids=lambda p: p.name)
+def test_the_stamped_date_and_version_are_not_typed(path):
+    """A date or version in the pack is a figure like any other.
+
+    The v2.6.0 deck printed "Figures dated 2026-10-20" over a ledger rebuilt on
+    the 21st, and the whitepaper still described a release that was no longer the
+    one the kit shipped with. Neither was a number, so neither was checked — the
+    stamp now comes from the ledger's own rebuild date and from `kairos.__version__`,
+    which is what makes a stale one a test failure instead of a sentence.
+    """
+    body = _text(path)
+    want = kit_stats.stamps(kit_stats.ledger())
+    bad: list[str] = []
+    for pattern, key, _keep in kit_stats.STAMP_RULES:
+        for m in re.finditer(pattern, body):
+            tail = re.search(r"(\d{4}-\d{2}-\d{2}|\d+\.\d+\.\d+)$", m.group(0))
+            if tail.group() != want[key]:
+                bad.append(f"{m.group(0)!r} — {key} is {want[key]}")
+    assert not bad, f"{path.relative_to(ROOT)} carries a stale stamp: {bad}"
+
+
 def test_the_pack_cites_the_ledger_as_the_source():
     """A figure an investor can verify has to say where it comes from."""
     assert "make_track_record" in _text(PACK_DIR / "README.md")
@@ -142,3 +163,5 @@ def test_a_figure_command_value_is_reachable_from_the_pack(figures):
     assert keys <= set(figures), keys ^ set(figures)
     words = {key for key, _w, _word in kit_stats.FIGURE_WORDS}
     assert words <= set(figures), words ^ set(figures)
+    stamp_keys = {key for _p, key, _k in kit_stats.STAMP_RULES}
+    assert stamp_keys <= set(kit_stats.stamps(kit_stats.ledger())), stamp_keys
