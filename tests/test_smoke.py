@@ -81,6 +81,85 @@ def test_the_public_repository_urls_are_the_public_repo():
         assert "zhaider5142009-oss/kairos" in line, line
 
 
+def test_every_module_level_import_is_declared_in_the_packaging():
+    """A missing dependency must not be an accident of the developer's own
+    environment. CI once ran red for five pushes because `jsgsync` imported
+    `requests` at module level while no manifest declared it — the Docker image
+    worked only because its own requirements file happened to carry the fix."""
+    import ast
+    import re
+    import sys
+    from pathlib import Path
+
+    root = Path(kairos.__file__).resolve().parent
+    text = (root.parent / "pyproject.toml").read_text(encoding="utf-8")
+    core = text.split("[project]")[1].split("[project.optional-dependencies]")[0]
+    core = core.split("dependencies = [")[1].split("]")[0]
+    extras = text.split("[project.optional-dependencies]")[1]
+    extras = "\n".join(re.findall(r"= \[(.*?)\]", extras, re.S))
+    declared = {d.lower().replace("_", "-")
+                for d in re.findall(r'"([A-Za-z0-9_.-]+)', core + extras)}
+    # PyPI name -> import name, for the pairs that differ
+    for want, given in (("pyyaml", "yaml"), ("scikit-learn", "sklearn")):
+        if want in declared:
+            declared.add(given)
+
+    std = set(sys.stdlib_module_names) | {"kairos", "__future__"}
+    missing = {}
+    for path in sorted(root.rglob("*.py")):
+        for node in ast.parse(path.read_text(encoding="utf-8")).body:
+            if isinstance(node, ast.Import):
+                tops = [a.name.split(".")[0] for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+                tops = [node.module.split(".")[0]]
+            else:
+                continue
+            for top in tops:
+                if top not in std and top.lower().replace("_", "-") not in declared:
+                    missing.setdefault(str(path.relative_to(root)), set()).add(top)
+    assert not missing, f"undeclared module-level imports: {missing}"
+
+
+def test_requirements_txt_is_not_weaker_than_the_package():
+    """README offers both as the install path; if one silently lacks something
+    the other installs, two users end up with two different products."""
+    import re
+    from pathlib import Path
+
+    root = Path(kairos.__file__).resolve().parent.parent
+    core = Path(root / "pyproject.toml").read_text(encoding="utf-8")
+    core = core.split("dependencies = [")[1].split("]")[0]
+    core = {c.lower().replace("_", "-")
+            for c in re.findall(r'"([A-Za-z0-9_.-]+)', core)}
+    reqs = {r.lower().replace("_", "-")
+            for r in re.findall(r"^([A-Za-z0-9_.-]+)",
+                                (root / "requirements.txt").read_text(encoding="utf-8"),
+                                re.M)}
+    assert core <= reqs, f"`pip install -r requirements.txt` skips {core - reqs}"
+
+
+def test_a_missing_card_extra_is_a_sentence_not_a_traceback(monkeypatch, capsys):
+    """The free image ships no matplotlib on purpose. Asking it for a card has
+    to explain the extra it lacks; `ModuleNotFoundError` in a terminal is how a
+    newcomer decides the project does not work."""
+    from types import SimpleNamespace
+
+    import kairos.cli as K
+    import sys
+
+    real_import = __import__
+
+    def no_matplotlib(name, *args, **kwargs):
+        if name == "matplotlib" or name.startswith("matplotlib."):
+            raise ModuleNotFoundError("No module named 'matplotlib'", name=name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", no_matplotlib)
+    monkeypatch.delitem(sys.modules, "kairos.signalcard", raising=False)
+    assert K.cmd_share(SimpleNamespace(symbol="LPG", out=None)) == 3
+    assert "[card]" in capsys.readouterr().out
+
+
 def test_universe_is_populated():
     # the curated seed is 100; scan-driven PSX rotation can add more
     assert len(universe.ALL) >= 100

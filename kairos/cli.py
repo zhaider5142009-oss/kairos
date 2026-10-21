@@ -632,6 +632,7 @@ def cmd_setup(args) -> int:
 
 def cmd_doctor(args) -> int:
     """Say what was checked, what failed, and what to do about each one."""
+    from rich.markup import escape
     from rich.table import Table
     from . import onboard
     console = _console()
@@ -643,7 +644,10 @@ def cmd_doctor(args) -> int:
         mark = {"ok": "[green]ok[/]", "warn": "[yellow]warn[/]",
                 "note": "[dim]note[/]", "fail": "[red]FAIL[/]"}[row["status"]]
         bad += row["status"] == "fail"
-        tbl.add_row(row["area"], mark, row["detail"], row["fix"] or "—")
+        # the fix column tells people to run `pip install -e ".[all]"`, and rich
+        # reads "[all]" as a style tag — escaped or the advice loses its extra
+        tbl.add_row(escape(row["area"]), mark, escape(row["detail"]),
+                    escape(row["fix"]) if row["fix"] else "—")
     console.print(tbl)
     port = int(getattr(args, "port", 8600) or 8600)
     console.print(f"[dim]tower on port {port}: "
@@ -657,13 +661,15 @@ def cmd_up(args) -> int:
     """Start the tower and open the desk — the whole first run in one word."""
     import threading
     import webbrowser
+    from rich.markup import escape
     from . import onboard
     console = _console()
     fails = [c for c in onboard.checks() if c["status"] == "fail"]
     if fails:
         console.print("[red]not ready — run `kairos doctor`:[/]")
         for c in fails:
-            console.print(f"  • {c['area']}: {c['detail']} → {c['fix']}")
+            console.print(f"  • {escape(c['area'])}: {escape(c['detail'])} "
+                          f"→ {escape(c['fix'])}")
         return 1
     url = f"http://127.0.0.1:{args.port}"
     if not args.no_browser:
@@ -712,7 +718,15 @@ def cmd_ask(args) -> int:
 def cmd_share(args) -> int:
     """Render a shareable live signal card (WhatsApp/Instagram)."""
     from rich.panel import Panel
-    from . import signalcard
+    try:
+        from . import signalcard
+    except ImportError:
+        # rich reads "[card]" as a markup tag and eats it, so the extra's name
+        # has to be escaped or the advice installs the wrong thing
+        _console().print('[red]signal cards need matplotlib:[/] '
+                         '[bold]pip install "kairos\\[card]"[/] '
+                         '[dim](kept out of the free image to keep it small)[/]')
+        return 3
     console = _console()
     console.print(f"[bold blue]building live signal card for {args.symbol}…[/]")
     path, cap = signalcard.card_for(args.symbol, args.out)

@@ -61,12 +61,12 @@ jobs:
           set -e
           IMAGE="${{ fromJSON(steps.meta.outputs.json).tags[0] }}"
           docker pull "$IMAGE"
-          docker run --rm -d --name k -p 8600:8600 \
+          docker run --rm -d --name kairos-probe -p 8600:8600 \
             -e KAIROS_TOKEN=ci-probe-token "$IMAGE"
           for i in $(seq 1 40); do
             sleep 3
             curl -sf http://127.0.0.1:8600/api/health > /tmp/h.json && break
-            [ "$i" = 40 ] && { docker logs k; exit 1; }
+            [ "$i" = 40 ] && { docker logs kairos-probe; exit 1; }
           done
           # the shape is what a host's health check reads; "ok" may honestly be
           # false on a sandboxed runner with no market feed, so assert the fields
@@ -79,5 +79,5 @@ jobs:
           # the token must gate the desk, or a deployed tower exposes a portfolio
           code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8600/api/autopilot)
           echo "unauthenticated /api/autopilot -> $code"
-          test "$code" = "401" || { docker logs k; exit 1; }
-          docker stop k
+          test "$code" = "401" || { docker logs kairos-probe; exit 1; }
+          docker stop kairos-probe

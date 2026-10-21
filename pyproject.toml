@@ -39,17 +39,23 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
     "pydantic>=2.6",
+    # the JS Global bridge is the PSX execution path, not an extra: without it
+    # `import kairos.jsgtrade` raises, and a missing dependency has to be
+    # different from a disabled feature.
+    "requests>=2.31",
 ]
 
 [project.optional-dependencies]
 neural = ["torch>=2.2"]
 quantum = ["qiskit>=1.0"]
 mt5 = ["MetaTrader5>=5.0.45"]
+card = ["matplotlib>=3.8"]
 serve = ["httpx>=0.27"]
 test = ["pytest>=8.0", "httpx>=0.27"]
 all = [
     "torch>=2.2",
     "qiskit>=1.0",
+    "matplotlib>=3.8",
     "MetaTrader5>=5.0.45; platform_system == 'Windows'",
 ]
 

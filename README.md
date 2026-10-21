@@ -40,8 +40,9 @@ KAIROS forecasts **crypto** (22 majors: BTC, ETH, SOL, BNB, XRP, ADA, DOGE, AVAX
 git clone https://github.com/zhaider5142009-oss/kairos.git && cd kairos
 pip install -e ".[test]"          # or: pip install -r requirements.txt
 
-# (optional) full battery: neural models, quantum, MT5
+# (optional) full battery: neural models, quantum, MT5, signal cards
 pip install -e ".[all]"
+# (optional) just the shareable PNG cards: pip install -e ".[card]"
 
 # or invoke the console script once installed
 kairos --help
@@ -307,7 +308,7 @@ python -m kairos.cli feedback       # realized record, live
 ```
 
 [docs/investors/](docs/investors/) holds the ledger, a one-pager, the whitepaper and the
-deck. Read the ledger first: there is **no forward track record yet** — 1,238 predictions
+deck. Read the ledger first: there is **no forward track record yet** — 1,249 predictions
 journaled, 140 horizons matured, all 140 non-trades — and 6 of 14 instruments in the
 walk-forward sweep lost money. That is the honest state of the project, and it is the reason
 the risk layer exists.

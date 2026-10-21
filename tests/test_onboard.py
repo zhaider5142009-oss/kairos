@@ -158,12 +158,50 @@ def test_a_blocking_problem_is_a_fail_status(monkeypatch):
     assert rows["core dependencies"]["fix"].startswith("pip install")
 
 
+def test_the_doctor_prints_its_advice_without_losing_characters(monkeypatch,
+                                                                capsys):
+    """The doctor's job is the sentence a user copies. `pip install -e ".[all]"`
+    is one of those sentences, and rich reads `[all]` as a style tag and eats
+    it — leaving a command that installs nothing. So this pins the rendered
+    table, not the dictionary behind it."""
+    from types import SimpleNamespace
+
+    import kairos.cli as K
+
+    _quiet_checks(monkeypatch)
+    monkeypatch.setattr(O, "_dep_ok", lambda m: m in O.REQUIRED)
+    monkeypatch.setattr(O, "tower_running", lambda port: False)
+    K.cmd_doctor(SimpleNamespace(port=8600))
+    out = capsys.readouterr().out
+    assert '.[all]' in out, "the extras advice lost its bracket while rendering"
+
+
 def test_the_python_floor_is_the_one_the_packaging_declares():
-    import tomllib
-    spec = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    wants = spec["project"]["requires-python"].lstrip(">= ")
+    """Read the manifest with a regex, not tomllib: tomllib is 3.11+, and this
+    suite runs on the 3.10 floor the package itself promises."""
+    import re
+    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    wants = re.search(r'^requires-python = ">=([^"]+)"', text, re.M).group(1)
     got = ".".join(str(x) for x in O.MIN_PYTHON)
     assert wants == got, f"pyproject says >={wants} but onboard checks {got}"
+
+
+def test_the_doctor_checks_every_dependency_the_packaging_requires():
+    """`kairos doctor` is the last thing a new user runs before trusting it. If
+    the packaging gains a required dependency the doctor never looks for, the
+    doctor certifies a broken install — which is how a missing `requests` ends
+    up looking like a disabled broker bridge."""
+    import re
+    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    core = text.split("[project]")[1].split("[project.optional-dependencies]")[0]
+    core = core.split("dependencies = [")[1].split("]")[0]
+    # REQUIRED lists import names; the manifest lists distribution names
+    dist_to_import = {"pyyaml": "yaml", "scikit-learn": "sklearn"}
+    wanted = {dist_to_import.get(d, d).lower()
+              for d in re.findall(r'"([A-Za-z0-9_.-]+)', core)}
+    checked = {m.lower().replace("_", "-") for m in O.REQUIRED}
+    missing = sorted(w for w in wanted if w not in checked)
+    assert not missing, f"doctor never checks for {missing} that pyproject requires"
 
 
 def test_a_config_outside_the_repository_is_not_claimed_to_be_ignored(tmp_path,

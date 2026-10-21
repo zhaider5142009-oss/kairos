@@ -322,7 +322,12 @@ def live_signals():
 def signal_card(symbol: str, caption: bool = False):
     """Instagram-square PNG signal card; ?caption=1 returns the share text."""
     from fastapi.responses import FileResponse
-    from kairos import signalcard
+    try:
+        from kairos import signalcard
+    except ImportError as e:
+        # the free image ships no matplotlib on purpose; that has to be a
+        # sentence about an extra, not a 500 about a missing module
+        raise HTTPException(501, f"signal cards need `pip install kairos[card]` ({e})") from e
     try:
         path, cap = signalcard.card_for(symbol)
     except Exception as e:
