@@ -16,7 +16,7 @@ appears in one document and not in another, the journals win — and the mistake
 
 ## Standing rules for this pack
 
-1. **No forward track record exists.** 1,525 predictions journaled, 140 horizons matured,
+1. **No forward track record exists.** 1,558 predictions journaled, 140 horizons matured,
    and all 140 were non-trades. Never quote a hit rate; the ledger says "not yet measurable"
    and so must every other document.
 2. **Backtests are labelled backtests**, per instrument, including the 9 unprofitable ones.
@@ -54,11 +54,17 @@ old under a footer saying they were verified that day.
 
 `--write` rewrites the sweep as well as the codebase counts: each instrument's net return,
 buy-and-hold, drawdown and Sharpe, the `profitable`/`unprofitable` verdict words, the HTML
-row colour classes, the `N of M profitable` headline ratio, the loser count and the
-per-venue means. It attributes a figure to the nearest instrument name before it, which is
-also a writing rule — a number that sits further from its own instrument than from another
-one gets charged to the wrong one and the lint says so. Two things stay outside its reach on
-purpose: the dated release notes under `releases/` (frozen at publication, so they keep the
-numbers that were true that day) and `KAIROS_Investor_Deck.pptx` (a binary no tool here
-edits). The deck is re-patched by hand, and any figure it still contradicts is reported by
-running `python tools/kit_stats.py` with no arguments.
+row colour classes, the headline ratio and the loser count — in whichever shape the sentence
+writes them, because "5 of 14 profitable", "profitable on 5 of 14 instruments" and "9 of 14
+instruments in the sweep lost money" are one claim and the first version of the rule only knew
+the glued form — and the per-venue means, which a venue phrase beside the number identifies as
+readily as the word "mean" does. It attributes a figure to the nearest instrument name before
+it, which is also a writing rule — a number that sits further from its own instrument than from
+another one gets charged to the wrong one and the lint says so. Two claims the rewriter cannot
+write, and so refuses: a sentence that denies a figure this directory publishes, and a sentence
+that credits the strategy library with the sweep's own evidence — the one false statement here
+that no digit could reveal, because the number beside it was correct. Both are reported, with
+any contradicted figure, by running `python tools/kit_stats.py` with no arguments. Two things
+stay outside the rewriter's reach on purpose: the dated release notes under `releases/` (frozen
+at publication, so they keep the numbers that were true that day) and
+`KAIROS_Investor_Deck.pptx` (a binary no tool here edits), which is re-patched by hand.

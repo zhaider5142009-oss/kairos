@@ -129,6 +129,29 @@ def test_the_headline_and_the_loser_count_move_together():
     assert out == "1 of 3 instruments profitable, and the other 2 unprofitable.", out
 
 
+def test_a_ratio_counts_the_side_its_nearest_word_names():
+    """The sweep count leaves the word "profitable" a sentence's worth of room.
+
+    Three of the pack's own sentences state the headline without gluing the
+    descriptor to the numbers — "profitable on 8 of 14 instruments", "6 of 14
+    instruments in the walk-forward sweep lost money", "8 of 14 instruments came
+    out net-positive". The first rule matched only the glued form, so those three
+    were neither rewritten nor checked, and two of them shipped a winner count
+    that the ledger no longer printed. A ratio is also not the only pair of
+    numbers in a page: "24/7" and "5 / 8 GB" must survive the rewrite untouched.
+    """
+    for src, want in [
+        ("profitable on 8 of 14 instruments.", "profitable on 1 of 3 instruments."),
+        ("8 of 14 instruments came out net-positive; the PSX book negative.",
+         "1 of 3 instruments came out net-positive; the PSX book negative."),
+        ("6 of 14 instruments in the walk-forward sweep lost money.",
+         "2 of 3 instruments in the walk-forward sweep lost money."),
+        ("Runs 24/7 on a 5 / 8 GB machine.", "Runs 24/7 on a 5 / 8 GB machine."),
+    ]:
+        out, _n = _align(src)
+        assert out == want, (src, out)
+
+
 def test_a_second_pass_has_nothing_left_to_change():
     """Idempotence: the rewritten pack is the ledger's own text, not a new drift."""
     once, _n = _align("| GOLD | profitable | +10.0% | +2.0% | 1.50 |")

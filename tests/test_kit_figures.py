@@ -238,6 +238,25 @@ def test_a_venue_mean_is_checked_against_the_book_it_names():
     assert kit_stats.stale_sweep_quotes(stale), stale
 
 
+def test_a_sweep_ratio_is_checked_wherever_its_word_sits():
+    """A headline count is the same claim whether "profitable" precedes or follows.
+
+    The rule that checked it needed the descriptor glued to the numbers, so the
+    pack's "profitable on 8 of 14 instruments" and "6 of 14 instruments in the
+    walk-forward sweep lost money" were invisible to every pass. The number that
+    counts the losers has to be read as the loser count, and a winner count
+    written where the sentence means losses has to fail the build.
+    """
+    wins, total, losers = kit_stats._ledger_headline()
+    good = {"x.md": f"profitable on {wins} of {total} instruments, and "
+                    f"{losers} of {total} in the sweep lost money.\n"}
+    assert kit_stats.stale_sweep_quotes(good) == []
+    wrong_side = {"x.md": f"{wins} of {total} instruments lost money.\n"}
+    assert kit_stats.stale_sweep_quotes(wrong_side), wrong_side
+    stale = {"x.md": f"profitable on {losers} of {total} instruments.\n"}
+    assert kit_stats.stale_sweep_quotes(stale), stale
+
+
 def test_a_stale_sweep_headline_or_loser_count_is_a_failure():
     """The ratio and the loser count are two claims about one table.
 
@@ -254,6 +273,27 @@ def test_a_stale_sweep_headline_or_loser_count_is_a_failure():
     assert kit_stats.stale_sweep_quotes(stale_wins), stale_wins
     stale_losers = {"x.md": f"the other {int(losers) + 1} unprofitable ones.\n"}
     assert kit_stats.stale_sweep_quotes(stale_losers), stale_losers
+
+
+def test_a_sweep_sentence_may_not_credit_the_strategy_library():
+    """How the evidence was produced is a claim, and the guard only read digits.
+
+    The deck's own cover held "Walk-forward sweep, 100 strategies per instrument"
+    through a full refresh cycle. The sweep fits one blended signal, not the
+    library — but every rule that reads the pack compares a number, so the false
+    noun passed while the 100 beside it was verified as the strategy count.
+    """
+    false = {"x.md": "Walk-forward sweep, 100 strategies per instrument, "
+                     "costs modelled.\n"}
+    assert kit_stats.method_claims(false), false
+    disclosed = {"x.md": "One composite signal per instrument. It is not the "
+                         "100-strategy library, and none of these returns come "
+                         "from it.\n"}
+    assert kit_stats.method_claims(disclosed) == []
+    card = {"x.md": "100 strategies voting into the live consensus; the sweep "
+                    "fits one signal.\n"}
+    assert kit_stats.method_claims(card) == []
+    assert kit_stats.method_claims() == []
 
 
 def test_no_denial_in_the_pack_is_contradicted_by_the_pack():

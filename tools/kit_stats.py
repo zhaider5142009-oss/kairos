@@ -317,6 +317,40 @@ def denials(body_by_file: dict[str, str] | None = None) -> list[str]:
     return out
 
 
+# The sweep fits one blended signal per instrument. It does not fit the
+# 100-strategy library, and that is the most load-bearing sentence in the pack's
+# evidence section — the deck's own cover printed "Walk-forward sweep, 100
+# strategies per instrument" through a full refresh cycle, because every rule in
+# this file checks a *number* and that defect was a noun. How the evidence was
+# produced is a claim, so it is checked as one. Two shapes carry it: a per-strategy
+# count attached to a single instrument, and a sweep verb attached to the library;
+# a sentence that says "not" is the pack's own disclosure, not a contradiction.
+LIBRARY_CREDIT = re.compile(
+    r"\b\d{1,3}[\s\-]?strateg\w*\s+per\s+instrument\b"
+    r"|\bsweep\b[^.!?]{0,40}\bfit(?:s|ting)?\b[^.!?]{0,30}strateg"
+    r"|\bsweep\b[^.!?]{0,40}\b(?:uses|used|ran|trades|traded)\b[^.!?]{0,30}strateg",
+    re.I)
+DENIED = re.compile(r"\b(?:not|never|nor|neither)\b", re.I)
+
+
+def method_claims(body_by_file: dict[str, str] | None = None) -> list[str]:
+    """Pack sentences that credit the strategy library with the sweep's evidence."""
+    bodies = corpus() if body_by_file is None else body_by_file
+    out: list[str] = []
+    for name, raw in bodies.items():
+        if name.endswith(".md") and "/releases/" in name:
+            continue
+        flat = re.sub(r"\s+", " ", raw.replace("\n>", " ").replace("**", " "))
+        for m in LIBRARY_CREDIT.finditer(flat):
+            sentence = _sentence(flat, m.start(), m.end())
+            if DENIED.search(sentence):
+                continue
+            out.append(f'{name}: "{sentence.strip()}" credits the strategy library '
+                       f'with the sweep. The sweep fits one blended signal per '
+                       f'instrument, not the library.')
+    return out
+
+
 # The sweep table under the headline is the part an investor actually reads, and
 # it was copied by hand into five layouts — deck prose, a one-pager table, a
 # whitepaper sentence, a landing-page table and the slides. Nothing checked those
@@ -332,8 +366,19 @@ def denials(body_by_file: dict[str, str] | None = None) -> list[str]:
 SWEEP_ROW = re.compile(r"^\|\s*([A-Z][\w\d]*)\s*\|\s*(\w+)\s*\|\s*([+-][\d.]+%)\s*\|"
                        r"\s*([+-][\d.]+%)\s*\|\s*([+-][\d.]+)\s*\|\s*([\d.]+)\s*\|"
                        r"\s*(\d+)\s*\|\s*([+-][\d.]+%)\s*\|$")
-HEADLINE = re.compile(r"\b(\d{1,2})\s*(?:/|of)\s*(\d{1,2})\s*(?:instruments\s+)?"
-                      r"profitable\b")
+# The sweep ratio, in every shape the pack writes it: "5 / 14 instruments
+# profitable", "profitable on 8 of 14 instruments", "6 of 14 instruments in the
+# walk-forward sweep lost money", "8 of 14 instruments came out net-positive".
+# The first rule needed the word "profitable" glued to the numbers, so three of
+# those four shapes were rewritten by no pass and checked by none — and a count
+# the guard cannot see is a count that ships stale. The denominator is what makes
+# a pair of numbers a sweep ratio; the word nearest to it says which side it counts.
+RATIO = re.compile(r"\b(?P<count>\d{1,2})\s*(?:/|of)\s*(?P<total>\d{1,2})\b")
+WIN_WORDS = (r"(?<!un)profitable", r"net[\s\-]?positive", r"came out positive",
+             r"finished positive", r"made money")
+LOSS_WORDS = (r"lost money", r"loses money", r"losses", r"\blost\b", r"unprofitable",
+              r"not profitable", r"came out negative", r"net[\s\-]?negative")
+RATIO_WINDOW = 60
 # The pack also counts the losers on its own, in four phrasings ("the 6
 # unprofitable ones", "the other 6 are listed", "the 6 instruments where the
 # strategy sweep lost money"). A sweep run moves that number along with the
@@ -517,8 +562,39 @@ def _fix_verdict(m: re.Match, body: str, ctx: dict) -> str:
     return _swap(m, m.group(1), ctx["new"][sym]["verdict"])
 
 
-def _fix_headline(m: re.Match, _body: str, ctx: dict) -> str:
-    return _sw(_swap(m, m.group(1), ctx["wins"]), m.group(2), ctx["total"])
+def _ratio_sense(body: str, m: re.Match) -> str:
+    """Which side of the sweep a ratio counts, from its nearest descriptor."""
+    lo = max(0, m.start() - RATIO_WINDOW)
+    hi = min(len(body), m.end() + RATIO_WINDOW)
+    cut = m.start() - lo
+    best, dist = "", RATIO_WINDOW + 1
+    for words, tag in ((WIN_WORDS, "wins"), (LOSS_WORDS, "losers")):
+        for w in words:
+            for hit in re.finditer(w, body[lo:hi], re.I):
+                d = abs(hit.start() - cut)
+                if d < dist:
+                    best, dist = tag, d
+    return best
+
+
+def _is_ratio_claim(m: re.Match, body: str, total: str) -> bool:
+    """Is this pair of numbers the sweep count, or a clock and a RAM size?"""
+    # A real sweep count can never exceed its own total, and that arithmetic fact
+    # is what keeps "24/7" — which has the word "losses" on either side of it in
+    # the deck — out of the rewrite. The cost is that "99 of 14" is read as a
+    # malformed clock and left alone; mangling an uptime stamp is the worse error.
+    if int(m["count"]) > int(m["total"]):
+        return False
+    if m["total"] == str(total):
+        return True
+    return bool(_ratio_sense(body, m))
+
+
+def _fix_ratio(m: re.Match, body: str, ctx: dict) -> str:
+    if not _is_ratio_claim(m, body, ctx["total"]):
+        return m.group(0)
+    want = ctx["losers"] if _ratio_sense(body, m) == "losers" else ctx["wins"]
+    return _sw(_swap(m, m["count"], want), m["total"], ctx["total"])
 
 
 def _fix_losers(m: re.Match, _body: str, ctx: dict) -> str:
@@ -638,10 +714,16 @@ def stale_sweep_quotes(body_by_file: dict[str, str] | None = None) -> list[str]:
             if sym and m.group(1) != table[sym]["verdict"]:
                 out.append(f'{name}: {sym} is called "{m.group(1)}" in a table cell — '
                            f'the ledger says {table[sym]["verdict"]}')
-        for m in HEADLINE.finditer(body):
-            if (m.group(1), m.group(2)) != (wins, total):
-                out.append(f'{name}: "{m.group(0)}" — the ledger table has '
-                           f'{wins} profitable of {total}')
+        for m in RATIO.finditer(body):
+            if not _is_ratio_claim(m, body, total):
+                continue
+            sense = _ratio_sense(body, m)
+            want = losers if sense == "losers" else wins
+            if (m["count"], m["total"]) != (want, total):
+                out.append(f'{name}: "{m.group(0)}" counts the '
+                           f'{"unprofitable" if sense == "losers" else "profitable"} side '
+                           f'of the sweep — the ledger table has {wins} profitable and '
+                           f'{losers} not, of {total}')
         for m in LOSERS.finditer(body):
             if m.group(1) != losers:
                 out.append(f'{name}: "{m.group(0)}" — the ledger table has '
@@ -680,7 +762,7 @@ def stale_sweep_quotes(body_by_file: dict[str, str] | None = None) -> list[str]:
 
 ALIGNERS = [(PCT, _fix_pct), (SHARPE, _fix_sharpe), (SHARPE_CELL, _fix_sharpe),
             (VERDICT, _fix_verdict),
-            (HEADLINE, _fix_headline), (LOSERS, _fix_losers), (MEAN, _fix_mean)]
+            (RATIO, _fix_ratio), (LOSERS, _fix_losers), (MEAN, _fix_mean)]
 
 
 def align_ctx() -> dict:
@@ -843,7 +925,7 @@ def main() -> int:
         for k in order:
             v = facts.get(k)
             print(f"{k:18} {v:,}" if isinstance(v, int) else f"{k:18} {v}")
-    bad = denials() + stale_sweep_quotes()
+    bad = denials() + method_claims() + stale_sweep_quotes()
     print("\npack claims:      consistent with the pack" if not bad else
           "\npack claims:      CONTRADICTED")
     for line in bad:

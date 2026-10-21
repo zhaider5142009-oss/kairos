@@ -27,7 +27,7 @@ approval for that specific channel, one at a time.*
 >
 > 1. A walk-forward sweep in which one blended signal per instrument is fitted from 2,592
 >    candidate parameter sets on a rolling window and traded only out-of-sample, with
->    Pakistani commission and slippage modelled. 8 of 14 instruments came out net-positive; the PSX
+>    Pakistani commission and slippage modelled. 5 of 14 instruments came out net-positive; the PSX
 >    equity book came out **negative**, mean −2.2%, because fee and slippage drag exceeded
 >    the signal. That cost finding is published rather than buried.
 > 2. An integrity bug I found in my own scorer: it was grading non-trades as correct
@@ -79,7 +79,7 @@ person reads a published failure and replies.*
 >
 > Fix: a snapshot only counts if the score exceeds the entry threshold, only resolves if the
 > horizon's bars exist, and the confidence multiplier is pinned to 1.0 until 10 real
-> directional calls have matured. Eight regression tests. The honest record today: 1,525
+> directional calls have matured. Eight regression tests. The honest record today: 1,558
 > predictions journaled, 140 matured, 0 directional calls, hit rate not yet measurable.
 >
 > Also in there: a council of LLM seats where a dead seat must shrink the council rather

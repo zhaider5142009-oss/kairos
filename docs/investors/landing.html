@@ -71,7 +71,7 @@
     <div><b>12,354</b><small>lines of Python, 37 modules, public</small></div>
     <div><b>100</b><small>strategies selected per instrument, walk-forward</small></div>
     <div><b>6</b><small>configured council seats; a dead one shrinks the vote</small></div>
-    <div><b>283</b><small>passing tests, money path included</small></div>
+    <div><b>286</b><small>passing tests, money path included</small></div>
     <div><b>24/7</b><small>supervised daemon, watchdog, token-gated API</small></div>
   </div>
 </section>
@@ -119,11 +119,11 @@
 <section>
   <h2>What is <em>not</em> proven</h2>
   <ul>
-    <li><b>No directional hit rate exists.</b> 1,525 predictions journaled, 140 horizons
+    <li><b>No directional hit rate exists.</b> 1,558 predictions journaled, 140 horizons
       matured, and every one of the 140 was a non-trade. A non-trade cannot be a correct
       prediction.</li>
     <li>The live paper book is essentially flat: −Rs 13.05 realized on Rs 1,000,000 across
-      210 autopilot cycles, 2 fills.</li>
+      213 autopilot cycles, 2 fills.</li>
     <li>The live order path is built, capped and tested against staging — it has not been
       exercised at scale.</li>
     <li>No audit, no team, no AUM, no regulatory licence, no third-party capital.</li>
@@ -220,7 +220,7 @@
   numbers and the code agree.</p>
   <pre>git clone https://github.com/zhaider5142009-oss/kairos &amp;&amp; cd kairos
 pip install -r requirements.txt
-python -m pytest tests -q                     # 283 tests
+python -m pytest tests -q                     # 286 tests
 python -m kairos.cli backtest GOLD WTI HBL    # reproduce a sweep, costs modelled
 python -m kairos.cli feedback                 # realized record, live from the journal
 python tools/make_track_record.py             # rebuild the published ledger</pre>

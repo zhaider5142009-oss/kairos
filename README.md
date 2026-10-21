@@ -10,7 +10,7 @@ KAIROS forecasts **crypto** (22 majors: BTC, ETH, SOL, BNB, XRP, ADA, DOGE, AVAX
 
 > **Status, stated honestly.** There is **no forward track record yet**: of every prediction
 > that has matured, all were non-trades, so no hit rate exists. The walk-forward sweep is
-> profitable on 8 of 14 instruments and **loses money on PSX equities net of local costs**.
+> profitable on 5 of 14 instruments and **loses money on PSX equities net of local costs**.
 > Numbers are regenerated from the journals by one command — see
 > [docs/investors/TRACK_RECORD.md](docs/investors/TRACK_RECORD.md). Not a fund, not advice,
 > no return promised.
@@ -314,8 +314,8 @@ python -m kairos.cli feedback       # realized record, live
 ```
 
 [docs/investors/](docs/investors/) holds the ledger, a one-pager, the whitepaper and the
-deck. Read the ledger first: there is **no forward track record yet** — 1,525 predictions
-journaled, 140 horizons matured, all 140 non-trades — and 6 of 14 instruments in the
+deck. Read the ledger first: there is **no forward track record yet** — 1,558 predictions
+journaled, 140 horizons matured, all 140 non-trades — and 9 of 14 instruments in the
 walk-forward sweep lost money. That is the honest state of the project, and it is the reason
 the risk layer exists.
 
