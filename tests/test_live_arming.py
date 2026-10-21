@@ -166,9 +166,8 @@ def _zero_book():
     """What the portal hands back when it answers 200 but reads nothing.
 
     `ledger_balance` turns a mis-keyed `GetAccountBalance` into 0.0 rather than
-    an error and `open_positions` swallows a transport failure into an empty
-    list, so a fully degraded account arrives as a healthy-looking zero that
-    raises nothing on the way out.
+    an error, so a fully degraded account can still arrive as a healthy-looking
+    zero that raises nothing on the way out.
     """
     return {"ok": True, "venue": "JS_GLOBAL", "accounts": ["MAIMOONA FARRUKH"],
             "cash": 0.0, "holdings_value": 0.0, "equity": 0.0,
@@ -292,6 +291,169 @@ def test_reconcile_drops_a_position_the_real_book_no_longer_reports(ap):
     ap.st["held"] = {"PPL": {"side": "BUY"}, "OGDC": {"side": "BUY"}}
     ap._reconcile(held, live=True, mt5_up=False, psx_up=True)
     assert set(ap.st["held"]) == {"PPL"}           # sold venue-side -> forgotten
+
+
+# ------------------------------------------- an outage is not a flat account
+def _bridge(fake_terminal):
+    """A bridge wired to a fake terminal: no MetaTrader5, no network."""
+    from kairos.execution import Mt5Bridge
+    b = Mt5Bridge()
+    b.connected = True
+    b._mt5 = fake_terminal
+    return b
+
+
+class _NoTerminal:
+    @staticmethod
+    def positions_get():
+        return None                    # MetaTrader's "the request failed"
+
+
+class _FlatTerminal:
+    @staticmethod
+    def positions_get():
+        return ()                      # the terminal's "you hold nothing"
+
+
+def test_a_failed_position_retrieve_is_not_an_empty_account():
+    """The bridge collapsed two different answers into one.
+
+    `positions_get()` returns None when the request failed and an empty tuple
+    when the account really is flat. Turning the first into the second made a
+    dead terminal look like a flat book: the max-positions and exposure
+    breakers both passed on an empty list, and reconciliation deleted the
+    managed live entries it was supposed to be watching.
+    """
+    assert _bridge(_NoTerminal()).positions() is None
+    assert _bridge(_FlatTerminal()).positions() == []
+
+
+def test_the_account_snapshot_reports_unknown_positions_as_unknown():
+    from types import SimpleNamespace
+
+    class _Term:
+        @staticmethod
+        def account_info():
+            return SimpleNamespace(login=1234, name="TEST", server="srv",
+                                   currency="USD", equity=1000.0, balance=900.0,
+                                   margin_free=800.0, leverage=100, profit=0.0)
+
+        @staticmethod
+        def positions_get():
+            return None
+
+    acct = _bridge(_Term()).account()
+    assert acct["open_positions"] is None
+    assert acct["equity"] == 1000.0
+
+
+def test_venue_positions_are_unknown_when_a_venue_refuses(ap, monkeypatch):
+    monkeypatch.setattr(ap.mt5, "positions", lambda: None)
+    assert ap._venue_positions(True, _book()) is None
+    # an answered-empty list is still the fact it always was
+    monkeypatch.setattr(ap.mt5, "positions", lambda: [])
+    assert {r["symbol"] for r in ap._venue_positions(True, _book())} == {"OGDC", "PPL"}
+
+
+def test_a_fused_account_never_invents_a_position_count(ap, monkeypatch):
+    """MT5 unreadable + PSX readable must not sum to a plausible flat number."""
+    monkeypatch.setattr(ap.mt5, "account", lambda: {
+        "venue": "MT5", "equity": 1000.0, "balance": 900.0, "day_pnl": 10.0,
+        "open_positions": None})
+    acct = ap._live_account(True, _book())
+    assert acct["open_positions"] is None
+    assert acct["equity"] == 11681.68
+
+
+def test_reconcile_keeps_managed_entries_when_the_venue_was_not_read(ap):
+    """Forgetting a live trade because a read failed is worse than keeping it."""
+    ap.st["held"] = {"GOLD": {"side": "BUY"}, "PPL": {"side": "BUY"}}
+    ap._reconcile({}, live=True, mt5_up=True, psx_up=True, pos_known=False)
+    assert set(ap.st["held"]) == {"GOLD", "PPL"}
+
+
+def test_an_unreadable_position_list_blocks_instead_of_showing_flat(ap, monkeypatch):
+    _loss_rules(monkeypatch)
+    acct = ap._psx_part(_book())
+    posture = ap._risk_posture(acct, None)
+    assert posture["block_entries"] is True
+    assert any("exposure" in b.lower() for b in posture["blockers"])
+    assert posture["exposure_pct"] is None
+    assert posture["n_positions"] is None
+    # a genuinely flat account still reports zero, not unknown
+    clear = ap._risk_posture(acct, [])
+    assert clear["exposure_pct"] == 0.0
+    assert clear["n_positions"] == 0
+    assert not any("exposure" in b.lower() for b in clear["blockers"])
+
+
+class _Portal:
+    """Stub for `jsgsync._get`, keyed by endpoint path."""
+
+    def __init__(self, **answers):
+        self.answers = answers
+        self.calls: list[str] = []
+
+    def __call__(self, path, params=None):
+        self.calls.append(path)
+        v = self.answers[path]
+        if isinstance(v, Exception):
+            raise v
+        return v
+
+
+def _portal(monkeypatch, **answers):
+    p = _Portal(**answers)
+    monkeypatch.setattr(jsgsync, "_get", p)
+    monkeypatch.setattr(jsgsync, "accounts", lambda: [
+        {"accountNo": "99999", "accountName": "TEST HOLDER"}])
+    monkeypatch.setattr(jsgsync, "ledger_balance", lambda no: 6500.52)
+    jsgsync.invalidate_book()
+    return p
+
+
+def test_a_failing_holdings_view_raises_instead_of_reporting_flat(monkeypatch):
+    """`real_book` promised a transport failure raises; the views disagreed.
+
+    Both endpoints swallowed any exception into None and returned an empty
+    list, so a portal that answered nothing looked like an account holding
+    nothing — and because cash was still readable, the book arrived as a
+    plausible funded, flat one that every circuit breaker accepted.
+    """
+    _portal(monkeypatch, **{"/Home/GetOpenPosition": [],
+                            "/Home/GetCollaterals": jsgsync.JsGlobalError("502")})
+    with pytest.raises(jsgsync.JsGlobalError):
+        jsgsync.real_book()
+
+
+def test_a_successful_empty_answer_is_still_a_fact(monkeypatch):
+    """Null on the wire after a 200 is the account saying it holds nothing."""
+    _portal(monkeypatch, **{"/Home/GetOpenPosition": None,
+                            "/Home/GetCollaterals": []})
+    assert jsgsync.open_positions("99999", "TEST HOLDER") == []
+
+
+def test_a_partial_portal_read_stands_the_venue_down(ap, monkeypatch):
+    """The same money path the desk walks, end to end and offline."""
+    calls = _logged(ap, monkeypatch)
+    _portal(monkeypatch, **{"/Home/GetOpenPosition": jsgsync.JsGlobalError("timeout"),
+                            "/Home/GetCollaterals": []})
+    assert ap._psx_book() is None
+    assert ap._psx_down is True
+    assert [c[0] for c in calls] == ["AUTOPILOT_VENUE_LOSS"]
+
+
+def test_sync_prunes_nothing_when_a_view_fails(ap, monkeypatch):
+    """A failed read must not release positions the live book is watching."""
+    from kairos import livebook
+    livebook.add("OGDC", 3, 316.92)
+    _portal(monkeypatch, **{"/Home/GetOpenPosition": [],
+                            "/Home/GetCollaterals": jsgsync.JsGlobalError("503")})
+    monkeypatch.setattr(jsgsync, "pending_orders", lambda acc: [])
+    with pytest.raises(jsgsync.JsGlobalError):
+        jsgsync.sync()
+    assert "OGDC" in livebook.positions()
+    livebook.remove("OGDC")
 
 
 # ---------------------------------------------------------- venue failure

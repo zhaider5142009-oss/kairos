@@ -226,7 +226,7 @@ class Autopilot:
         held = {p["symbol"].upper(): p for p in (pos_list or [])}
         # the venue is the source of truth: drop managed entries it no
         # longer reports (manual close, broker-side stop hit, restart drift)
-        self._reconcile(held, live, mt5_up, psx_up)
+        self._reconcile(held, live, mt5_up, psx_up, pos_known=pos_list is not None)
         posture = self._risk_posture(acct, pos_list)
         with self._lock:
             self._posture = posture
@@ -469,14 +469,19 @@ class Autopilot:
 
     # ------------------------------------------------- reconciliation & posture
     def _reconcile(self, held: dict[str, Any], live: bool, mt5_up: bool = True,
-                   psx_up: bool = False) -> None:
+                   psx_up: bool = False, pos_known: bool = True) -> None:
         """Trust the venue over our memory: a managed entry the venue no
         longer reports is dropped (manual close / broker-side stop hit).
 
         Only venues with a snapshot this cycle are authoritative — forgetting
         a live trade because a terminal was briefly closed is worse than
-        keeping it.
+        keeping it. `pos_known` is the same rule one level finer: a venue that
+        was up but whose position read failed hands back an empty `held` that
+        says nothing at all, and dropping the entries then leaves a live trade
+        being traded with nobody managing its stop.
         """
+        if not pos_known:
+            return
         from .universe import resolve
         for key in list(self.st["held"].keys()):
             inst = resolve(key)
@@ -498,8 +503,7 @@ class Autopilot:
         like zero equity would have let every circuit breaker pass. So a book
         that does not describe a funded account is a venue loss too, even when
         the portal raised nothing on the way out — `ledger_balance` answers a
-        mis-keyed query with 0.0 instead of an error and `open_positions`
-        swallows a transport failure into an empty list, which together can
+        mis-keyed query with 0.0 instead of an error, which alone is enough to
         hand back exactly the outage-shaped zero this function exists to stop.
         """
         from . import jsgsync
@@ -573,17 +577,34 @@ class Autopilot:
             return None
         if len(parts) == 1:
             return parts[0]
+        counts = [p.get("open_positions") for p in parts]
         return {"venue": "+".join(str(p.get("venue")) for p in parts),
                 "balance": round(sum(float(p.get("balance") or 0) for p in parts), 2),
                 "equity": round(sum(float(p.get("equity") or 0) for p in parts), 2),
                 "day_pnl": round(sum(float(p.get("day_pnl") or 0) for p in parts), 2),
-                "open_positions": sum(int(p.get("open_positions") or 0) for p in parts)}
+                # one venue that could not count its positions makes the total
+                # unknown; summing it as zero would print a flat account
+                "open_positions": (None if any(c is None for c in counts)
+                                   else sum(int(c or 0) for c in counts))}
 
     def _venue_positions(self, mt5_up: bool,
-                         book: dict[str, Any] | None) -> list[dict[str, Any]]:
+                         book: dict[str, Any] | None,
+                         ) -> list[dict[str, Any]] | None:
+        """Every live position, or None when a venue that was up could not read.
+
+        None and [] are different facts and the whole risk picture turns on
+        which one it is: [] says the broker answered "flat" and lets the
+        exposure breaker pass, None says nobody answered. The terminal used to
+        be folded into the first, so a dead MT5 link zeroed gross exposure,
+        cleared the position-count cap and let reconciliation forget the live
+        trades it was supposed to be managing.
+        """
         out: list[dict[str, Any]] = []
         if mt5_up:
-            out.extend(self.mt5.positions() or [])
+            poss = self.mt5.positions()
+            if poss is None:
+                return None
+            out.extend(poss)
         for h in (book or {}).get("holdings", []):
             out.append({"symbol": h["symbol"], "side": "BUY", "qty": h["qty"],
                         "entry": h["avg"], "last": h["mtm"],
@@ -598,10 +619,12 @@ class Autopilot:
         r = _R.rules()
         eq = float((acct or {}).get("equity") or 0)
         day = float((acct or {}).get("day_pnl") or 0)
+        pos_unknown = pos_list is None
         gross = sum(abs(float(p.get("qty") or 0))
                     * float(p.get("last") or p.get("entry") or 0)
                     for p in (pos_list or []))
-        exposure_pct = gross / eq * 100 if eq > 0 else 0.0
+        exposure_pct = (None if pos_unknown or eq <= 0
+                        else gross / eq * 100)
         consec = int(self.st.get("consec_losses") or 0)
         blockers = []
         if eq <= 0:
@@ -610,10 +633,14 @@ class Autopilot:
             # working ones. The gate still refuses the order; the posture says
             # so too, instead of reporting a clean risk picture it never had.
             blockers.append("no usable equity figure — venues unreadable")
+        if pos_unknown:
+            blockers.append("position list unreadable — exposure unknown, "
+                            "not flat")
         if eq > 0 and day < -float(r["max_daily_loss_pct"]) / 100 * eq:
             blockers.append(f"daily loss {day:,.0f} breached the "
                             f"-{r['max_daily_loss_pct']}% breaker")
-        if exposure_pct > float(r["max_total_exposure_pct"]):
+        if exposure_pct is not None and \
+                exposure_pct > float(r["max_total_exposure_pct"]):
             blockers.append(f"gross exposure {exposure_pct:.0f}% past the "
                             f"{r['max_total_exposure_pct']}% cap")
         if consec >= int(r["max_consecutive_losses"]):
@@ -633,8 +660,10 @@ class Autopilot:
                     blockers.append(f"equity {dd_pct:.1f}% under peak "
                                     f"{peak:,.0f} — drawdown guard active")
         return {"equity": eq, "day_pnl": day,
-                "exposure_pct": round(exposure_pct, 1),
-                "consec_losses": consec, "n_positions": len(pos_list or []),
+                "exposure_pct": None if exposure_pct is None
+                                    else round(exposure_pct, 1),
+                "consec_losses": consec,
+                "n_positions": None if pos_unknown else len(pos_list),
                 "equity_peak": round(max(peak, eq), 2),
                 "dd_from_peak_pct": round(dd_pct, 2),
                 "block_entries": bool(blockers), "blockers": blockers}

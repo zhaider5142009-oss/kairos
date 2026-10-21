@@ -489,8 +489,11 @@ class Mt5Bridge:
         if raw is None:
             self.connected = False
             return None
+        poss = self.positions()
+        # None travels onward: a snapshot that invents a zero count for a read
+        # it could not make is what makes the account look flat.
         raw.update({"venue": "MT5", "day_pnl": raw.get("profit", 0.0),
-                    "open_positions": len(self.positions() or [])})
+                    "open_positions": None if poss is None else len(poss)})
         return raw
 
     def positions(self) -> list[dict[str, Any]] | None:
@@ -499,7 +502,15 @@ class Mt5Bridge:
         try:
             poss = self._mt5.positions_get()
             if poss is None:
-                return []
+                # MetaTrader spells two different answers with two different
+                # objects: None means the request failed, an empty tuple means
+                # the account holds nothing. Returning [] here made a dead
+                # terminal indistinguishable from a flat one, and every
+                # consumer downstream reads an empty list as a fact — the
+                # exposure and max-positions breakers pass on it, and
+                # reconciliation forgets the live trades it was managing.
+                self.last_error = "positions_get() returned no data"
+                return None
             return [{"symbol": p.symbol, "side": "BUY" if p.type == 0 else "SELL",
                      "qty": float(p.volume), "entry": float(p.price_open),
                      "last": float(p.price_current), "pnl": float(p.profit),

@@ -29,12 +29,12 @@ Built by one operator, running 24/7, publishing its own losses.
 
 | | |
 |---|---|
-| Code | 12,538 lines Python · 37 modules · public repo |
+| Code | 12,596 lines Python · 37 modules · public repo |
 | Strategies | 100 voting into the live consensus; the sweep fits one blended signal, not the library |
 | Council | 6 configured LLM seats across 2 providers; a dead seat shrinks the council |
 | Execution | paper + JS Global PSX bridge + MT5 |
 | Uptime | 24/7 daemon, watchdog, token-gated public API |
-| Tests | 309 passing, money path included |
+| Tests | 319 passing, money path included |
 
 Not a fund. No client money. No licence. No AUM.
 
@@ -67,9 +67,9 @@ conviction.
 
 ## 6. What is *not* proven
 
-- **No forward track record.** 1,687 predictions journaled, 140 horizons matured, all 140 were
+- **No forward track record.** 1,709 predictions journaled, 140 horizons matured, all 140 were
   non-trades. A directional hit rate does not yet exist.
-- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 224 cycles, 2 fills.
+- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 226 cycles, 2 fills.
 - Live execution path is built and gated, not exercised at scale.
 - No audit, no team, no third-party capital.
 
@@ -184,6 +184,20 @@ cycle — the cycle in which every *other* position's stop and target were meant
 Finiteness is now tested **before** bounds, on both the shared gate and the order bridge; a
 price at or below zero is refused where it is read, before anything is fitted or sized; and a
 screen that cannot see now answers *reject* instead of *pass*.
+
+Three more came from the same path read one level further out, and they fit neither shape above:
+an **outage answering in a way that reads as a fact about the account**. MetaTrader spells a
+failed retrieve as None and a genuinely flat account as an empty list, and the bridge translated
+the first into the second; the broker's two holdings views wrapped their portal call in
+`except Exception: data = None`, so a timeout contributed no rows and — with the cash leg still
+readable — handed back a funded book that was plausible and empty. What sits downstream of that
+translation is the sum and the length the desk publishes: a fused read printed zero percent gross
+exposure and cleared the position cap, while reconciliation, whose own documented rule is that an
+unreachable venue must not erase memory, applied that rule to the *terminal* but not to the *read*
+and dropped live trades whose stop nobody then owned. None is now its own answer all the way to
+the gate: an unknown exposure blocks entries and says so on the page, a view that could not be
+read raises instead of arriving empty, and forgetting a managed trade requires a read to base it
+on.
 
 **A system that audits its own performance numbers is the product.** Everything else is a
 chart.

@@ -170,47 +170,63 @@ def accounts() -> list[dict[str, Any]]:
     return _accounts(_sess())
 
 
+def _view(path: str, params: dict, label: str) -> list[dict[str, Any]]:
+    """One portal view as raw rows — a raise for anything that is not an answer.
+
+    Three replies are distinguishable and have to stay that way: a list is the
+    holdings, null after a 200 is the account saying it holds nothing, and
+    everything else — a timeout, a 5xx, a body that is neither — is an outage.
+    The old code folded the third into the second, so a portal that answered
+    nothing looked like an account holding nothing, and with cash still
+    readable the book arrived as a plausible funded, flat one that every
+    circuit breaker on the money path accepted.
+    """
+    try:
+        data = _get(path, params)
+    except JsGlobalAuthError:
+        raise
+    except Exception as exc:
+        raise JsGlobalError(f"{label} unreadable: {str(exc)[:120]}") from exc
+    if data is None:
+        return []
+    if not isinstance(data, list):
+        raise JsGlobalError(f"{label} returned no position list "
+                            f"({str(data)[:60]!r})")
+    return data
+
+
 def open_positions(account_no: str, account_name: str) -> list[dict[str, Any]]:
     """Normalized net holdings from both broker views.
 
     GetOpenPosition keys on the account NAME; GetCollaterals (the margin /
     portfolio book where JS Global actually shows holdings) keys on the
     account NUMBER. Row shapes differ — collapse to symbol/qty/avg/mtm.
+
+    Raises `JsGlobalError` when a view cannot be read; an empty list means the
+    broker was reached and reported nothing.
     """
     rows: list[dict[str, Any]] = []
-    try:
-        data = _get("/Home/GetOpenPosition", {"account": account_name})
-    except JsGlobalAuthError:
-        raise
-    except Exception:
-        data = None
-    if isinstance(data, list):
-        for r in data:
-            try:
-                rows.append({"symbol": str(r.get("symbol") or "").upper(),
-                             "qty": float(str(r.get("netQty") or 0).replace(",", "")),
-                             "avg": float(str(r.get("average") or 0).replace(",", "")),
-                             "pending_sell": 0.0, "mtm": None, "market": r.get("market"),
-                             "source": "open"})
-            except (TypeError, ValueError):
-                continue
-    try:
-        data = _get("/Home/GetCollaterals", {"account": account_no})
-    except JsGlobalAuthError:
-        raise
-    except Exception:
-        data = None
-    if isinstance(data, list):
-        for r in data:
-            try:
-                rows.append({"symbol": str(r.get("symbol") or "").upper(),
-                             "qty": float(str(r.get("quantityTotal") or 0).replace(",", "")),
-                             "avg": float(str(r.get("avgRateBuy") or 0).replace(",", "")),
-                             "pending_sell": float(str(r.get("pendingSell") or 0).replace(",", "")),
-                             "mtm": r.get("mtmPrice"), "market": r.get("market"),
-                             "source": "collateral"})
-            except (TypeError, ValueError):
-                continue
+    for r in _view("/Home/GetOpenPosition", {"account": account_name},
+                   "GetOpenPosition"):
+        try:
+            rows.append({"symbol": str(r.get("symbol") or "").upper(),
+                         "qty": float(str(r.get("netQty") or 0).replace(",", "")),
+                         "avg": float(str(r.get("average") or 0).replace(",", "")),
+                         "pending_sell": 0.0, "mtm": None, "market": r.get("market"),
+                         "source": "open"})
+        except (TypeError, ValueError, AttributeError):
+            continue
+    for r in _view("/Home/GetCollaterals", {"account": account_no},
+                   "GetCollaterals"):
+        try:
+            rows.append({"symbol": str(r.get("symbol") or "").upper(),
+                         "qty": float(str(r.get("quantityTotal") or 0).replace(",", "")),
+                         "avg": float(str(r.get("avgRateBuy") or 0).replace(",", "")),
+                         "pending_sell": float(str(r.get("pendingSell") or 0).replace(",", "")),
+                         "mtm": r.get("mtmPrice"), "market": r.get("market"),
+                         "source": "collateral"})
+        except (TypeError, ValueError, AttributeError):
+            continue
     return rows
 
 

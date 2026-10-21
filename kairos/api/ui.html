@@ -746,7 +746,7 @@ async function loadDesk(){
     $('#driskmeta').textContent=`as of cycle ${d.cycles}`;
     $('#drisk').innerHTML=`<div class="grid g4">
       <div><div class="dim" style="font-size:12px">Day P&L</div><div class="big ${((rp.day_pnl||0)>=0)?'up':'down'}" style="font-size:20px">${(rp.day_pnl||0)>=0?'+':''}${num(rp.day_pnl||0,0)}</div></div>
-      <div><div class="dim" style="font-size:12px">Gross exposure</div><div class="big" style="font-size:20px">${rp.exposure_pct??0}%</div></div>
+      <div><div class="dim" style="font-size:12px">Gross exposure</div><div class="big" style="font-size:20px">${rp.exposure_pct==null?'unreadable':rp.exposure_pct+'%'}</div></div>
       <div><div class="dim" style="font-size:12px">Consecutive losses</div><div class="big" style="font-size:20px">${rp.consec_losses??0}</div></div>
       <div><div class="dim" style="font-size:12px">Circuit breakers</div><div style="margin-top:4px">${rp.block_entries?'<span class="tag warn">ENTRIES PAUSED</span>':'<span class="tag ok">clear</span>'}</div></div>
     </div>${(rp.blockers||[]).map(b=>`<div class="down" style="font-size:13px;margin-top:8px">⚠ ${esc(b)}</div>`).join('')}`;
