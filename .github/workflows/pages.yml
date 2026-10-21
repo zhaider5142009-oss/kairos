@@ -1,0 +1,98 @@
+name: Pages
+
+# The landing page is the only part of KAIROS a stranger should have to read
+# before they clone anything, and until now it was a file inside a repository.
+# This publishes it as a site: no build step, no Node, no dependency beyond the
+# test extra.
+#
+# One-time manual step: Settings → Pages → Build and deployment → Source:
+# "GitHub Actions". The token this workstation is configured with has no `pages`
+# scope, so the switch cannot be flipped from here; the deploy job then fails
+# loudly instead of reporting a site that does not exist.
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "docs/investors/**"
+      - "kairos/**"
+      - "tests/**"
+      - "tools/**"
+      - "pyproject.toml"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install (core + test extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+
+      - name: Gate 1 — the pack's figures are the repository's figures
+        # Evidence figures come from the committed ledger, codebase figures from
+        # this checkout, so the guard works on a runner that has no journals.
+        run: pytest tests/test_kit_figures.py -q
+
+      - name: Gate 2 — the page is the page it claims to be
+        run: |
+          python - <<'PY'
+          import pathlib, sys
+          page = pathlib.Path("docs/investors/landing.html").read_text(encoding="utf-8")
+          low = page.lower()
+          for banned in ("guaranteed return", "risk-free", "passive income",
+                         "double your", "consistent profit", "we will beat",
+                         "no risk"):
+              if banned in low:
+                  sys.exit(f"refusing to publish: the page advertises {banned!r}")
+          for needed in ("not investment advice", "no forward track record",
+                         "github.com/zhaider5142009-oss/kairos"):
+              if needed.lower() not in low:
+                  sys.exit(f"refusing to publish: the page is missing {needed!r}")
+          print("disclaimers present, source linked, no promised returns")
+          PY
+
+      - name: Assemble the site
+        run: |
+          mkdir -p _site
+          cp docs/investors/landing.html _site/index.html
+          # a reviewer who wants the evidence should not have to clone: the
+          # generated ledger travels with the page as plain text
+          cp docs/investors/TRACK_RECORD.md _site/TRACK_RECORD.md
+          cp docs/investors/WHITEPAPER.md _site/WHITEPAPER.md
+          cp LICENSE _site/LICENSE
+          ls -la _site
+
+      - uses: actions/configure-pages@v4
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.out.outputs.page_url }}
+    steps:
+      - name: Published
+        id: out
+        uses: actions/deploy-pages@v4

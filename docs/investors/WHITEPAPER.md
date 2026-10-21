@@ -157,7 +157,7 @@ adjustment), and six instruments reported as losses.
 important finding in the project: the edge, if any, is in the global and commodity books,
 and any PSX strategy must be sized against costs before it is sized against conviction.
 
-The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 186
+The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 188
 autopilot cycles) with two fills. That is a system working as designed on a low-conviction
 market, not a strategy proving itself.
 

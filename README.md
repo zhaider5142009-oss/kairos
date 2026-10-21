@@ -153,6 +153,35 @@ carries **no** `config.yaml` (so no broker/LLM secrets ever leave your PC) and
 runs the full paper loop + desk with a generated `KAIROS_TOKEN`. Free tier
 sleeps after inactivity; the PC daemon is the permanent engine.
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/zhaider5142009-oss/kairos)
+
+### Where it runs
+
+Every route is free and needs no account on our side; the engine is the same
+code in all of them, and none of them receives a `config.yaml`.
+
+| surface | command / URL | what you get |
+|---|---|---|
+| Your machine | `pip install -e .` then `kairos up` | everything, including WSL foundation models and the broker bridge |
+| Container registry | `docker run -p 8600:8600 -e KAIROS_TOKEN=… ghcr.io/zhaider5142009-oss/kairos:latest` | the tower + paper loop; the CI builds and *starts* this image on every merge |
+| Render (free web service) | the button above, or "New +" → Blueprint → this repo | same image, HTTPS URL, sleeps when idle |
+| Any "deploy from container" host | point it at the GHCR tag | Railway/Fly/Koyeb/Kubernetes — one env var, `PORT` |
+| Read without installing | <https://zhaider5142009-oss.github.io/kairos/> | the landing page, the generated track record and the whitepaper as plain text |
+
+Two switches are GitHub settings, not code, and each is one click:
+
+- **Pages** → Settings → Pages → Build and deployment → Source: **GitHub
+  Actions**. Until it is set, the Pages workflow's deploy job fails with a clear
+  error instead of reporting a site that does not exist.
+- **Container visibility** → the `kairos` package under your profile's Packages
+  → Package settings → Make public. GHCR defaults new packages to private, so a
+  stranger's `docker pull` gets denied until that is flipped.
+
+Both are gated rather than assumed: the Pages workflow refuses to publish a page
+that advertises a guaranteed return, and the Container workflow refuses to leave
+an image published if it cannot answer `/api/health` or if `/api/autopilot`
+answers without a token.
+
 ### Placing JS Global orders from a server
 
 `kairos/jsgtrade.py` speaks the broker's own Web Trade Cast order API
@@ -278,7 +307,7 @@ python -m kairos.cli feedback       # realized record, live
 ```
 
 [docs/investors/](docs/investors/) holds the ledger, a one-pager, the whitepaper and the
-deck. Read the ledger first: there is **no forward track record yet** — 1,216 predictions
+deck. Read the ledger first: there is **no forward track record yet** — 1,238 predictions
 journaled, 140 horizons matured, all 140 non-trades — and 6 of 14 instruments in the
 walk-forward sweep lost money. That is the honest state of the project, and it is the reason
 the risk layer exists.

@@ -7,7 +7,7 @@ services:
     healthCheckPath: /api/health
     autoDeploy: true
     envVars:
-      - key: KAIROS_TOKEN        # gates every POST/PUT/DELETE; reads stay public
+      - key: KAIROS_TOKEN        # gates every path except /api/health, reads too
         generateValue: true
       # The JS Global bridge is drivable from secrets instead of config.yaml.
       # Only add these on a server you control: with JSG_ALLOW_ORDERS=1 and a

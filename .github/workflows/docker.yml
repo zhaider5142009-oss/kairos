@@ -1,0 +1,83 @@
+name: Container
+
+# The image is built here, not on a laptop: the free developer machine that
+# runs KAIROS has no Docker daemon, and an image nobody can pull is not a
+# deployment option. Publishes to ghcr.io on every merge to main and on every
+# version tag, so `docker run ghcr.io/<owner>/kairos:v2.6.1` is a real command.
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Prove the image starts
+        # a pushed image that crash-loops on `docker run` is worse than no
+        # image: every free host that offers "deploy from container" would
+        # point at it. Pull it back out of the registry rather than reusing a
+        # local build — this proves the artifact strangers actually receive.
+        # Serve answers /api/health without data, keys or WSL.
+        run: |
+          set -e
+          IMAGE="${{ fromJSON(steps.meta.outputs.json).tags[0] }}"
+          docker pull "$IMAGE"
+          docker run --rm -d --name k -p 8600:8600 \
+            -e KAIROS_TOKEN=ci-probe-token "$IMAGE"
+          for i in $(seq 1 40); do
+            sleep 3
+            curl -sf http://127.0.0.1:8600/api/health > /tmp/h.json && break
+            [ "$i" = 40 ] && { docker logs k; exit 1; }
+          done
+          # the shape is what a host's health check reads; "ok" may honestly be
+          # false on a sandboxed runner with no market feed, so assert the fields
+          python3 -c "
+          import json,sys
+          h=json.load(open('/tmp/h.json'))
+          for k in ('ok','market_data','llm','universe_size'):
+              assert k in h, f'/api/health is missing {k}'
+          "
+          # the token must gate the desk, or a deployed tower exposes a portfolio
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8600/api/autopilot)
+          echo "unauthenticated /api/autopilot -> $code"
+          test "$code" = "401" || { docker logs k; exit 1; }
+          docker stop k

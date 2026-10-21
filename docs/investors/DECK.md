@@ -29,7 +29,7 @@ Built by one operator, running 24/7, publishing its own losses.
 
 | | |
 |---|---|
-| Code | 11,835 lines Python · 36 modules · public repo |
+| Code | 12,195 lines Python · 37 modules · public repo |
 | Strategies | 100, selected per instrument by walk-forward search |
 | Council | 6 configured LLM seats across 2 providers; a dead seat shrinks the council |
 | Execution | paper + JS Global PSX bridge + MT5 |
@@ -66,9 +66,9 @@ conviction.
 
 ## 6. What is *not* proven
 
-- **No forward track record.** 1,216 predictions journaled, 140 horizons matured, all 140 were
+- **No forward track record.** 1,238 predictions journaled, 140 horizons matured, all 140 were
   non-trades. A directional hit rate does not yet exist.
-- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 186 cycles, 2 fills.
+- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 188 cycles, 2 fills.
 - Live execution path is built and gated, not exercised at scale.
 - No audit, no team, no third-party capital.
 
