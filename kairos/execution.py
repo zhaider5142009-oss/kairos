@@ -14,6 +14,7 @@ Design doctrine (institutional):
 from __future__ import annotations
 
 import json
+import math
 import sys
 import time
 import uuid
@@ -150,7 +151,21 @@ class RiskGate:
             return False, "kill switch engaged"
         if intent.client_order_id in self._seen_coids:
             return False, f"duplicate order {intent.client_order_id}"
-        if intent.quantity <= 0 or intent.quantity > lim["max_qty"]:
+        # Finiteness before bounds. Every check on this path asks whether one
+        # number is past another, and a NaN answers no to all of them, so a
+        # hole in the feed used to clear both bounds and the value check below
+        # — and a NaN fill lands in the same paper book the published track
+        # record is read from.
+        try:
+            qty = float(intent.quantity)
+            lp = (None if intent.limit_price is None
+                  else float(intent.limit_price))
+        except (TypeError, ValueError):
+            return False, "quantity/limit_price are not numbers"
+        if not math.isfinite(qty) or (lp is not None and not math.isfinite(lp)):
+            return False, (f"unusable order numbers (qty {qty!r}, "
+                           f"price {lp!r})")
+        if qty <= 0 or qty > lim["max_qty"]:
             return False, f"quantity out of bounds: {intent.quantity}"
         if intent.side not in ("BUY", "SELL"):
             return False, f"invalid side {intent.side}"
@@ -175,7 +190,7 @@ class RiskGate:
         if day_pnl < -lim["daily_loss_limit"] * equity:
             return False, (f"daily loss limit hit: {day_pnl:,.0f} "
                            f"< -{lim['daily_loss_limit']:.0%} x {equity:,.0f}")
-        order_value = intent.quantity * (intent.limit_price or 0.0)
+        order_value = qty * (lp or 0.0)
         if intent.order_type == "MARKET":
             order_value = None                       # market: rely on qty checks
         elif order_value and order_value > lim["max_order_value_pct"] * 10 * equity:

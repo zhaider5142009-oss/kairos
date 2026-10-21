@@ -26,14 +26,17 @@ move:
   2. the trading PIN                             (per-order human knowledge)
 
 Fail-closed extras: the kill switch blocks every stage/ack/placed/cancel;
-per-order notional cap; broker price band; PINs are never logged, never
-journalled, never returned by any endpoint. PMX is not wired here — PMX flow
-remains tickets only.
+per-order notional cap; broker price band — a stage the band table cannot
+cover is journalled as unchecked rather than passing silently; qty and price
+must be finite numbers; PINs are never logged, never journalled, never
+returned by any endpoint. PMX is not wired here — PMX flow remains tickets
+only.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import re
 import time
 import uuid
@@ -147,7 +150,15 @@ def stage(symbol: str, side: str, qty: float, price: float,
     if otype is None:
         raise JsGlobalError(f"unknown order type {order_type} "
                             f"(want {'/'.join(ORDER_TYPES)})")
-    qty, price = int(float(qty)), round(float(price), 2)
+    qty, price = float(qty), float(price)
+    # Checked before anything else, and not by comparison: every guard below
+    # asks a question of the form "is this number past that one", and a NaN
+    # answers no. A hole in the price feed therefore cleared the positivity
+    # check, the notional cap and the band at once and went to the broker.
+    if not (math.isfinite(qty) and math.isfinite(price)):
+        raise JsGlobalError(f"order needs finite numbers — qty {qty!r}, "
+                            f"price {price!r}")
+    qty, price = int(qty), round(price, 2)
     if qty <= 0:
         raise JsGlobalError("quantity must be a positive whole number of shares")
     if price <= 0:
@@ -168,6 +179,14 @@ def stage(symbol: str, side: str, qty: float, price: float,
         if not (lo <= price <= hi):
             raise JsGlobalError(f"{sym} price {price} is outside the broker's "
                                 f"band {lo}–{hi} (lower lock / upper cap)")
+    else:
+        # The caps table is a portal call, and a failed one is cached for five
+        # minutes because each retry means another login and this account locks
+        # out on repetition — so an order can legitimately go out with the band
+        # unread, the broker enforcing it instead. It must not go out looking,
+        # in the trail, as though the guard had run.
+        JOURNAL.log("JSG_BAND_UNCHECKED", {"symbol": sym, "market": mkt,
+                                           "price": price})
 
     wire = otype[1] if bside in ("SEL", "SHS") else otype[0]
     row = {"id": uuid.uuid4().hex[:8], "t": time.time(),

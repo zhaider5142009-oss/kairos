@@ -131,6 +131,24 @@ def test_a_negative_equity_fails_closed_instead_of_blinding_the_loss_check(gate)
         assert not ok, f"{acct} must not be allowed to trade"
 
 
+def test_an_unusable_number_stops_at_the_gate(gate):
+    """Bounds are comparisons, and NaN loses every comparison there is.
+
+    `quantity <= 0 or quantity > max` reads False for a NaN, so a hole in the
+    feed cleared both bounds; the limit-price check multiplies the figure and
+    then compares it — also False. This is the gate every venue's order passes
+    through, paper included, and a NaN fill lands in the same book the
+    published track record is read from.
+    """
+    for kw in ({"quantity": float("nan")},
+               {"quantity": float("inf")},
+               {"order_type": "LIMIT", "limit_price": float("nan")},
+               {"order_type": "LIMIT", "limit_price": float("inf")}):
+        ok, why = gate.check(_intent(**kw), {"equity": 100_000.0}, [])
+        assert not ok, f"{kw} must not be allowed to trade"
+    assert gate.check(_intent(), {"equity": 100_000.0}, [])[0]
+
+
 def test_same_client_order_id_is_rejected_once(gate):
     intent = _intent()
     assert gate.check(intent, {"equity": 100_000.0}, [])[0]

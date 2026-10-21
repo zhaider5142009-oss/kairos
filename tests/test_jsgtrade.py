@@ -160,6 +160,41 @@ def test_price_outside_broker_band_rejected(sb, monkeypatch):
     assert ses.posts == []
 
 
+def test_a_nan_price_is_refused_before_the_broker(sb, monkeypatch):
+    """Every guard on this path is a comparison, and NaN loses all of them.
+
+    `price <= 0` is False, `qty * price > cap` is False, `lo <= price <= hi` is
+    False, so a hole in the price feed used to hand the broker an order with an
+    unusable price while every check above it reported a clean pass.
+    """
+    ses = FakeSession(CAPS)
+    arm(monkeypatch, ses)
+    for bad in (float("nan"), float("inf"), -float("inf")):
+        with pytest.raises(JsGlobalError, match="finite"):
+            jsgtrade.stage("OGDC", "BUY", 5, bad)
+    with pytest.raises(JsGlobalError, match="finite"):
+        jsgtrade.stage("OGDC", "BUY", float("nan"), 300.0)
+    assert ses.posts == []
+
+
+def test_an_unreadable_band_is_written_down_not_skipped(sb, monkeypatch):
+    """The bridge claims a price band; the journal has to say whether it ran.
+
+    A caps fetch that fails is cached for five minutes because every retry
+    means another portal login and this account locks out on repetition, so
+    staging proceeds without the band and the broker enforces it. That is a
+    deliberate trade, not a bug — what was missing is the record. An order that
+    went out unchecked and one that was checked read identically afterwards.
+    """
+    _tmp, jrn = sb
+    ses = FakeSession(CAPS)              # the fake caps table covers OGDC only
+    arm(monkeypatch, ses)
+    jsgtrade.stage("ENGRO", "BUY", 5, 300.0)
+    events = [r["event"] for r in jrn.tail(50)]
+    assert "JSG_BAND_UNCHECKED" in events
+    assert "JSG_STAGED" in events
+
+
 def test_notional_cap_enforced(sb, monkeypatch):
     arm(monkeypatch, FakeSession(CAPS))
     with pytest.raises(JsGlobalError, match="cap"):

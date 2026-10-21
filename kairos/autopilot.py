@@ -11,6 +11,7 @@ operator turns every order key (autopilot.auto_place + js_global.allow_orders
 from __future__ import annotations
 
 import json
+import math
 import threading
 import time
 
@@ -368,17 +369,24 @@ class Autopilot:
     def _psx_liquid(self, inst) -> str | None:
         """Microstructure screen: reject illiquid or penny PSX scrips — on the
         real exchange these are the names where tickets die unfilled or get
-        hit by price bands. Returns a rejection reason, or None if tradable."""
+        hit by price bands. Returns a rejection reason, or None if tradable.
+
+        A screen that cannot see answers 'reject'. Both fail-opens below were
+        the same mistake: `px < min_px` is False for a NaN, so an unreadable
+        scrip cleared the penny-stock check, and a history call that raised was
+        swallowed into a None that reads as 'liquid enough'."""
         from . import rules as _R
         from .engine import ENGINE
         try:
             df = ENGINE.md.history(inst)
-        except Exception:
-            return None
+        except Exception as exc:
+            return f"PSX history unreadable: {str(exc)[:80]}"
         if df is None or len(df) < 20:
             return "insufficient PSX trading history"
         px = float(df["close"].iloc[-1])
         min_px = float(_R.get_rule("psx_min_price", 5.0))
+        if not math.isfinite(px):
+            return f"last price is not a usable number ({px!r})"
         if px < min_px:
             return f"price {px:.2f} under Rs {min_px:.0f} — penny-scrip risk"
         if "volume" in df.columns:

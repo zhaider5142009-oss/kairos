@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import re
 import threading
 import time
@@ -184,6 +185,22 @@ def _schedule_bar_accumulation(df: pd.DataFrame) -> None:
 # ---------------------------------------------------------------------------
 # Yahoo Finance client (global instruments)
 # ---------------------------------------------------------------------------
+def _num(value) -> float | None:
+    """A JSON cell as a usable number, or None if it is not one.
+
+    Yahoo spells a hole in the series as a literal ``NaN``, which ``json``
+    parses without complaint and which ``is None`` never catches. A bar built
+    from one is not a missing bar: it is a bar that poisons every return,
+    range and price computed from it, and it backfilled the open, high and low
+    of its own row.
+    """
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) else None
+
+
 class YahooClient:
     def __init__(self) -> None:
         cfg = CFG.section("data").get("yahoo", {})
@@ -209,15 +226,18 @@ class YahooClient:
             quote = result["indicators"]["quote"][0]
             rows = []
             for i, ts in enumerate(stamps):
-                close = quote["close"][i]
+                close = _num(quote["close"][i])
                 if close is None:
                     continue
-                o = quote["open"][i] if quote["open"][i] is not None else close
-                h = quote["high"][i] if quote["high"][i] is not None else close
-                lo = quote["low"][i] if quote["low"][i] is not None else close
-                v = quote["volume"][i] if quote["volume"][i] is not None else 0
+                o = _num(quote["open"][i])
+                h = _num(quote["high"][i])
+                lo = _num(quote["low"][i])
+                v = _num(quote["volume"][i])
                 rows.append({"date": datetime.fromtimestamp(ts, tz=timezone.utc).date(),
-                             "open": o, "high": h, "low": lo, "close": close, "volume": v})
+                             "open": close if o is None else o,
+                             "high": close if h is None else h,
+                             "low": close if lo is None else lo,
+                             "close": close, "volume": 0.0 if v is None else v})
             df = pd.DataFrame(rows)
             if df.empty:
                 return None

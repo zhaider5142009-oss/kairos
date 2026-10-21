@@ -179,6 +179,18 @@ class PredictionEngine:
 
         close = df["close"]
         price = float(close.iloc[-1])
+        # Checked here, at the one cell everything else is measured against, and
+        # not by comparison: a NaN answers "is this too high?" and "is this too
+        # low?" the same way — no — so the prediction below would have returned
+        # ok: true with a NaN price, which is the number that sizes a live
+        # order and stamps the entry of the paper book. An infinite close was
+        # worse: it got as far as the feature engine and raised, taking the
+        # whole prediction down with an unhandled ValueError.
+        if not math.isfinite(price):
+            return {"ok": False, "symbol": instrument.key,
+                    "error": (f"last price is not a usable number ({price!r}) — "
+                              "the data source served a hole where a price should "
+                              "be. Refusing to quote or size anything from it.")}
         features = compute_features(df)
         regime_info = detect_regime(df)
         patterns = detect_patterns(df)

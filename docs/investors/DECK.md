@@ -1,5 +1,5 @@
 # KAIROS — investor deck
-*12 slides. Say the true thing on every one of them. Figures dated 2026-10-21; refresh `TRACK_RECORD.md` before presenting.*
+*12 slides. Say the true thing on every one of them. Figures dated 2026-10-22; refresh `TRACK_RECORD.md` before presenting.*
 
 ---
 
@@ -29,12 +29,12 @@ Built by one operator, running 24/7, publishing its own losses.
 
 | | |
 |---|---|
-| Code | 12,459 lines Python · 37 modules · public repo |
+| Code | 12,533 lines Python · 37 modules · public repo |
 | Strategies | 100 voting into the live consensus; the sweep fits one blended signal, not the library |
 | Council | 6 configured LLM seats across 2 providers; a dead seat shrinks the council |
 | Execution | paper + JS Global PSX bridge + MT5 |
 | Uptime | 24/7 daemon, watchdog, token-gated public API |
-| Tests | 295 passing, money path included |
+| Tests | 307 passing, money path included |
 
 Not a fund. No client money. No licence. No AUM.
 
@@ -67,9 +67,9 @@ conviction.
 
 ## 6. What is *not* proven
 
-- **No forward track record.** 1,646 predictions journaled, 140 horizons matured, all 140 were
+- **No forward track record.** 1,668 predictions journaled, 140 horizons matured, all 140 were
   non-trades. A directional hit rate does not yet exist.
-- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 221 cycles, 2 fills.
+- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 223 cycles, 2 fills.
 - Live execution path is built and gated, not exercised at scale.
 - No audit, no team, no third-party capital.
 
@@ -170,6 +170,17 @@ losing money, with nothing raised and a calm number on the desk. The pre-trade g
 the same blind spot pointed the other way: it accepted a **negative** equity as usable knowledge,
 which is the one account state that should stop everything. Each now refuses rather than skips,
 and a cycle running with no brakes reports that as a blocker instead of reporting health.
+
+Five more came from one level further up the same path, and they share a different shape: a
+guard that asks a question **of a number**, asked of a value that is not one. `price <= 0`,
+`qty * price > cap`, `lo <= price <= hi` and the penny-stock screen's `px < min_px` are all
+*false* of a `NaN`, so one unusable figure cleared the notional cap, the broker's band and the
+liquidity screen in the same order — and the reason a `NaN` was reachable at all is that the
+vendor's chart payload spells a hole as a literal `NaN`, which parses as a number and which the
+loader's `if close is None` never catches, so the hole landed at the end of the series where
+every price is read. Finiteness is now tested **before** bounds, on both the shared gate and the
+order bridge; the price the desk quotes is refused where it is read; and a screen that cannot see
+now answers *reject* instead of *pass*.
 
 **A system that audits its own performance numbers is the product.** Everything else is a
 chart.
