@@ -121,6 +121,22 @@ def test_a_prediction_refuses_an_infinite_last_close(monkeypatch):
     assert res["ok"] is False
 
 
+def test_a_prediction_refuses_a_zero_last_close(monkeypatch):
+    # A quote of exactly zero is never a print for a stock, future, FX pair or
+    # CFD; it is a hole. And every number in the sizing block is a quotient by
+    # this one, so a zero that passed as "finite" divided by it.
+    eng, ran = _engine(monkeypatch, _frame([100.0 + i for i in range(60)] + [0.0]))
+    res = eng._predict_uncached("GOLD", 5, use_wsl=False, include_news=False)
+    assert res["ok"] is False
+    assert ran == []
+
+
+def test_a_prediction_refuses_a_negative_last_close(monkeypatch):
+    eng, _ = _engine(monkeypatch, _frame([100.0 + i for i in range(60)] + [-4.0]))
+    res = eng._predict_uncached("GOLD", 5, use_wsl=False, include_news=False)
+    assert res["ok"] is False
+
+
 def test_a_usable_close_still_prices(monkeypatch):
     eng, ran = _engine(monkeypatch, _frame([100.0 + i for i in range(61)]))
     res = eng._predict_uncached("GOLD", 5, use_wsl=False, include_news=False)

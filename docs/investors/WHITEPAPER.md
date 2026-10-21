@@ -144,7 +144,7 @@ exist is a way to lose money faster than the market teaches you.
 - Logs rotate; state persists across restarts; RAM, startup and per-cycle cost were profiled
   on a 2015-era i5 / 8 GB machine, which is a deliberate constraint — if it runs there, the
   infrastructure argument is cheap.
-- 307 regression tests, including the money path and the integrity cases below.
+- 309 regression tests, including the money path and the integrity cases below.
 
 ## 7. What the numbers say, and what they do not
 
@@ -157,13 +157,13 @@ and 9 instruments reported as losses.
 important finding in the project: the edge, if any, is in the global and commodity books,
 and any PSX strategy must be sized against costs before it is sized against conviction.
 
-The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 223
+The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 224
 autopilot cycles) with two fills. That is a system working as designed on a low-conviction
 market, not a strategy proving itself.
 
 ## 8. The integrity bugs, documented because they are the credibility
 
-An investor kit is only worth its willingness to publish its own audit. Thirty-five defects
+An investor kit is only worth its willingness to publish its own audit. Thirty-six defects
 are tabled below, each with what it would have cost had it shipped. Eight of them were in the
 machinery that produces the numbers an investor would read — the scorer that turns a journal
 into a hit rate, the command that regenerates the evidence, the ledger repair meant to keep
@@ -171,7 +171,7 @@ that history honest, and the guardrail built to keep the pack's figures current.
 worth naming first, because nothing about it was flattering: three were in code we had already
 declared finished, two were in numbers we had already printed, and three were inside an earlier
 repair or the guardrail we built for one — which is why the last ones were found at all.
-Seventeen more were on the money path or the trail that records it, seven were a provider or a
+Eighteen more were on the money path or the trail that records it, seven were a provider or a
 bridge answering in a way the desk then reported as health, and three were credentials — or the
 guard that was supposed to catch them — sitting in tracked files.
 
@@ -212,6 +212,7 @@ guard that was supposed to catch them — sitting in tracked files.
 | A hole in the vendor's price series became a bar | Yahoo's chart payload spells a missing close as a literal `NaN`, which `json` parses without complaint and which the loader's `if close is None` never catches. The row went into the history as a real session, and because the loader backfills a missing open, high and low from that row's close, one hole became four unusable numbers in one bar — and the bar sits at the end of the series, where every price, return and range is read from | every OHLC cell is converted through one helper that returns a number or nothing, so a `NaN`, an `Infinity` or a string is a missing bar rather than a poisoned one; a chart of nothing but holes is no history at all |
 | The desk quoted a price it could not see | `predict` read the last close into `price` and returned `ok: true` with it, whatever it held. A NaN price is the number that sizes a live order and stamps the entry of the paper book the published record is graded from, and the round above shows how it travels — an infinite close was worse, it reached the feature engine and raised `ValueError` out of a histogram, taking the whole prediction down with an unhandled exception instead of an answer | the price is checked where it is read, before anything is fitted, and an unusable one is a refusal that names what it saw; a test proves the model battery never runs on a series the desk cannot price |
 | The screen built to reject unusable scrips called an unusable scrip liquid | the PSX microstructure screen exists to keep the autopilot off penny stocks and dead names, and it asked `px < min_px` of the last close. A NaN answers no, so an unreadable price cleared the penny check on its way to a real order — while the volume check three lines below it *did* test for NaN, which is how the asymmetry survived review. A history read that raised was swallowed into the same "tradable" answer | a screen that cannot see answers *reject*: an unusable price and an unreadable history are both rejection reasons now, journalled as skipped entries, and a test pins all three paths — unusable price, raising read, and a genuinely liquid name that must still pass |
+| A price of exactly zero divided the position sizer, and one symbol's bad print ended a whole cycle | zero is finite, so it survived the round above — and every figure in the sizing block is a quotient by the price: `notional / price` for a paper or CFD ticket, `notional // price` for PSX shares, and the bank-size formula's `price × stop distance`. A vendor serving a halted or delisted name as `0.0` therefore raised out of the middle of the instrument loop, past the one `try` that only wraps the prediction call, and the lap that died was the lap in which *every other* position's stop, trail and target went unmanaged | a quote at or below zero is refused as a hole rather than read as a cheap instrument, before anything is fitted or sized. The feature engine had already been quietly substituting `1.0` for one — the same mistake wearing a different face, and the reason a zero could look like a number right up to the division |
 
 Nothing moved money. The journal now says so itself: rebuilt from `data/audit_journal.jsonl`,
 the track record publishes the count of lines carrying the test signature and the count of
@@ -244,7 +245,7 @@ be mis-sized because of it.
 git clone https://github.com/zhaider5142009-oss/kairos && cd kairos
 cp config.example.yaml config.yaml      # add your own keys; config.yaml is git-ignored
 pip install -r requirements.txt
-python -m pytest tests -q                    # 307 tests
+python -m pytest tests -q                    # 309 tests
 python -m kairos.cli backtest GOLD WTI HBL   # walk-forward sweep, costs modelled
 python -m kairos.cli health                  # subsystem health, dead council seats
 python -m kairos.cli feedback                # realized track record, live from the journal

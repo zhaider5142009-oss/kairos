@@ -183,10 +183,15 @@ class PredictionEngine:
         # not by comparison: a NaN answers "is this too high?" and "is this too
         # low?" the same way — no — so the prediction below would have returned
         # ok: true with a NaN price, which is the number that sizes a live
-        # order and stamps the entry of the paper book. An infinite close was
-        # worse: it got as far as the feature engine and raised, taking the
-        # whole prediction down with an unhandled ValueError.
-        if not math.isfinite(price):
+        # order and stamps the entry of the paper book. Zero and negative are
+        # refused with it because every figure downstream is a quotient by this
+        # one — the normalised features divide by it, the log-price models
+        # divide the forecast by it, the bank sizing multiplies by it, and the
+        # autopilot's position size is `notional / price`. A print of exactly
+        # zero is not a cheap instrument, it is a hole; and a non-finite one
+        # reached the feature engine and raised, taking the whole prediction
+        # down with an unhandled ValueError instead of an answer.
+        if not math.isfinite(price) or price <= 0:
             return {"ok": False, "symbol": instrument.key,
                     "error": (f"last price is not a usable number ({price!r}) — "
                               "the data source served a hole where a price should "
