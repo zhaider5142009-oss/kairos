@@ -169,6 +169,11 @@ code in all of them, and none of them receives a `config.yaml`.
 | Any "deploy from container" host | point it at the GHCR tag | Railway/Fly/Koyeb/Kubernetes — one env var, `PORT` |
 | Read without installing | <https://zhaider5142009-oss.github.io/kairos/> | the landing page, the generated track record and the whitepaper as plain text |
 
+There is deliberately **no PyPI route**: the name `kairos` on PyPI is someone
+else's time-series storage library (Aaron Westendorf, 0.10.1), so `pip install
+kairos` would install an unrelated package into a machine that then trusts it
+with broker credentials. Install from the checkout, or pull the container.
+
 Two switches are GitHub settings, not code, and each is one click:
 
 - **Pages** → Settings → Pages → Build and deployment → Source: **GitHub

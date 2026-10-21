@@ -327,7 +327,8 @@ def signal_card(symbol: str, caption: bool = False):
     except ImportError as e:
         # the free image ships no matplotlib on purpose; that has to be a
         # sentence about an extra, not a 500 about a missing module
-        raise HTTPException(501, f"signal cards need `pip install kairos[card]` ({e})") from e
+        raise HTTPException(501, 'signal cards need `pip install -e ".[card]"` '
+                                 f"from the checkout ({e})") from e
     try:
         path, cap = signalcard.card_for(symbol)
     except Exception as e:

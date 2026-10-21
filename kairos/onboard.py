@@ -41,7 +41,8 @@ OPTIONAL = {
               "back to scipy",
     "MetaTrader5": "MT5 bridge for FX/commodity live execution (Windows only)",
     "httpx": "the LLM council and the news radar need it",
-    "matplotlib": "equity-curve charts in the reports",
+    "matplotlib": "equity-curve charts in the reports and the shareable "
+                  "signal cards — `pip install -e \".[card]\"`",
 }
 # provider block -> (placeholder token, environment variable that can fill it).
 # Kimi is reached through the `moonshot` block — council entries prefixed "kimi:"

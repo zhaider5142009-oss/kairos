@@ -721,10 +721,11 @@ def cmd_share(args) -> int:
     try:
         from . import signalcard
     except ImportError:
-        # rich reads "[card]" as a markup tag and eats it, so the extra's name
-        # has to be escaped or the advice installs the wrong thing
+        # rich reads "[card]" as a markup tag and eats it, and the name is not
+        # on PyPI (someone else's `kairos` is there), so the advice is the
+        # checkout's own extra
         _console().print('[red]signal cards need matplotlib:[/] '
-                         '[bold]pip install "kairos\\[card]"[/] '
+                         '[bold]pip install -e ".\\[card]"[/] '
                          '[dim](kept out of the free image to keep it small)[/]')
         return 3
     console = _console()
