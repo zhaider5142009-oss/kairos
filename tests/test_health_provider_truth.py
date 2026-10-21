@@ -133,3 +133,29 @@ def test_nothing_configured_is_reported_as_down(monkeypatch):
     llm = system_health()["llm"]
     assert llm["ok"] is False
     assert llm["provider"] == "down"
+
+
+def test_the_shipped_example_is_not_read_as_a_live_provider(monkeypatch):
+    """The first `kairos doctor` a stranger ever runs reads the example's
+    tokens: three `sk-or-v1-YOUR-KEY-n` entries sitting under `enabled: true`,
+    which a check built on "is a key present" reported as an answering council
+    before one request had ever succeeded. Same lie as the suspended account,
+    arriving from the opposite direction — and this one greets every new user."""
+    import yaml
+
+    from kairos.config import CFG
+    from kairos.onboard import example_path
+
+    raw = yaml.safe_load(example_path().read_text(encoding="utf-8")) or {}
+    monkeypatch.setattr(CFG, "_raw", {**CFG._raw, "apis": raw.get("apis", {})})
+    for var in ("OPENROUTER_API_KEY", "MOONSHOT_API_KEY", "KIMI_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+
+    assert CFG.openrouter_keys() == []
+    assert CFG.kimi_key() == ""
+
+    _patch_probes(monkeypatch, {})
+    llm = system_health()["llm"]
+    assert llm["ok"] is False
+    assert llm["provider"] == "down"
+    assert llm["configured"] == {"openrouter": False, "kimi": False}

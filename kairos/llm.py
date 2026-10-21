@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import time
 import urllib.error
@@ -200,8 +199,7 @@ class LLMRouter:
           to the configured Kimi model instead of burning a request.
         """
         api = CFG.apis.get("moonshot", {})
-        key = (api.get("api_key") or os.environ.get("MOONSHOT_API_KEY")
-               or os.environ.get("KIMI_API_KEY") or "")
+        key = CFG.kimi_key()
         if not key:
             return LLMResponse(False, "moonshot", model, error="no api_key")
         m = _kimi_model(model, api)

@@ -10,7 +10,6 @@ Design notes:
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from .config import CFG
@@ -44,9 +43,7 @@ def system_health() -> dict[str, Any]:
     or_api = CFG.apis.get("openrouter", {}) or {}
     kimi_api = CFG.apis.get("moonshot", {}) or {}
     or_ok = bool(or_api.get("enabled", False)) and bool(CFG.openrouter_keys())
-    kimi_ok = bool(kimi_api.get("enabled", False)) and bool(
-        kimi_api.get("api_key") or os.environ.get("MOONSHOT_API_KEY")
-        or os.environ.get("KIMI_API_KEY"))
+    kimi_ok = bool(kimi_api.get("enabled", False)) and bool(CFG.kimi_key())
     # Config says a key exists; only the calls know whether the account behind
     # it answers. Report both, because "kimi: true" next to a suspended account
     # is the silent rot this endpoint is supposed to make visible.

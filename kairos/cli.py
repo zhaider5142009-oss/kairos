@@ -605,6 +605,74 @@ def cmd_fugu(args) -> int:
     return 0
 
 
+def cmd_setup(args) -> int:
+    """First run: create the git-ignored config and fill the key slots."""
+    from rich.panel import Panel
+    from . import onboard
+    console = _console()
+    r = onboard.run_setup(interactive=not args.non_interactive)
+    lines = [f"config file: [bold]{r['path']}[/]"
+             + (" — created from config.example.yaml" if r["created"]
+                else " — already existed, left alone")]
+    lines.append("keys filled: " + (", ".join(r["filled"]) if r["filled"] else "none"))
+    lines.append("git-ignored: " + ("[green]yes[/]" if r["ignored"]
+                                   else "[red]NO — put config.yaml in .gitignore "
+                                        "before you paste a key[/]"
+                                   if r["ignored"] is False
+                                   else "[yellow]unknown — check .gitignore yourself[/]"))
+    left = r["remaining"]
+    if left:
+        lines.append(f"[dim]{left} placeholder slot(s) still in the file — fine for "
+                     f"prediction, fatal for the seat that sends them[/]")
+    lines.append("[bold]next:[/bold] [bold cyan]kairos doctor[/] then "
+                 "[bold cyan]kairos up[/]")
+    console.print(Panel("\n".join(lines), title="KAIROS SETUP", style="blue"))
+    return 0
+
+
+def cmd_doctor(args) -> int:
+    """Say what was checked, what failed, and what to do about each one."""
+    from rich.table import Table
+    from . import onboard
+    console = _console()
+    tbl = Table(box=box.ROUNDED, title="KAIROS DOCTOR")
+    for col, w in (("area", 20), ("status", 8), ("detail", 46), ("what to do", 44)):
+        tbl.add_column(col, overflow="fold", width=None if col != "area" else w)
+    bad = 0
+    for row in onboard.checks():
+        mark = {"ok": "[green]ok[/]", "warn": "[yellow]warn[/]",
+                "note": "[dim]note[/]", "fail": "[red]FAIL[/]"}[row["status"]]
+        bad += row["status"] == "fail"
+        tbl.add_row(row["area"], mark, row["detail"], row["fix"] or "—")
+    console.print(tbl)
+    port = int(getattr(args, "port", 8600) or 8600)
+    console.print(f"[dim]tower on port {port}: "
+                  + ("answering" if onboard.tower_running(port) else "not running — kairos up")
+                  + "[/]")
+    console.print("[green]ready." if not bad else f"[red]{bad} blocking problem(s).[/]")
+    return 1 if bad else 0
+
+
+def cmd_up(args) -> int:
+    """Start the tower and open the desk — the whole first run in one word."""
+    import threading
+    import webbrowser
+    from . import onboard
+    console = _console()
+    fails = [c for c in onboard.checks() if c["status"] == "fail"]
+    if fails:
+        console.print("[red]not ready — run `kairos doctor`:[/]")
+        for c in fails:
+            console.print(f"  • {c['area']}: {c['detail']} → {c['fix']}")
+        return 1
+    url = f"http://127.0.0.1:{args.port}"
+    if not args.no_browser:
+        threading.Timer(1.5, lambda: webbrowser.open(url)).start()
+    console.print(f"[bold green]opening the desk at {url}[/] — Ctrl+C stops it. "
+                  f"Ask it anything in the chat box.")
+    return cmd_serve(args)
+
+
 def cmd_ask(args) -> int:
     """Command plane: plain language in, visible plan → tools → trace → numbers out."""
     from rich.panel import Panel
@@ -634,8 +702,10 @@ def cmd_ask(args) -> int:
         console.print(tr)
     style = "red" if out["intent"] in ("refused", "none") else "green"
     console.print(Panel(out.get("answer") or "—", title="KAIROS", style=style))
-    console.print(f"[dim]{out['ms']} ms · every figure above was rendered by the "
-                  f"tool that produced it[/]")
+    ran = any(r["ok"] for r in out["trace"])
+    tail = ("every figure above was rendered by the tool that produced it" if ran
+            else "no expert ran — this reply came from the guard, not the engine")
+    console.print(f"[dim]{out['ms']} ms · {tail}[/]")
     return 2 if out["intent"] == "none" else 0
 
 
@@ -735,6 +805,27 @@ def main() -> int:
                     help="route stdout/stderr here with size-capped rotation (daemon mode)")
     sp.add_argument("--public-url", default=None, help="print the tunnel URL on boot")
     sp.set_defaults(fn=cmd_serve)
+
+    sp = sub.add_parser("up", help="first run: check, start the tower, open the desk")
+    sp.add_argument("--host", default="127.0.0.1")
+    sp.add_argument("--port", type=int, default=8600)
+    sp.add_argument("--no-browser", action="store_true",
+                    help="start without opening a browser (headless box)")
+    sp.add_argument("--logfile", default=None)
+    sp.add_argument("--public-url", default=None)
+    sp.set_defaults(fn=cmd_up)
+
+    sp = sub.add_parser("setup", help="create the git-ignored config.yaml and "
+                                      "fill API keys (from env, or prompted)")
+    sp.add_argument("--non-interactive", action="store_true",
+                    help="CI/containers: take keys from the environment only")
+    sp.set_defaults(fn=cmd_setup)
+
+    sp = sub.add_parser("doctor", help="what is installed, configured, answering "
+                                       "— and what to do about it")
+    sp.add_argument("--port", type=int, default=8600,
+                    help="tower port to probe (default 8600)")
+    sp.set_defaults(fn=cmd_doctor)
 
     sp = sub.add_parser("symbols", help="list the tradable universe")
     sp.set_defaults(fn=cmd_symbols)

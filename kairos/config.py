@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,20 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # how often a config read may cost a stat(); the tower runs for days
 _RELOAD_CHECK_S = 1.0
+
+# A template value is not a credential. The example file — and therefore every
+# config written by `kairos setup` before a human pastes a key — ships
+# `keys: [sk-or-v1-YOUR-KEY-1]`, and every check derived from "is a key present"
+# read that as a live provider. Health then tells a stranger the LLM council is
+# answering when no request has ever succeeded. One regex, used by the readers.
+PLACEHOLDER_RE = re.compile(
+    r"YOUR[-_][A-Z0-9_-]*|REPLACE[_-]?ME|CHANGE[_-]?ME|PASTE[_-]?YOUR|^[*_]+$")
+
+
+def is_placeholder(value: Any) -> bool:
+    """True for empty, None, and anything shaped like the example's template."""
+    s = str(value or "").strip()
+    return not s or bool(PLACEHOLDER_RE.search(s.upper()))
 
 
 def _find_config() -> Path | None:
@@ -116,10 +131,24 @@ class Config:
         env_key = os.environ.get("OPENROUTER_API_KEY")
         if env_key and env_key not in keys:
             keys = [env_key, *keys]
-        return [k for k in keys if k]
+        return [k for k in keys if not is_placeholder(k)]
 
     def openrouter_models(self) -> list[str]:
         return self.apis.get("openrouter", {}).get("council_models", [])
+
+    def kimi_key(self) -> str:
+        """The direct Moonshot/Kimi key, or "" — placeholders included.
+
+        One accessor because two callers ask the same question with different
+        stakes: the router must not spend a request on a template, and health
+        must not call an unfilled slot a live provider.
+        """
+        api = self.apis.get("moonshot", {}) or {}
+        for cand in (api.get("api_key"), os.environ.get("MOONSHOT_API_KEY"),
+                     os.environ.get("KIMI_API_KEY")):
+            if not is_placeholder(cand):
+                return str(cand).strip()
+        return ""
 
     # -- writer -------------------------------------------------------------
     def store_secret(self, section: str, key: str, value: Any) -> bool:

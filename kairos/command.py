@@ -642,20 +642,30 @@ def _say(results: list[dict]) -> str:
 
 
 def _a_provider_is_enabled() -> bool:
-    """True when some LLM leg has a key. The plane works fully without one."""
+    """True when some LLM leg has a key. The plane works fully without one.
+
+    The docstring used to promise a key and the code used to check only the
+    `enabled` flag, so a fresh install — enabled blocks, placeholder tokens —
+    paid a full provider round trip for a reply that was always going to be the
+    tool's own sentence.
+    """
     try:
         from .config import CFG
-        apis = CFG.apis or {}
-        return any(bool((apis.get(name) or {}).get("enabled"))
-                   for name in ("openrouter", "moonshot", "kimi"))
+        return bool(CFG.openrouter_keys()) or bool(CFG.kimi_key())
     except Exception:
         return False
 
 
-def _voice(text: str, answer: str) -> str:
+def _voice(text: str, answer: str, left_s: float = 999.0) -> str:
     """Optional rephrasing. The figures are already in `answer`; the model may
-    only change how they are said, so a dead provider costs polish, not truth."""
-    if not answer or len(answer) < 40 or not _a_provider_is_enabled():
+    only change how they are said, so a dead provider costs polish, not truth.
+
+    `left_s` is what the caller's wall-clock budget has remaining. Polish is
+    what the budget is *for* spending down, not for blowing: a three-expert plan
+    that took its 25 seconds must not then wait on a 90-second rephrase, because
+    the operator already has the answer and only the voice is missing.
+    """
+    if not answer or len(answer) < 40 or left_s < 4.0 or not _a_provider_is_enabled():
         return answer
     try:
         from .config import CFG
@@ -711,10 +721,11 @@ def run(text: str, budget_s: float = DEFAULT_BUDGET_S,
                 "planner": planner}
     trace = execute(steps, budget_s)
     answer = _say(trace)
+    left = _num(budget_s) - (time.perf_counter() - t0)
     if not answer:
         answer = "Every step in that plan failed — see the trace."
     elif use_model:
-        answer = _voice(text, answer)
+        answer = _voice(text, answer, left)
     return {"ok": True, "intent": p["intent"], "answer": answer,
             "steps": [{"tool": s["tool"], "args": s["args"], "why": s["why"]}
                       for s in steps],

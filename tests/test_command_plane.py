@@ -248,6 +248,37 @@ def test_the_model_is_not_asked_when_no_provider_is_enabled(monkeypatch):
     assert C._llm_plan("anything") == []
 
 
+def test_a_placeholder_key_is_not_counted_as_a_provider(monkeypatch):
+    """`enabled: true` next to `sk-or-v1-YOUR-KEY-1` is every stranger's first
+    run, not a council. Treat it as one and the plane pays a provider round
+    trip for a reply that can only come back as the tool's own sentence."""
+    from kairos.config import CFG
+
+    monkeypatch.setattr(CFG, "openrouter_keys", lambda: [])
+    monkeypatch.setattr(CFG, "kimi_key", lambda: "")
+    assert C._a_provider_is_enabled() is False
+    monkeypatch.setattr(CFG, "kimi_key", lambda: "sk-" + "0" * 24)
+    assert C._a_provider_is_enabled() is True
+
+
+def test_the_voice_pass_is_dropped_once_the_budget_is_spent(monkeypatch):
+    """The budget is the operator's promise, and the experts get it first: a
+    plan that used its 25 seconds must not add a rephrase on top."""
+    monkeypatch.setattr(C, "_a_provider_is_enabled", lambda: True)
+    line = ("Gold (GOLD) at 2,412.10 USD: BEARISH, -1.20% over 5d, P(up) 38%, "
+            "confidence 71%, regime trending-down, suggested size 4.0%")
+
+    def boom(*a, **k):
+        raise AssertionError("asked a provider after the budget was gone")
+
+    monkeypatch.setattr("kairos.llm.ROUTER.chat", boom)
+    assert C._voice("where is gold this week", line, 0.5) == line
+
+    monkeypatch.setattr("kairos.llm.ROUTER.chat",
+                        lambda *a, **k: type("R", (), {"ok": True, "text": "  softer  "})())
+    assert C._voice("where is gold this week", line, 20.0) == "softer"
+
+
 # ------------------------------------------------------------------ drift
 def test_the_registry_declares_exactly_the_arguments_its_tools_accept():
     """A renamed parameter would silently make a tool unplannable."""
