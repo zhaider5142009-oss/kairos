@@ -79,7 +79,7 @@ person reads a published failure and replies.*
 >
 > Fix: a snapshot only counts if the score exceeds the entry threshold, only resolves if the
 > horizon's bars exist, and the confidence multiplier is pinned to 1.0 until 10 real
-> directional calls have matured. Eight regression tests. The honest record today: 1,558
+> directional calls have matured. Eight regression tests. The honest record today: 1,569
 > predictions journaled, 140 matured, 0 directional calls, hit rate not yet measurable.
 >
 > Also in there: a council of LLM seats where a dead seat must shrink the council rather
@@ -146,12 +146,15 @@ which wording converted.
 |---|---|---|---|---|
 | 2026-10-20 | GitHub release (public repo, tag v2.6.0) | open audience — no named recipient | v2.6.0 kit | — |
 | 2026-10-21 | GitHub release (public repo, tag v2.6.1) | open audience — no named recipient | v2.6.1 kit, deck attached | — |
+| 2026-10-21 | GitHub release (public repo, tag v2.6.2) | open audience — no named recipient | v2.6.2 kit, corrected deck attached | — |
 
 The link every later channel points at:
-<https://github.com/zhaider5142009-oss/kairos/releases/tag/v2.6.1> — release notes, the
+<https://github.com/zhaider5142009-oss/kairos/releases/tag/v2.6.2> — release notes, the
 whitepaper, the regenerated track record and the deck as an attachment. v2.6.0's release body
 names v2.6.1 as the current one; its own attached deck carried figures that were stale by up to
 six passes and has been left as published rather than edited, because a corrected history is not
-a history. Nothing else has been published: the landing page is unhosted, and there has been no
-Show HN, Reddit, LinkedIn, X, cold email, brokerage or fund contact. Each of those still needs
-its own approval.
+a history. v2.6.1 is left as published for the same reason: the ledger it quoted was read from the
+wrong sweep log, and its release note says so, names the instruments whose verdict moved, and
+attaches the deck the current code generates. Nothing else has been published: the landing page is
+unhosted, and there has been no Show HN, Reddit, LinkedIn, X, cold email, brokerage or fund
+contact. Each of those still needs its own approval.

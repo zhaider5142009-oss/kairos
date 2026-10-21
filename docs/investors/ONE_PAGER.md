@@ -42,7 +42,7 @@ this is published per instrument and never as an average.
 
 ## What has *not* been demonstrated — stated plainly
 
-- **No forward track record yet.** 1,558 predictions journaled, 140 horizons matured, and all
+- **No forward track record yet.** 1,569 predictions journaled, 140 horizons matured, and all
   140 were non-trades. A directional hit rate does not exist until live calls mature.
 - **PSX equities are net-negative out-of-sample.** Local commission and slippage exceeded
   the signal: mean −2.2% across the 5-stock book, versus +10.0% across the global book.

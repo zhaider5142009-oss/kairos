@@ -157,23 +157,23 @@ and 9 instruments reported as losses.
 important finding in the project: the edge, if any, is in the global and commodity books,
 and any PSX strategy must be sized against costs before it is sized against conviction.
 
-The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 213
+The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 214
 autopilot cycles) with two fills. That is a system working as designed on a low-conviction
 market, not a strategy proving itself.
 
 ## 8. The integrity bugs, documented because they are the credibility
 
-An investor kit is only worth its willingness to publish its own audit. Nineteen defects were
-found and fixed; four of them were in the machinery that produces the numbers an investor
-would read, five were on the money path or the trail that records it, two were
-credentials — or the guard that was supposed to catch them — sitting in tracked files, and
-the last nine came from probing the newest provider, re-reading our own published pack,
-testing the fix that was supposed to keep the ledger honest, asking what the health page
-actually knows, and then asking the same question of the tooling we wrote to keep our own
-figures honest. That second group is worth naming, because nothing about it was
-flattering: three of them were in code we had already declared finished, two were in the
-numbers we had already printed, and three were inside an earlier repair or the guardrail we
-built for one — which is why the last ones were found at all.
+An investor kit is only worth its willingness to publish its own audit. Twenty-two defects are
+tabled below, each with what it would have cost had it shipped. Seven of them were in the
+machinery that produces the numbers an investor would read — the scorer that turns a journal
+into a hit rate, the command that regenerates the evidence, the ledger repair meant to keep
+that history honest, and the guardrail built to keep the pack's figures current. That group is
+worth naming first, because nothing about it was flattering: three were in code we had already
+declared finished, two were in numbers we had already printed, and three were inside an earlier
+repair or the guardrail we built for one — which is why the last ones were found at all.
+Seven more were on the money path or the trail that records it, five were a provider or a
+bridge answering in a way the desk then reported as health, and three were credentials — or the
+guard that was supposed to catch them — sitting in tracked files.
 
 | defect | consequence had it shipped | fix |
 |---|---|---|
@@ -197,6 +197,8 @@ built for one — which is why the last ones were found at all.
 | `/api/health` built its provider list from the config file | a key that is present and enabled made `kimi: true`, and the catalog check only spots retired slugs — so the one provider failure we actually have, a Moonshot account answering every request with `429 account … is suspended`, was published as healthy. This is the endpoint the pack names as the place where rot becomes visible, and it was blind to the rot we had | the router keeps the last account-level failure per provider — redacted, timestamped, and cleared the moment the provider answers again, because a 429 rate limit is also a fatal hint and a recovered provider must not stay flagged — and health reports `configured`, `unanswered` and the remaining cooldown as three separate facts, so "a key exists" and "the account answers" can no longer be confused for one badge — 5 tests |
 | The guardrail that was supposed to stop stale figures had its own stale figures | the anti-staleness test and the command that rewrites the pack each carried a **hand-written list of the phrasings** a number could appear in — "N regression tests", "# N tests" — and neither list contained the word "passing", so the deck and the one-pager printed one test total and the landing page another while the suite had moved twice since; and the checker explicitly *exempted* the phrase the rewriter rewrote, so the headline count was refreshed but never verified. A checker that enumerates the same vocabulary as the writer cannot find a phrase neither of them knows | the vocabulary is now one table (`tools/kit_stats.RULES`) that the rewriter and the test read together, so adding a layout makes them agree by construction; a second test fails if a number sits beside a figure word with no rule behind it — write "999 passed" into the deck and the suite goes red instead of publishing it; the strategy count joined the checked figures, and the exemption is gone. This row's own examples are written as patterns rather than numbers because of a defect found while regenerating the v2.6.1 pack: the rewriter matches on adjacency, so it cannot tell a live figure from a historical value quoted inside the defect narrative, and it had been quietly overwriting the very numbers this table cites as evidence of the mistake — every earlier version of this row claimed the old lists contained whatever the suite size happened to be that day |
 | The figure guard did not read the file investors actually receive | every check covered the markdown and the HTML, because those are what the rewriting command touches, and the PowerPoint deck — the copy attached to the release and forwarded to a stranger — was outside the guard entirely. It was further stale than the prose beside it: an old line count, an old module count, the same old test total in two places, an old journaled count, an old cycle count, and a version stamp two releases behind, under a footer claiming the figures were verified against the repository on a day they had not been | the deck is read as text now: a `.pptx` is a zip of XML and its runs flatten into the same vocabulary the rules already match, so the checked figures and the stamped date and version are compared against it before it can ship. Read-only deliberately — rewriting run boundaries inside a binary is how a deck gets corrupted, so the test names the value to rebuild with rather than editing the file quietly. Two phrasings had to join the stamp table first: a version written as "KAIROS vN.N.N" and a footer saying "verified against the repository on" a date. A checker that only knows the word "Version" reports a stale version as *absent*, not as wrong, which is the same failure as a checker that only knows "tests" and not "passing". Guarding the deck then cost the deck two of its numbers: the journal grows on its own every ten minutes, and a file nobody re-runs on that clock must not print a count it cannot keep current, so the slides now carry the figures that are stable inside a release and point at the dated ledger for the ones that tick. |
+| The command that regenerates the evidence was reading the wrong sweep log | ties in the walk-forward log choice were broken on row count alone over a sorted glob, so the run re-executed after this release's strategy repair lost to a four-day-old run of the same width. The pack's headline count, its per-venue means and several instruments' verdicts were therefore produced by code the same release admits was defective, under a footer saying the figures were verified that day | ties go to the newest file by modification time, the ledger names the log it read and the afternoon it ran, the skipped instrument is printed outside the denominator instead of inflating it, and the verdicts that moved are listed in the release note rather than corrected quietly |
+| Every rule in the guard checked a digit, and the pack's worst false claim was a noun | the deck's cover and the ledger both wrote the sweep as `Walk-forward sweep, N strategies per instrument`. The sweep fits one blended signal, not the library, and the count beside the false noun was itself a verified figure — so a complete refresh cycle passed it. The same shape hid the headline ratio and the book means: each was read only when one particular word sat next to the number, and a sentence that put the descriptor a clause away was invisible to the rewriter and the checker alike | a ratio is read by its denominator and the nearest win/loss word decides which side it counts, a mean is read by the book named beside it, and `method_claims()` denies any sweep sentence that credits the strategy library with the evidence. Each rule ships with a test written in the opposite direction, so the guard fails if it stops seeing one of the shapes |
 
 Nothing moved money. The journal now says so itself: rebuilt from `data/audit_journal.jsonl`,
 the track record publishes the count of lines carrying the test signature and the count of
