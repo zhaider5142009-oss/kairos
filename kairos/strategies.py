@@ -1186,14 +1186,29 @@ def s100(df, f, ctx):
 # Registry execution
 # ---------------------------------------------------------------------------
 def run_strategy_library(df: pd.DataFrame, features: dict[str, float],
-                         ctx: dict[str, Any] | None = None) -> list[StrategyVote]:
+                         ctx: dict[str, Any] | None = None,
+                         report: dict[str, Any] | None = None) -> list[StrategyVote]:
+    """Poll the library.
+
+    `report` is optional and, when given, is filled with every name that was
+    asked and the ones that raised. A strategy that throws has always been
+    dropped here in silence, which makes it indistinguishable from one that
+    legitimately abstained — and the difference is the whole of what an
+    attribution run needs: an abstention is a judgment, a `KeyError` on every
+    slice is a broken component that has never once been measured.
+    """
     ctx = dict(ctx or {})
     ctx["df"] = df
     votes: list[StrategyVote] = []
+    if report is not None:
+        report["seen"] = [name for name, _cat, _fn in STRATEGIES]
+        report["errors"] = errors = {}
     for name, category, fn in STRATEGIES:
         try:
             v = fn(df, features, ctx)
-        except Exception:
+        except Exception as exc:
+            if report is not None:
+                errors[name] = f"{type(exc).__name__}: {exc}"[:160]
             continue
         if v is None:
             continue

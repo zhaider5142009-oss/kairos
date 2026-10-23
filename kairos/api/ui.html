@@ -589,9 +589,18 @@ function renderDossier(r){
     h+=`</tbody></table></div></div>`;
   }
   if(r.top_strategies&&r.top_strategies.length){
-    h+=`<div class="card"><div class="sectiontitle" style="margin-top:0">Strategy library — top votes of ${r.strategies_voted}/100 · consensus ${(s.strategy_consensus??0).toFixed(2)}</div><div style="overflow-x:auto"><table><thead><tr><th>Strategy</th><th class="dim">Family</th><th class="c">Dir</th><th class="r">Strength</th><th class="dim" style="white-space:normal">Why</th></tr></thead><tbody>`;
-    for(const st of r.top_strategies)h+=`<tr><td style="color:var(--blue)">${esc(st.name)}</td><td class="dim">${esc(st.category)}</td><td class="c">${st.direction>0?'<span class="up">▲</span>':st.direction<0?'<span class="down">▼</span>':'—'}</td><td class="r mono">${st.strength.toFixed(2)}</td><td class="dim" style="white-space:normal">${esc(st.rationale)}</td></tr>`;
-    h+=`</tbody></table></div></div>`;
+    const at=r.strategy_attribution||{};const wcol=at.applied;
+    h+=`<div class="card"><div class="sectiontitle" style="margin-top:0">Strategy library — top votes of ${r.strategies_voted}/100 · consensus ${(s.strategy_consensus??0).toFixed(2)}</div><div style="overflow-x:auto"><table><thead><tr><th>Strategy</th><th class="dim">Family</th><th class="c">Dir</th><th class="r">Strength</th>${wcol?'<th class="r" title="realized out-of-sample skill for this strategy, in this regime">Weight</th>':''}<th class="dim" style="white-space:normal">Why</th></tr></thead><tbody>`;
+    for(const st of r.top_strategies){
+      const w=wcol?`<td class="r mono" style="color:${(st.weight??1)>1.02?'var(--green)':(st.weight??1)<0.98?'var(--red)':'var(--dim)'}">${(st.weight??1).toFixed(2)}</td>`:'';
+      h+=`<tr><td style="color:var(--blue)">${esc(st.name)}</td><td class="dim">${esc(st.category)}</td><td class="c">${st.direction>0?'<span class="up">▲</span>':st.direction<0?'<span class="down">▼</span>':'—'}</td><td class="r mono">${st.strength.toFixed(2)}</td>${w}<td class="dim" style="white-space:normal">${esc(st.rationale)}</td></tr>`;
+    }
+    h+=`</tbody></table></div>`;
+    h+=wcol
+      ? `<div class="dim" style="font-size:12px;margin-top:8px">Votes weighted by realized out-of-sample skill — measured ${esc(String(at.generated||'?'))} on ${at.instruments||0} instruments over ${at.slices||0} graded slices: ${at.weighted||0} weighted, ${at.demoted||0} demoted, ${at.promoted||0} promoted, ${at.no_coverage||0} with no coverage.</div>`
+      : `<div style="font-size:12px;margin-top:8px;color:var(--yellow)">Flat poll — every vote at face value: ${esc(String(at.reason||'no attribution artifact yet'))}.</div>`;
+    if(at.broken&&at.broken.length)h+=`<div class="down" style="font-size:12px;margin-top:4px">raising while measured, so their votes are not counted: ${at.broken.map(esc).join(', ')}</div>`;
+    h+=`</div>`;
   }
   if(r.council&&r.council.ok){
     const c=r.council,cons=c.consensus||{};const view=String(cons.view||'neutral');

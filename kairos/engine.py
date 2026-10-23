@@ -3,7 +3,9 @@
 Pipeline per instrument:
   data -> features -> regime -> [stat | ML | neural | WSL foundation models]
        -> 100-strategy votes (with intermarket, factor, news context)
-       -> regime-adaptive fusion -> risk overlay -> optional LLM council
+       -> regime-adaptive fusion, each strategy weighted by the skill it has
+          realized out-of-sample in this horizon and regime
+       -> risk overlay -> optional LLM council
        -> personalized dossier with targets, probabilities, and sizing.
 """
 
@@ -20,6 +22,7 @@ import pandas as pd
 
 from .config import CFG
 from .data import MarketData
+from . import attribution
 from .calendar import risk_calendar
 from .ensemble import fuse
 from .feedback import confidence_adjustment, record
@@ -213,17 +216,31 @@ class PredictionEngine:
             fut_kse = ex.submit(kse_regime, self.md) if instrument.market == "PSX" else None
 
             forecasts: list[ModelForecast] = self._battery(instrument, df, horizon)
+            # A foundation model that is not running has always been dropped
+            # here in silence, so a bridge that died left a forecast built from
+            # fewer models wearing the same numbers as one that had them all.
+            # Which of them spoke, and why the others did not, is now part of the
+            # answer instead of a hole in it.
+            wsl_report: list[dict[str, Any]] = []
             if use_wsl:
                 series = [float(x) for x in close.tail(400).values]
-                try:
-                    fc = WSL.chronos_forecast(series, horizon)
-                    if fc:
+                for label, fn in (("Chronos", WSL.chronos_forecast),
+                                  ("TimesFM", WSL.timesfm_forecast)):
+                    try:
+                        fc = fn(series, horizon)
+                    except Exception as exc:
+                        fc = None
+                        wsl_report.append({"model": label, "state": "raised",
+                                           "why": f"{type(exc).__name__}: {str(exc)[:110]}"})
+                        continue
+                    if fc is not None:
                         forecasts.append(fc)
-                    fc = WSL.timesfm_forecast(series, horizon)
-                    if fc:
-                        forecasts.append(fc)
-                except Exception:
-                    pass
+                        wsl_report.append({"model": label, "state": "forecast",
+                                           "why": None})
+                    else:
+                        wsl_report.append({"model": label, "state": "absent",
+                                           "why": "no forecast returned (bridge down or "
+                                                  "model not loaded)"})
 
             intermarket_ctx = fut_intermarket.result()
             factor_row = fut_factors.result()
@@ -246,7 +263,19 @@ class PredictionEngine:
             "use_strategies", True) else []
 
         # --- fusion -------------------------------------------------------------
-        signal = fuse(instrument.key, forecasts, votes, regime_info["regime"], horizon)
+        # Regime-conditional skill, measured out-of-sample by
+        # tools/strategy_attribution.py. When that evidence cannot be read the
+        # poll stays exactly as flat as it always was and the reason is carried
+        # into the result, because "no strategy has demonstrated an edge" and "I
+        # could not check whether they had" print the same number but are not the
+        # same state of the world.
+        attr, attr_reason = attribution.current()
+        # a per-prediction reporting view over the cached counts — the report
+        # below has to describe this signal, not every signal this process has
+        # ever scored
+        attr_view = attr.view() if attr is not None else None
+        signal = fuse(instrument.key, forecasts, votes, regime_info["regime"], horizon,
+                      attribution=attr_view)
 
         # --- realized track-record calibration ---------------------------------
         adj = confidence_adjustment()
@@ -326,9 +355,14 @@ class PredictionEngine:
                         "expected_return": round(f.expected_return, 5),
                         "confidence": round(f.confidence, 3), "detail": f.detail}
                        for f in forecasts],
+            "foundation_models": wsl_report,
             "strategies_voted": len(votes),
+            "strategy_attribution": (attr_view.status() if attr_view is not None else
+                                      {"applied": False, "reason": attr_reason}),
             "top_strategies": [{"name": v.name, "category": v.category,
                                  "direction": v.direction, "strength": round(v.strength, 2),
+                                 "weight": (signal.details.get("strategies") or {})
+                                 .get(v.name, {}).get("w", 1.0),
                                  "rationale": v.rationale}
                                 for v in sorted(votes, key=lambda x: -x.strength)[:12]],
             "patterns": patterns,

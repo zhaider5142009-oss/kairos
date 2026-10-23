@@ -72,7 +72,15 @@ def _model_weight(fc: ModelForecast, regime: str) -> float:
 
 
 def fuse(symbol: str, forecasts: list[ModelForecast], votes: list[StrategyVote],
-         regime: str, horizon: int) -> FusedSignal:
+         regime: str, horizon: int, attribution=None) -> FusedSignal:
+    """Blend the battery and the strategy poll into one actionable signal.
+
+    `attribution` is an optional `attribution.Attribution` view: when given,
+    each strategy vote enters the poll scaled by the skill its own votes have
+    realized out-of-sample in this horizon and regime. Without it the poll is
+    exactly what it always was — every vote at face value — which is the state
+    the system must fall back to whenever the artifact cannot be read.
+    """
     if not forecasts and not votes:
         return FusedSignal(symbol, 0.0, "HOLD", 0.0, horizon, 0.0, 0.0, 0.0, regime)
 
@@ -90,10 +98,21 @@ def fuse(symbol: str, forecasts: list[ModelForecast], votes: list[StrategyVote],
         model_agreement = float(abs(sum(directions))) / len(directions)
 
     # -- strategy poll -------------------------------------------------------
-    if votes:
-        bull = sum(v.strength for v in votes if v.direction > 0)
-        bear = sum(v.strength for v in votes if v.direction < 0)
-        strategy_consensus = float(np.clip((bull - bear) / max(len(votes) * 0.35, 1.0), -1.0, 1.0))
+    # A vote's own strength is its conviction; the attribution multiplier is the
+    # market's opinion of that conviction, measured out-of-sample on this
+    # strategy in this horizon and this regime. Nothing is dropped or added — a
+    # demoted strategy still speaks, at half voice — and the poll writes both
+    # numbers out, so a changed consensus can be traced to the votes that
+    # changed it.
+    scaled: list[tuple[StrategyVote, float]] = [
+        (v, 1.0 if attribution is None else attribution.weight_tag(
+            v.name, horizon, regime)[0])
+        for v in votes]
+    bull = sum(v.strength * w for v, w in scaled if v.direction > 0)
+    bear = sum(v.strength * w for v, w in scaled if v.direction < 0)
+    if scaled:
+        strategy_consensus = float(np.clip((bull - bear) / max(len(scaled) * 0.35, 1.0),
+                                           -1.0, 1.0))
     else:
         strategy_consensus = 0.0
 
@@ -133,17 +152,22 @@ def fuse(symbol: str, forecasts: list[ModelForecast], votes: list[StrategyVote],
     else:
         direction = "HOLD"
 
+    details: dict[str, Any] = {
+        "shrinkage": round(shrink, 3),
+        "models": {f.model: {"dir": f.direction, "er": round(f.expected_return, 5),
+                             "conf": round(f.confidence, 3),
+                             "detail": f.detail} for f in forecasts},
+        "strategy_bull": round(bull, 2),
+        "strategy_bear": round(bear, 2),
+        "strategies": {v.name: {"dir": v.direction, "s": round(v.strength, 2),
+                                **({"w": round(w, 3)} if w != 1.0 else {})}
+                       for v, w in sorted(scaled, key=lambda x: -x[0].strength)[:15]}}
+    if attribution is not None:
+        details["attribution"] = attribution.status()
     return FusedSignal(
         symbol=symbol, score=round(score, 4), direction=direction,
         expected_return=round(exp_ret * shrink, 5), horizon=horizon,
         confidence=round(confidence, 4),
         model_agreement=round(model_agreement, 3),
         strategy_consensus=round(strategy_consensus, 3), regime=regime,
-        details={"shrinkage": round(shrink, 3),
-                 "models": {f.model: {"dir": f.direction, "er": round(f.expected_return, 5),
-                                      "conf": round(f.confidence, 3),
-                                      "detail": f.detail} for f in forecasts},
-                 "strategy_bull": round(sum(v.strength for v in votes if v.direction > 0), 2),
-                 "strategy_bear": round(sum(v.strength for v in votes if v.direction < 0), 2),
-                 "strategies": {v.name: {"dir": v.direction, "s": round(v.strength, 2)}
-                                for v in sorted(votes, key=lambda x: -x.strength)[:15]}})
+        details=details)

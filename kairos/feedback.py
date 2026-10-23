@@ -40,12 +40,21 @@ class Snapshot:
     expected_return: float
     price: float
     direction: str
+    # The composite number alone cannot teach anything: when a call matures, the
+    # only way to know which part of the system was right is to have written down
+    # which parts spoke. These two fields are the whole difference between a
+    # journal that reports a hit rate and a journal that can attribute one — and
+    # they are recorded now, while there is nothing to attribute, because the
+    # alternative is to discover in six months that the evidence was never kept.
+    regime: str | None = None
+    strategies: dict[str, int] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {"ts": self.ts, "symbol": self.symbol, "horizon": self.horizon,
                 "score": self.score, "confidence": self.confidence,
                 "expected_return": self.expected_return, "price": self.price,
-                "direction": self.direction, "resolved": False}
+                "direction": self.direction, "regime": self.regime,
+                "strategies": self.strategies, "resolved": False}
 
 
 def record(res: dict[str, Any]) -> None:
@@ -53,11 +62,21 @@ def record(res: dict[str, Any]) -> None:
     if not res.get("ok"):
         return
     sig = res["signal"]
+    regime = (res.get("regime") or {}).get("regime")
+    spoke = {}
+    for s in res.get("top_strategies") or []:
+        try:
+            if s.get("name") and int(s.get("direction") or 0) != 0:
+                spoke[str(s["name"])[:60]] = 1 if int(s["direction"]) > 0 else -1
+        except (TypeError, ValueError):
+            continue
     snap = Snapshot(
         ts=datetime.now().isoformat(timespec="seconds"),
         symbol=res["symbol"], horizon=sig["horizon_days"], score=sig["score"],
         confidence=sig["confidence"], expected_return=sig["expected_return"],
-        price=res["price"], direction=sig["direction"])
+        price=res["price"], direction=sig["direction"],
+        regime=str(regime)[:40] if regime else None,
+        strategies=spoke or None)
     JOURNAL.parent.mkdir(parents=True, exist_ok=True)
     with _WRITE_LOCK, JOURNAL.open("a", encoding="utf-8") as fh:
         fh.write(_suffix_if_unterminated() + json.dumps(snap.to_dict()) + "\n")

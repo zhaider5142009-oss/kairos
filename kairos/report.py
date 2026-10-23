@@ -126,6 +126,7 @@ def render_prediction(res: dict[str, Any], console: Console | None = None,
 
     # ---- strategies
     if res.get("top_strategies"):
+        at = res.get("strategy_attribution") or {}
         s_tbl = Table(title=f"STRATEGY CONSENSUS — {res['strategies_voted']}/100 voted "
                             f"(consensus {sig.get('strategy_consensus', 0):+.2f})",
                       box=box.SIMPLE_HEAD, title_style="bold")
@@ -133,11 +134,32 @@ def render_prediction(res: dict[str, Any], console: Console | None = None,
         s_tbl.add_column("family", style="dim")
         s_tbl.add_column("dir", justify="center")
         s_tbl.add_column("strength", justify="right")
+        s_tbl.add_column("weight", justify="right")
         s_tbl.add_column("rationale", overflow="fold")
         for s in res["top_strategies"]:
+            w = float(s.get("weight", 1.0) or 1.0)
             s_tbl.add_row(s["name"], s["category"], _dir(s["direction"]),
-                          f"{s['strength']:.2f}", s["rationale"])
+                          f"{s['strength']:.2f}",
+                          (f"[green]{w:.2f}[/]" if w > 1.02 else
+                           f"[red]{w:.2f}[/]" if w < 0.98 else f"{w:.2f}"),
+                          s["rationale"])
         console.print(s_tbl)
+        # a weight that fires is a weight you can find — and a weight that is
+        # NOT firing has to be findable too, or a flat poll and an unreadable
+        # evidence file look identical on the page
+        if at.get("applied"):
+            console.print(f"[dim]votes weighted by realized out-of-sample skill "
+                          f"(measured {at.get('generated', '?')} on {at.get('instruments', 0)} "
+                          f"instruments, {at.get('slices', 0)} slices): {at.get('weighted', 0)} "
+                          f"weighted, {at.get('demoted', 0)} demoted, "
+                          f"{at.get('promoted', 0)} promoted, {at.get('no_coverage', 0)} "
+                          f"with no coverage[/]")
+            if at.get("broken"):
+                console.print(f"[red]strategies raising while measured: "
+                              f"{', '.join(at['broken'])}[/]")
+        else:
+            console.print(f"[yellow]flat poll — every vote at face value: "
+                          f"{at.get('reason', 'no attribution status returned')}[/]")
 
     # ---- patterns + factors
     if res.get("patterns"):
