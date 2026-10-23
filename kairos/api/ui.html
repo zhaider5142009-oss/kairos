@@ -451,14 +451,15 @@ async function loadHealth(){
     const pub=h.public_url?`<a href="${esc(h.public_url)}" target="_blank" rel="noopener" style="color:var(--cyan);font-size:14px;text-decoration:none">${esc(h.public_url.replace(/^https?:\/\//,''))}</a>`:'tunnel down';
     const cards=[['Market data',md.filter(x=>String(x[1]).match(/ok|up/i)).length+'/'+md.length,'ok'],
       ['LLM council',h.llm&&h.llm.ok?h.llm.provider+' · '+h.llm.models+' models':'offline','ok'],
-      ['Foundation models',h.wsl.models_ready?'Chronos + TimesFM + qlib ready':h.wsl.available?'WSL ready — models not installed':'WSL offline','warn'],
+      ['Foundation models',h.foundation?(h.foundation.any?h.foundation.label:h.foundation.label+' — these predictions run without one'):'no foundation view','warn'],
       ['Universe',h.universe_size+' instruments','ok'],
       ['Tower uptime',up,'ok'],
       ['Public address',null,h.public_url?'ok':'warn',pub]];
     $('#homekpi').innerHTML=cards.map(c=>`<div class="card" style="padding:14px 18px;margin:0"><div class="dim" style="font-size:12px;text-transform:uppercase;letter-spacing:.5px">${c[0]}</div><div style="font-size:19px;font-weight:700;margin-top:4px">${c[3]!==undefined?c[3]:esc(c[1])}</div><span class="tag ${c[2]}" style="margin-top:8px">${c[2]==='ok'?'operational':'attention'}</span></div>`).join('');
     $('#syshealth').innerHTML=[...md.map(([k,v])=>`<div class="kpi"><span class="dim">${esc(k)}</span><span class="${String(v).match(/ok|up/i)?'up':String(v).match(/down|error/i)?'down':'flat'}">${esc(v)}</span></div>`),
       `<div class="kpi"><span class="dim">llm router</span><span class="${h.llm&&h.llm.ok?'up':'down'}">${h.llm?esc(h.llm.provider||'down'):'down'}</span></div>`,
-      `<div class="kpi"><span class="dim">wsl bridge</span><span class="${h.wsl.models_ready?'up':'flat'}">${h.wsl.models_ready?'models ready':'available'}</span></div>`].join('');
+      `<div class="kpi"><span class="dim">gpu forecaster</span><span class="${h.gpu&&h.gpu.running?'up':'flat'}">${esc(h.gpu&&h.gpu.running?(h.gpu.backend||'on'):'off')}</span></div>`,
+      `<div class="kpi"><span class="dim">foundation</span><span class="${h.foundation&&h.foundation.any?'up':'flat'}">${esc(h.foundation&&h.foundation.via||'none')}</span></div>`].join('');
   }catch(e){$('#healthtxt').textContent='server unreachable';$('#healthdot span').style.color='var(--red)'}
 }
 

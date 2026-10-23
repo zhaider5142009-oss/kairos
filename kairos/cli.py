@@ -287,6 +287,14 @@ def cmd_health(args) -> int:
     else:
         cell = "[dim]offline[/]"
     tbl.add_row("wsl-bridge", cell)
+    gpu = h.get("gpu") or {}
+    tbl.add_row("gpu-forecaster",
+                f"[green]{gpu.get('backend')} · {gpu.get('model')} · "
+                f"{gpu.get('batches')} batches[/]" if gpu.get("running")
+                else f"[dim]{gpu.get('error') or 'not running'}[/]")
+    fnd = h.get("foundation") or {}
+    tbl.add_row("foundation models", "[green]" + str(fnd.get("label")) + "[/]"
+                if fnd.get("any") else "[red]" + str(fnd.get("label")) + "[/]")
     tbl.add_row("universe", f"[cyan]{h['universe_size']} instruments[/]")
     console.print(tbl)
     console.print(Panel(

@@ -6,6 +6,9 @@ Design notes:
   * LLM availability is reported at the config level (enabled + keys present),
     NOT via a live one-token call: a health endpoint must never block on a
     90-second provider timeout. Use the CLI `health` command for config truth.
+  * A foundation model reaches a prediction by two independent routes — the GPU
+    sidecar and the WSL bridge — so the union is what is reported. Consulting one
+    route alone let a Chronos answering in 0.6 s be displayed as "WSL offline".
 """
 
 from __future__ import annotations
@@ -26,6 +29,58 @@ def _public_url() -> str:
         return (CFG.data_dir / "tunnel_url.txt").read_text(encoding="utf-8").strip()
     except OSError:
         return ""
+
+
+def gpu_state() -> dict[str, Any]:
+    """Ask the DirectML sidecar's port, because the sidecar is a separate process
+    and a health endpoint cannot infer it from anything else.
+
+    Normalised here rather than at each reader: three surfaces used to decide on
+    their own what a missing sidecar meant, and two of them concluded "no
+    foundation model" from it while the third concluded "Chronos is on the WSL
+    bridge" even when that bridge was down too. One shape, one meaning: `running`
+    plus the reason it is not, when it is not.
+    """
+    try:
+        from .gpu_dml import GPU
+        h = GPU.health()
+    except Exception as exc:
+        return {"running": False, "backend": None, "model": None,
+                "error": f"{type(exc).__name__}: {str(exc)[:120]}"}
+    if not h or not h.get("ok"):
+        return {"running": False, "backend": None, "model": None,
+                "error": (h or {}).get("error")
+                or "nothing answering on the sidecar port"}
+    return {"running": True, "backend": h.get("backend") or h.get("provider"),
+            "model": h.get("model"), "provider": h.get("provider"),
+            "batches": int(h.get("batches") or 0), "error": None}
+
+
+def foundation_models(gpu: dict[str, Any],
+                      wsl_ready: dict[str, bool]) -> dict[str, Any]:
+    """Which foundation families can reach the next prediction, and by which route.
+
+    The WSL bridge was the only route this question consulted, so a GPU-served
+    Chronos answered in half a second while the desk printed "WSL offline" — a
+    capability present but displayed as absent, which is how a model family stays
+    switched off for weeks without anyone deciding to switch it off.
+    """
+    wsl_any = any(wsl_ready.get(k) for k in ("chronos", "timesfm", "qlib"))
+    if gpu.get("running"):
+        via = "gpu"
+        label = f"{gpu.get('model') or 'Chronos'} on {gpu.get('backend') or 'GPU'}"
+    elif wsl_any:
+        via = "wsl"
+        label = "WSL bridge: " + ", ".join(
+            k for k in ("chronos", "timesfm", "qlib") if wsl_ready.get(k))
+    else:
+        via = "none"
+        label = "no foundation model answering"
+    return {"chronos": bool(gpu.get("running")) or bool(wsl_ready.get("chronos")),
+            "timesfm": bool(wsl_ready.get("timesfm")),
+            "qlib": bool(wsl_ready.get("qlib")),
+            "any": via != "none", "via": via, "label": label,
+            "gpu_error": gpu.get("error")}
 
 
 def system_health() -> dict[str, Any]:
@@ -71,6 +126,8 @@ def system_health() -> dict[str, Any]:
     wsl = {"available": WSL.wsl_available(),
            "models_ready": any(ready.values()),
            "detail": ready}
+    gpu = gpu_state()
+    foundation = foundation_models(gpu, ready)
 
     data_ok = any(v in _STATE_OK for v in primaries.values())
     return {"ok": True,
@@ -78,5 +135,7 @@ def system_health() -> dict[str, Any]:
             "data_online": data_ok,
             "llm": llm,
             "wsl": wsl,
+            "gpu": gpu,
+            "foundation": foundation,
             "public_url": _public_url(),
             "universe_size": len(universe())}

@@ -299,19 +299,9 @@ def _t_health() -> dict:
     return {"ok": True, "data_online": h.get("data_online"),
             "market_data": h.get("market_data"), "llm": h.get("llm"),
             "wsl": bool((h.get("wsl") or {}).get("models_ready")),
-            "gpu": _gpu_state(),
+            "gpu": h.get("gpu") or {"running": False},
+            "foundation": h.get("foundation") or {},
             "universe_size": h.get("universe_size"), "uptime_s": h.get("uptime_s")}
-
-
-def _gpu_state() -> dict | None:
-    """The DirectML forecaster is a separate process, so `health` is the only way
-    the desk learns whether the Chronos number came off the GPU or off the WSL
-    fallback. None means nothing is answering on its port."""
-    try:
-        from .gpu_dml import GPU
-        return GPU.health()
-    except Exception:
-        return None
 
 
 def _l_health(d: dict) -> str:
@@ -323,9 +313,15 @@ def _l_health(d: dict) -> str:
         prov += " (configured but not answering: " + "; ".join(
             f"{k} — {v}" for k, v in unanswered.items()) + ")"
     dead = llm.get("dead_seats") or []
-    g = d.get("gpu")
-    gpu = (f"GPU forecaster on {g.get('provider')}" if g
-           else "GPU forecaster not running (Chronos on the WSL bridge)")
+    g = d.get("gpu") or {}
+    f = d.get("foundation") or {}
+    # The old clause named the WSL bridge as the fallback whenever the sidecar was
+    # down, which was a claim about a second process that was never checked: with
+    # both routes dark it printed a sentence that said the forecast still had a
+    # foundation model in it.
+    gpu = (f"GPU forecaster on {g.get('backend') or g.get('provider')}"
+           if g.get("running") else
+           f"GPU forecaster down, foundation models: {f.get('label') or 'unknown'}")
     return (f"Data {'online' if d.get('data_online') else 'OFFLINE'} — {md}. "
             f"{prov} over {int(_num(llm.get('models')))} council seats, "
             f"{len(dead)} dead seats, {gpu}, universe {d.get('universe_size')}, "

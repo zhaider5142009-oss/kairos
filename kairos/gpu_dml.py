@@ -260,7 +260,8 @@ class GpuForecaster:
 class GpuServer:
     """One GPU at a time, but requests are pooled into a full batch so the card stays fed."""
 
-    def __init__(self, forecaster: GpuForecaster, batch_wait: float = 0.12) -> None:
+    def __init__(self, forecaster: "GpuForecaster | None" = None,
+                 batch_wait: float = 0.12) -> None:
         self.f = forecaster
         self.batch_wait = batch_wait
         self._q: queue.Queue = queue.Queue()
@@ -278,6 +279,8 @@ class GpuServer:
         t.start()
 
     def _loop(self) -> None:
+        while self.f is None:
+            time.sleep(0.2)
         while True:
             batch = [self._q.get()]
             deadline = time.time() + self.batch_wait
@@ -322,14 +325,25 @@ class GpuServer:
             b["done"].set()
 
 
+def _health_body(srv: "GpuServer") -> tuple[int, dict[str, Any]]:
+    """What `GET /health` answers, split out so the contract a keeper depends on is
+    testable without a GPU.
+
+    An unbound port used to be the only answer a watcher got while the weights
+    loaded, which is indistinguishable from "nobody is bringing this up" — and the
+    weights take ~40 s. Answering on the port from the first instant, with `ok`
+    false until the graph is on the card, makes the port mean *a keeper is on duty*
+    and the body mean *it can forecast yet*.
+    """
+    f = srv.f
+    if f is None:
+        return 200, {"ok": False, "loading": True,
+                     "error": "forecaster still loading its graph"}
+    return 200, dict(f.health(), **srv.stats)
+
+
 def serve(port: int = DEFAULT_PORT, model: str = "base", batch: int = 16) -> None:
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
-    f = GpuForecaster(model=model, batch=batch)
-    srv = GpuServer(f)
-    srv.run_forever()
-    print("kairos gpu forecaster: %s on %s (batch %d) at http://127.0.0.1:%d"
-          % (f.repo, f.provider, f.batch, port), flush=True)
 
     class H(BaseHTTPRequestHandler):
         def _send(self, code: int, payload: dict[str, Any]) -> None:
@@ -342,13 +356,17 @@ def serve(port: int = DEFAULT_PORT, model: str = "base", batch: int = 16) -> Non
 
         def do_GET(self) -> None:  # noqa: N802
             if self.path.startswith("/health"):
-                self._send(200, dict(f.health(), **srv.stats))
+                code, payload = _health_body(srv)
+                self._send(code, payload)
             else:
                 self._send(404, {"ok": False, "error": "not found"})
 
         def do_POST(self) -> None:  # noqa: N802
             if not self.path.startswith("/forecast"):
                 self._send(404, {"ok": False, "error": "not found"})
+                return
+            if srv.f is None:
+                self._send(503, {"ok": False, "error": "forecaster loading"})
                 return
             try:
                 req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -363,7 +381,20 @@ def serve(port: int = DEFAULT_PORT, model: str = "base", batch: int = 16) -> Non
         def log_message(self, *a) -> None:
             pass
 
-    ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
+    # Bind first, load second: see _health_body. The socket is the keeper's only
+    # signal that a process is on duty, and it used to appear 40 s after the
+    # process did.
+    srv = GpuServer(None)
+    httpd = ThreadingHTTPServer(("127.0.0.1", port), H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    print("kairos gpu forecaster: listening on :%d, loading %s" % (port, model),
+          flush=True)
+    f = GpuForecaster(model=model, batch=batch)
+    srv.f = f
+    srv.run_forever()
+    print("kairos gpu forecaster: %s on %s (batch %d) at http://127.0.0.1:%d"
+          % (f.repo, f.provider, f.batch, port), flush=True)
+    threading.Event().wait()
 
 
 # --------------------------------------------------------------------------- client

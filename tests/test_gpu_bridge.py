@@ -11,7 +11,13 @@ tests is a claim about the daemon's survival:
   not one per instrument — and the circuit expires, because a sidecar that
   starts five minutes later must be used;
 * `health()` of a dead server is `None`, not an exception, so the desk can tell
-  "not running" from "running and slow".
+  "not running" from "running and slow";
+* health reports the *union* of the two routes a foundation model can reach a
+  prediction by. It used to consult the WSL bridge alone, so a Chronos answering
+  off the GPU in 0.6 s was displayed to the operator as "WSL offline" — a live
+  capability shown as an absent one;
+* the server answers on its port before its weights are loaded, because that port
+  is how a supervisor knows a process is on duty.
 
 The GPU path itself is deliberately not exercised here: it needs the RX 560, an
 812 MB exported graph and roughly 2 GB of the 8 GB this box has, and a test that
@@ -150,14 +156,179 @@ def test_the_desk_names_the_gpu_sidecar_state():
     from kairos import command as C
 
     down = C._l_health({"data_online": True, "market_data": {"psx": "ok"},
-                        "llm": {"provider": "x", "models": 2}, "gpu": None,
+                        "llm": {"provider": "x", "models": 2},
+                        "gpu": {"running": False, "error": "nothing answering"},
+                        "foundation": {"label": "no foundation model answering"},
                         "universe_size": 500, "uptime_s": 600})
-    assert "GPU forecaster not running" in down
+    assert "GPU forecaster down" in down
+    assert "no foundation model answering" in down
     up = C._l_health({"data_online": True, "market_data": {"psx": "ok"},
                       "llm": {"provider": "x", "models": 2},
-                      "gpu": {"provider": "DmlExecutionProvider"},
+                      "gpu": {"running": True, "backend": "onnxruntime-directml"},
+                      "foundation": {"label": "chronos-bolt-base on directml"},
                       "universe_size": 500, "uptime_s": 600})
-    assert "DmlExecutionProvider" in up and "not running" not in up
+    assert "onnxruntime-directml" in up and "GPU forecaster down" not in up
+
+
+# ------------------------------------------------------- the union the desk reads
+def _health_probes(monkeypatch, gpu_health, wsl_ready):
+    """`system_health` touches the data vendors, the LLM router and the WSL shell.
+
+    A test of one line of it has to hold the other three still, or it spends
+    thirty seconds shelling out to a distro that is not running.
+    """
+    from kairos.data import SourceHealth
+
+    monkeypatch.setattr("kairos.llm.provider_status", lambda: {})
+    monkeypatch.setattr("kairos.llm.dead_seats", lambda: [])
+    monkeypatch.setattr("kairos.llm.council_models", lambda: [])
+    src = SourceHealth(yahoo=True, tradingview=True, psx_local=False)
+    monkeypatch.setattr("kairos.engine.ENGINE.md",
+                        type("M", (), {"health": lambda self: src})(), raising=False)
+    monkeypatch.setattr("kairos.health.WSL", type("W", (), {
+        "wsl_available": staticmethod(lambda: False),
+        "models_ready": staticmethod(lambda: dict(wsl_ready))})())
+    monkeypatch.setattr("kairos.gpu_dml.GPU", type("G", (), {
+        "health": staticmethod(lambda: gpu_health)})())
+    monkeypatch.setattr("kairos.health._public_url", lambda: "")
+    monkeypatch.setattr("kairos.health.universe", lambda: [])
+
+
+_UP = {"ok": True, "backend": "onnxruntime-directml",
+       "provider": "DmlExecutionProvider", "model": "amazon/chronos-bolt-base",
+       "batches": 11}
+_OFF = {"chronos": False, "timesfm": False, "qlib": False}
+
+
+def test_a_gpu_chronos_is_not_reported_as_no_foundation_model(monkeypatch):
+    """The defect this closes: health consulted the WSL bridge alone, so on a box
+    where the bridge is stopped and the sidecar answers in 0.6 s the desk printed
+    "WSL offline" and the operator had no way to know a foundation model was in
+    every prediction. A capability displayed as absent is retired by whoever
+    reads the display."""
+    from kairos.health import system_health
+
+    _health_probes(monkeypatch, _UP, _OFF)
+    h = system_health()
+    assert h["wsl"]["models_ready"] is False      # the tension the union resolves
+    assert h["gpu"]["running"] is True
+    f = h["foundation"]
+    assert f["chronos"] is True and f["any"] is True and f["via"] == "gpu"
+    assert "directml" in f["label"].lower()
+
+
+def test_the_bridge_alone_still_counts(monkeypatch):
+    """Union, not preference: the WSL route is not demoted by the GPU existing."""
+    from kairos.health import system_health
+
+    _health_probes(monkeypatch, None, {"chronos": True, "timesfm": False,
+                                       "qlib": False})
+    h = system_health()
+    assert h["gpu"]["running"] is False and h["gpu"]["error"]
+    assert h["foundation"]["via"] == "wsl" and h["foundation"]["chronos"] is True
+
+
+def test_a_sidecar_answering_not_ok_is_not_running(monkeypatch):
+    """`ok: false` with 200 is a half-built server, not a slow one. Counting it as
+    running would put "chronos-bolt-base on None" on the desk for a process that
+    returns errors."""
+    from kairos.health import system_health
+
+    _health_probes(monkeypatch, {"ok": False, "error": "DML out of memory"}, _OFF)
+    h = system_health()
+    assert h["gpu"]["running"] is False
+    assert "out of memory" in h["gpu"]["error"]
+    assert h["foundation"]["via"] == "none"
+
+
+def test_no_foundation_model_is_said_out_loud(monkeypatch):
+    """Both routes dark is the state that must be visible, because a prediction
+    made without one is a different system from the one the pack describes."""
+    from kairos import command as C
+    from kairos.health import system_health
+
+    _health_probes(monkeypatch, None, _OFF)
+    h = system_health()
+    f = h["foundation"]
+    assert f["any"] is False and f["via"] == "none" and f["chronos"] is False
+    assert f["label"] == "no foundation model answering"
+    line = C._l_health({"data_online": True, "market_data": {"psx": "ok"},
+                        "llm": {"provider": "x", "models": 2},
+                        "gpu": h["gpu"], "foundation": f,
+                        "universe_size": 500, "uptime_s": 600})
+    assert "no foundation model answering" in line
+    # the sentence that used to promise a fallback without checking for one
+    assert "Chronos on the WSL bridge" not in line
+
+
+def test_the_desk_reads_the_union_not_one_route():
+    """A JS template that reads the bridge flag alone re-creates the defect and no
+    Python test can see it, so the template itself is pinned here."""
+    html = (Path(__file__).resolve().parents[1] / "kairos" / "api" /
+            "ui.html").read_text(encoding="utf-8")
+    assert "h.wsl.models_ready" not in html, (
+        "the foundation row reads a single route again; a GPU-served Chronos "
+        "will be displayed as no foundation model")
+    assert "h.foundation.any" in html and "h.gpu.running" in html
+
+
+# ----------------------------------------------------- what a keeper can rely on
+def test_the_port_answers_before_the_weights_are_on():
+    """`serve()` used to load the graph and only then bind the port, so the port
+    stayed shut for the ~40 s the weights take to reach the card. A supervisor
+    decides whether a process is on duty by asking that port, and an unanswered
+    port reads as "nobody is bringing this up" — which starts a second 812 MB load
+    on one 4 GB card. Answering must not require a loaded model."""
+    from kairos.gpu_dml import GpuServer, _health_body
+
+    code, body = _health_body(GpuServer(None))
+    assert code == 200, "a loading server refused to say it was loading"
+    assert body["ok"] is False and body["loading"] is True
+    assert "backend" not in body, "health named a card the graph is not on yet"
+
+
+def test_health_names_the_card_only_once_the_graph_is_on_it():
+    from kairos import gpu_dml as G
+
+    class _Loaded:
+        batch = 16
+
+        def health(self):
+            return {"ok": True, "backend": "onnxruntime-directml", "model": "m"}
+
+    srv = G.GpuServer(None)
+    srv.f = _Loaded()
+    code, body = G._health_body(srv)
+    assert code == 200 and body["ok"] is True
+    assert body["backend"] == "onnxruntime-directml"
+    assert body["batches"] == 0, "the server's own counters are not folded in"
+
+
+def test_the_batch_thread_waits_for_the_weights_then_resumes():
+    """The batching thread reads `self.f.batch`, and it now starts against a server
+    that has no forecaster yet. A queued request must wait for the graph, not be
+    answered by a thread that crashes on it — and must not be lost."""
+    import threading
+    import time
+
+    from kairos import gpu_dml as G
+
+    srv = G.GpuServer(None)
+    srv.run_forever()
+    seen: list[int] = []
+    srv._run_batch = lambda b: seen.append(len(b))
+    box = {"done": threading.Event(), "series": [100.0, 101.0], "horizon": 2,
+           "reply": None}
+    srv._q.put(box)
+    time.sleep(0.4)
+    assert seen == [], "a batch ran without a forecaster"
+    assert srv._q.qsize() == 1, "the request was taken off the queue and dropped"
+
+    srv.f = type("F", (), {"batch": 4})()
+    deadline = time.time() + 3.0
+    while not seen and time.time() < deadline:
+        time.sleep(0.05)
+    assert seen == [1], "the thread never resumed once the graph was assigned"
 
 
 def test_a_gpu_answer_that_is_not_ok_falls_back(gpu, monkeypatch):

@@ -120,6 +120,29 @@ python -m kairos setup-wsl     # installs Chronos-Bolt, TimesFM-2.5, qlib into W
 
 Everything degrades gracefully — KAIROS runs fully without WSL, without the LLM council, and with any single data source down.
 
+## Chronos on a local GPU (optional, ~2 GB RAM)
+
+An AMD or NVIDIA card gets the same Chronos-Bolt forecast off the card instead of
+the CPU, through a resident ONNX Runtime sidecar:
+
+```bash
+python -m kairos.gpu_dml serve --port 8611    # DirectML, no CUDA required
+python -m kairos.gpu_dml health               # what the desk reads to name the route
+```
+
+Measured on the development box (i5-6400 / 8 GB / RX 560, batch of 16): 0.59 s per
+batch on the card against 2.87 s eager on the CPU, and 1.2e-07 mean relative error
+against that CPU path — reproduce with `python tools/gpu_verify.py`. The engine
+asks the sidecar first and falls back to the WSL bridge on any refusal, with a
+60-second circuit so a dead sidecar costs one socket for the whole watchlist rather
+than one per instrument. `tools/kairos-daemon.bat` keeps it up at boot and after a
+crash, and stands down when less than 2.5 GB is free rather than paging the daemon
+that trades to feed a model server.
+
+`/api/health` reports both routes as one `foundation` view, because a card-side
+Chronos answering in half a second was previously displayed as "WSL offline" — the
+same defect as any capability that is present but shown as absent.
+
 ## Always-on & deployment
 
 **On your PC (the trading brain):** `tools/kairos-daemon.bat` is a 30-second
@@ -314,7 +337,7 @@ python -m kairos.cli feedback       # realized record, live
 ```
 
 [docs/investors/](docs/investors/) holds the ledger, a one-pager, the whitepaper and the
-deck. Read the ledger first: there is **no forward track record yet** — 3,755 predictions
+deck. Read the ledger first: there is **no forward track record yet** — 3,788 predictions
 journaled, 404 horizons matured, all 404 non-trades — and 10 of 14 instruments in the
 walk-forward sweep lost money. That is the honest state of the project, and it is the reason
 the risk layer exists.
