@@ -18,7 +18,7 @@ import time
 from typing import Any
 
 from . import feedback
-from .rules import check_plan, get_rule
+from .rules import NO_BOOK, check_plan, get_rule
 
 _board_cache: tuple[float, list[dict[str, Any]]] | None = None
 _BOARD_TTL = 120.0
@@ -121,9 +121,20 @@ def conduct(symbol: str, res: dict[str, Any] | None = None,
     action = "EXECUTE" if not reasons else "PASS"
     plan = None
     if action == "EXECUTE":
+        # The same three numbers the autopilot's entry gate is checked on, from
+        # the prediction's own doctrine snapshot. A conductor that vetted R:R and
+        # conviction but never looked at the trend or the heat would approve the
+        # entries its own rules refuse, and the operator would read two different
+        # answers from one system. The name cap is only asked when a risk posture
+        # came in: without one there is no book to count, and `NO_BOOK` makes the
+        # check say "not evaluated" rather than assume zero holdings.
+        doc = res.get("doctrine") or {}
+        n_held = posture.get("n_positions") if posture is not None else NO_BOOK
         plan = check_plan(entry=price, stop=float(stop), target=float(tgt),
                           equity=float((posture or {}).get("equity") or 1_000_000),
-                          confidence=conf, signal_dir=_dir_num(direction))
+                          confidence=conf, signal_dir=_dir_num(direction),
+                          n_held=n_held, sma=doc.get("sma"),
+                          rsi14=doc.get("rsi14"))
         if not plan["passed"]:
             action = "PASS"
             reasons.append(f"plan check: {plan['failures']}")
@@ -138,6 +149,9 @@ def conduct(symbol: str, res: dict[str, Any] | None = None,
         "entry": price, "stop": round(float(stop), 4) if stop else None,
         "target": round(float(tgt), 4) if tgt else None,
         "calibration": cal, "posture_ok": not posture_bad,
+        # an EXECUTE with blind rules is a clean bill from controls that never
+        # ran, so the reader is told which ones: trend, heat, cap, reward leg.
+        "plan_blind": (plan or {}).get("blind", []),
         "reasons": reasons or ["all experts concur"],
     }
 

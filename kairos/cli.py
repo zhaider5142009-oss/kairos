@@ -551,11 +551,25 @@ def cmd_rules(args) -> int:
     from . import rules as R
     console = _console()
     console.print(Panel(R.describe(), title="KAIROS DOCTRINE", style="blue"))
+    # The third column is the whole point of the panel. A list of limits reads as
+    # a set of controls the system has, and until 2026-10-23 several of these
+    # were read by nothing — so each row now says which module applies it, or says
+    # plainly that it is intent rather than enforcement.
+    aud = R.audit()
+    where = {e["key"]: ", ".join(e["read_in"]) for e in aud["enforced"]}
+    why = {i["key"]: i["why"] for i in aud["declared_not_enforced"]}
     tbl = Table(box=box.ROUNDED, title="effective rules (config/rules.json override)")
     tbl.add_column("rule")
     tbl.add_column("value", justify="right")
+    tbl.add_column("enforced?", overflow="fold", max_width=46)
     for k, v in R.rules().items():
-        tbl.add_row(k, str(v))
+        if k in where:
+            note = f"yes — read in {where[k]}"
+        elif k in why:
+            note = f"NO: {why[k]}"
+        else:
+            note = "UNCLASSIFIED: nothing reads it and the doctrine gives no reason"
+        tbl.add_row(k, str(v), note)
     console.print(tbl)
     if args.wisdom:
         for name, corpus in (("WYCKOFF", R.WYCKOFF_PHASES), ("DOW", R.DOW_THEORY),

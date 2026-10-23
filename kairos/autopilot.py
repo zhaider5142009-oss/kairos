@@ -453,10 +453,24 @@ class Autopilot:
             return f"price {px:.2f} under Rs {min_px:.0f} — penny-scrip risk"
         if "volume" in df.columns:
             v = pd.to_numeric(df["volume"], errors="coerce").tail(20).mean()
-            min_v = float(_R.get_rule("psx_min_adv_shares", 50000))
-            if v is not None and not np.isnan(float(v)) and float(v) < min_v:
-                return f"20d volume {float(v):,.0f}/day under {min_v:,.0f}"
-        return None
+            # One floor from two keys (`psx_min_adv_shares` and the doctrine's
+            # `min_avg_volume`), the tighter of the two, so tightening either one
+            # in config actually changes what gets screened out.
+            min_v, _floor_src = _R.adv_share_floor()
+            if v is None or np.isnan(float(v)):
+                # Every volume cell missing is not a liquid name; it is a screen
+                # with nothing to read, which this function's own policy treats
+                # as a rejection.
+                return ("PSX volume unreadable over the last 20 bars — the "
+                        "liquidity floor cannot be checked")
+            if float(v) < min_v:
+                return f"20d volume {float(v):,.0f}/day under {min_v:,.0f} " \
+                       f"({_floor_src})"
+            return None
+        # No volume column at all: this docstring's own policy is that a screen
+        # which cannot see answers "reject", and a frame with no volume is the
+        # clearest case of not seeing.
+        return "PSX history has no volume column — liquidity unverifiable"
 
     def _maybe_rotate_psx(self) -> None:
         """Daily scan-driven watchlist refresh: the cross-sectional factor
@@ -481,7 +495,7 @@ class Autopilot:
         from . import rules as _R
         from .universe import register_psx
         min_px = float(_R.get_rule("psx_min_price", 5.0))
-        min_v = float(_R.get_rule("psx_min_adv_shares", 50000))
+        min_v, _floor_src = _R.adv_share_floor()
         fresh: list[str] = []
         for row in scan.get("top") or []:
             sym = str(row.get("name") or "").upper().strip()
@@ -494,7 +508,10 @@ class Autopilot:
                 continue
             if px < min_px:                      # penny-scrip screen
                 continue
-            if vol and vol < min_v:              # liquidity screen
+            # A candidate that reports no volume is not a liquid one: the old
+            # reading skipped this screen precisely for the rows whose liquidity
+            # was unknown, which is the name the screen exists to catch.
+            if not vol or vol < min_v:           # liquidity screen
                 continue
             if register_psx(sym, sector=str(row.get("sector") or "")) is None:
                 continue                         # collides with a non-PSX key
@@ -797,7 +814,11 @@ class Autopilot:
                       "entry has no maturity exit until the state file is fixed")
             JOURNAL.log("AUTOPILOT_AGE_UNREADABLE",
                         {"symbol": inst.key, "started": str(started)[:40]})
-        mature = age is not None and age >= st["horizon_days"]
+        # Two timers name the same instruction: the autopilot's own horizon and
+        # the doctrine's `max_hold_days`, which used to bind nothing. The tighter
+        # governs, so an operator who sets a 3-day hold cap gets a 3-day hold cap.
+        due, _due_src = _R.maturity_days(st["horizon_days"])
+        mature = age is not None and age >= due
         if flip:
             return "FLIP"
         if mature:
@@ -855,13 +876,24 @@ class Autopilot:
         # confidence, stop side. Exits must always be allowed.
         from . import rules as _R
         if not close:
+            # The doctrine's own numbers, from the frame the prediction was made
+            # on: the name cap needs to know how many names are already open, and
+            # the trend and heat filters need the mean and the RSI. A venue whose
+            # book cannot be read yields `n_held=None`, which the cap treats as
+            # full — "we do not know how many we hold" is not "we hold none".
+            doc = res.get("doctrine") or {}
+            n_held = (None if pos is None
+                      else max(len(self.st.get("held") or {}), len(pos)))
             plan = _R.check_plan(price, sl, tp,
                                  float((acc or {}).get("equity") or 0),
                                  (res.get("signal") or {}).get("confidence"),
-                                 1 if side == "BUY" else -1, qty=qty)
+                                 1 if side == "BUY" else -1, qty=qty,
+                                 n_held=n_held, sma=doc.get("sma"),
+                                 rsi14=doc.get("rsi14"))
             if not plan["passed"]:
-                why = "; ".join(f"{c['rule']} {c['value']} (needs {c['required']})"
-                                for c in plan["checks"] if not c["passed"])
+                why = plan["failures"] or "plan check refused"
+                if plan["blind"]:
+                    why += " [not evaluated: " + ", ".join(plan["blind"]) + "]"
                 self.st["actions"].insert(0, {"ts": _now(), "symbol": inst.key,
                                               "action": "PLANCHECK", "why": why})
                 self.st["actions"] = self.st["actions"][:MAX_ACTIONS_KEPT]

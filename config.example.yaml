@@ -250,6 +250,26 @@ rules:
                                      # when equity is 8%+ under its all-time peak
   psx_min_price: 5.0                 # PSX microstructure screen: no penny scrips
   psx_min_adv_shares: 50000          # PSX 20d avg volume floor (illiquid = tickets die)
+  # ---- entry filters the gate applies (wired 2026-10-23) ----
+  # These were declared in `kairos/rules.py` for eighteen months and read by
+  # nothing, while `describe()` printed them as if they governed — and the CLI,
+  # the command plane and the LLM council prompt all quote `describe()`. They now
+  # bind: `kairos rules` shows a column saying so, and
+  # `tests/test_doctrine_bound.py` fails if a declared key binds nothing and does
+  # not admit it. Setting `require_above_sma50: false` is a real choice; leaving
+  # it true means the system is obeying rule 3 of the doctrine it states.
+  max_open_positions: 8              # no new name once the book holds 8
+  require_above_sma50: true          # longs only at or above the mean below
+  trend_sma_period: 50               # the mean the filter measures, and the one
+                                     # `predict` publishes in `res["doctrine"]`
+  rsi_overbought: 70                 # no long bought above this heat
+  rsi_oversold: 30                   # no short sold below it
+  max_hold_days: 60                  # second maturity brake: the tighter of this
+                                     # and `autopilot.horizon_days` closes the name
+  min_avg_volume: 50000              # PSX liquidity floor — same instruction as
+                                     # `psx_min_adv_shares`, and the tighter of the
+                                     # two is the one that screens (no more knob
+                                     # that looks tightened and is not read)
 
 # paper venue economics
 paper:

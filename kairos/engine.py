@@ -27,7 +27,7 @@ from .calendar import risk_calendar
 from .ensemble import fuse
 from .feedback import confidence_adjustment, record
 from .features import (compute_features, cross_sectional_factors, detect_patterns,
-                       detect_regime)
+                       detect_regime, doctrine_snapshot)
 from .kse_regime import kse_regime
 from .llm import ROUTER
 from .macro import condition_label, macro_state, psx_breadth
@@ -41,6 +41,17 @@ from .wsl_bridge import WSL
 
 INTERMARKET_KEYS = ("DXY", "US10Y", "VIX", "SPX", "WTI", "GOLD", "COPPER", "BTC",
                     "USDPKR", "WHEAT")
+
+
+def _trend_period() -> Any:
+    """The doctrine's trend period, read when the snapshot is taken.
+
+    Not a module constant: `config.yaml` and `data/rules.json` can change while
+    the daemon runs, and a gate that measures the trend against the period the
+    process booted with is not applying the operator's rule.
+    """
+    from .rules import get_rule
+    return get_rule("trend_sma_period", 50)
 
 
 class PredictionEngine:
@@ -448,6 +459,12 @@ class PredictionEngine:
             "condition": condition,
             "macro": macro.as_dict(),
             "news": news_view,
+            # What the trading doctrine gates on. The autopilot's entry decision
+            # needs the trend mean and the heat reading, and this is the only
+            # place in the cycle that has the price frame: reading them again at
+            # the gate would mean a second history call for every candidate,
+            # which is what the scan's cost was cut to stop.
+            "doctrine": doctrine_snapshot(df, _trend_period()),
             "signal": {
                 "direction": signal.direction, "score": signal.score,
                 "confidence": signal.confidence,

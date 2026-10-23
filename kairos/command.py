@@ -118,7 +118,9 @@ def _l_conduct(d: dict) -> str:
     cal = d.get("calibration") or {}
     extra = (f" {d['rr']:.1f}R geometry" if d.get("rr") else "") + (
         f", anchored on {cal.get('n_resolved')} realized calls"
-        if cal.get("n_resolved") else "")
+        if cal.get("n_resolved") else "") + (
+        f" [not evaluated: {', '.join(d['plan_blind'])}]"
+        if d.get("plan_blind") else "")
     return (f"Conductor says {d['action']} on {d['symbol']} — {d['direction']}, "
             f"conviction {d['conviction']:.2f} against a {d['threshold']:.2f} bar, "
             f"P(win) {d['p_hit'] * 100:.0f}%, edge {d['edge_r']:+.2f}R"
@@ -347,8 +349,17 @@ def _l_news(d: dict) -> str:
 
 
 def _t_doctrine() -> dict:
-    from .rules import describe
-    return {"ok": True, "doctrine": describe()}
+    from .rules import audit, describe
+    a = audit()
+    out = {"ok": True, "doctrine": describe(),
+           "enforced": a["counts"]["enforced"],
+           "declared_not_enforced": a["counts"]["inert"]}
+    if a["unclassified"]:
+        # A key the doctrine neither applies nor admits it does not apply is the
+        # shape that lets a plan claim a control it does not have.
+        out["warning"] = ("rules declared but unclassified: "
+                          + ", ".join(a["unclassified"]))
+    return out
 
 
 def _l_doctrine(d: dict) -> str:

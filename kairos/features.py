@@ -142,6 +142,52 @@ def _linreg_slope(close: pd.Series, n: int = 20) -> tuple[float, float]:
 # ---------------------------------------------------------------------------
 # Master feature computation
 # ---------------------------------------------------------------------------
+def doctrine_snapshot(df: pd.DataFrame,
+                      trend_period: int = 50) -> dict[str, float | None]:
+    """The three numbers the trading doctrine gates an entry on.
+
+    `rules.py` declares a trend filter (`require_above_sma50` at
+    `trend_sma_period`) and a heat filter (`rsi_oversold`/`rsi_overbought`) that
+    the entry decision has to be able to answer, so they are computed here from
+    the frame the engine is already holding — the alternative is a second history
+    call per candidate on the autopilot's thread, which is a network round trip
+    spent to re-derive two indicators that were in hand a moment earlier.
+
+    Anything the frame cannot support comes back as `None`, not as a neutral
+    number. That distinction is the whole point: `_rsi` fills 50.0 for a series
+    too short for its own `min_periods`, which is a plausible-looking reading of
+    nothing, and a gate that trusts it buys a name the trend filter never looked
+    at. Two bars of history is not a trend, and the caller is told so.
+    """
+    out: dict[str, float | None] = {"close": None, "sma": None, "rsi14": None}
+    if df is None or len(df) < 2 or "close" not in getattr(df, "columns", []):
+        return out
+    c = pd.to_numeric(df["close"], errors="coerce")
+    px = c.iloc[-1]
+    if not (np.isfinite(px) and px > 0):
+        return out
+    out["close"] = float(px)
+    try:
+        n: int | None = max(2, int(trend_period))
+    except (TypeError, ValueError):
+        # The operator's own period is unreadable, so there is no trend filter to
+        # apply and no default that stands in for it: `sma` stays None and the
+        # gate refuses the entry naming that, instead of quietly measuring the
+        # trend against a 50 the configuration never said. Only the mean is
+        # abandoned — the heat filter does not depend on the period, so taking it
+        # down as well would report one bad knob as two blind controls.
+        n = None
+    if n is not None and len(c) >= n:
+        s = _sma(c, n).iloc[-1]
+        if np.isfinite(s):
+            out["sma"] = float(s)
+    if len(c) >= 15:
+        r = _rsi(c, 14).iloc[-1]
+        if np.isfinite(r):
+            out["rsi14"] = float(r)
+    return out
+
+
 def compute_features(df: pd.DataFrame) -> dict[str, float]:
     """Compute the full feature vector from the LAST row of each indicator."""
     c, h, lo, v = df["close"], df["high"], df["low"], df["volume"].fillna(0)
