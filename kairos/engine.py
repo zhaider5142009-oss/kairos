@@ -37,6 +37,7 @@ from .news import DESK as NEWS_DESK
 from .risk import compute_risk, portfolio_metrics
 from .strategies import run_strategy_library
 from .universe import Instrument, resolve
+from .gpu_dml import GPU
 from .wsl_bridge import WSL
 
 INTERMARKET_KEYS = ("DXY", "US10Y", "VIX", "SPX", "WTI", "GOLD", "COPPER", "BTC",
@@ -309,7 +310,7 @@ class PredictionEngine:
             wsl_report: list[dict[str, Any]] = []
             if use_wsl:
                 series = [float(x) for x in close.tail(400).values]
-                for label, fn in (("Chronos", WSL.chronos_forecast),
+                for label, fn in (("Chronos", GPU.chronos_forecast),
                                   ("TimesFM", WSL.timesfm_forecast)):
                     try:
                         fc = fn(series, horizon)

@@ -11,6 +11,14 @@ __pycache__/
 .pytest_cache/
 *.log
 
+# Exported foundation-model weights. The DirectML bridge writes an 812 MB ONNX
+# graph next to the repo on first run; it is derived from a Hugging Face model,
+# so it is a local build artefact and never a file for the repository.
+gpu_models/
+
+# Scratch copies taken while rewiring a module by hand
+*.bak-*
+
 # Local junk
 Thumbs.db
 .DS_Store

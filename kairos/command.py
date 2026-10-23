@@ -299,7 +299,19 @@ def _t_health() -> dict:
     return {"ok": True, "data_online": h.get("data_online"),
             "market_data": h.get("market_data"), "llm": h.get("llm"),
             "wsl": bool((h.get("wsl") or {}).get("models_ready")),
+            "gpu": _gpu_state(),
             "universe_size": h.get("universe_size"), "uptime_s": h.get("uptime_s")}
+
+
+def _gpu_state() -> dict | None:
+    """The DirectML forecaster is a separate process, so `health` is the only way
+    the desk learns whether the Chronos number came off the GPU or off the WSL
+    fallback. None means nothing is answering on its port."""
+    try:
+        from .gpu_dml import GPU
+        return GPU.health()
+    except Exception:
+        return None
 
 
 def _l_health(d: dict) -> str:
@@ -311,9 +323,12 @@ def _l_health(d: dict) -> str:
         prov += " (configured but not answering: " + "; ".join(
             f"{k} — {v}" for k, v in unanswered.items()) + ")"
     dead = llm.get("dead_seats") or []
+    g = d.get("gpu")
+    gpu = (f"GPU forecaster on {g.get('provider')}" if g
+           else "GPU forecaster not running (Chronos on the WSL bridge)")
     return (f"Data {'online' if d.get('data_online') else 'OFFLINE'} — {md}. "
             f"{prov} over {int(_num(llm.get('models')))} council seats, "
-            f"{len(dead)} dead seats, universe {d.get('universe_size')}, "
+            f"{len(dead)} dead seats, {gpu}, universe {d.get('universe_size')}, "
             f"up {int(_num(d.get('uptime_s')) / 60)} min.")
 
 
@@ -485,7 +500,13 @@ def plan(text: str) -> dict[str, Any]:
         add("health", "check every subsystem, including provider truth")
         add("posture", "and the execution posture")
     elif has("doctrine", "your rules", "risk rules", "discipline", "wyckoff",
-             "dow theory", "canslim", "buffett", "dalio", "lynch"):
+             "dow theory", "canslim", "buffett", "dalio", "lynch",
+             "rules", "rule you", "bound by", "binding", "enforce", "governs",
+             "what stops you", "position cap", "name cap", "risk limit"):
+        # The list used to name the schools but not the question. An operator
+        # asking the plainest version of it — "what rules are you bound by?" —
+        # reached no branch, fell through to the model, and the desk reported
+        # `planner: "model"` as though the rule router had declined on purpose.
         add("doctrine", "state the rules the system is bound by")
     elif has("news", "headline", "what happened"):
         add("news", "read the radar")
@@ -705,7 +726,8 @@ def guard(text: str) -> dict[str, Any] | None:
     if not _asks_for_movement(text):
         return None
     return {"ok": True, "intent": "refused", "answer": _REFUSAL,
-            "steps": [], "trace": [], "ms": 0, "planner": "guard"}
+            "steps": [], "trace": [], "ms": 0, "planner": "guard",
+            "planner_note": ""}
 
 
 def run(text: str, budget_s: float = DEFAULT_BUDGET_S,
@@ -717,19 +739,25 @@ def run(text: str, budget_s: float = DEFAULT_BUDGET_S,
     p = plan(text)
     steps = p["steps"]
     planner = "rule"
+    why_empty = ""
     if not steps:
-        steps = _llm_plan(text)
-        planner = "model"
+        steps, why_empty = _llm_plan(text)
+        planner = "model" if steps else "model-empty"
         if steps:
             p["intent"] = str(steps[0].get("tool") or "model")
     if not steps:
-        answer = ("I could not turn that into a step on my tools. Ask about an "
-                  "instrument (\"is OGDC a buy this week\"), the screen (\"best PSX "
-                  "names to trade\"), the board (\"what are you watching\"), a "
-                  "backtest, a portfolio, my realized record, or my health.")
+        # Both routers came back with nothing. Say which failure it was: an
+        # operator reading "I could not turn that into a step" cannot tell a
+        # suspended API account from a question outside the toolset, and only
+        # one of those is something they can fix.
+        answer = ("I could not turn that into a step on my tools"
+                  + (f": {why_empty}" if why_empty else "") + ". Ask about an "
+                    "instrument (\"is OGDC a buy this week\"), the screen (\"best PSX "
+                    "names to trade\"), the board (\"what are you watching\"), a "
+                    "backtest, a portfolio, my realized record, my rules, or my health.")
         return {"ok": True, "intent": "none", "answer": answer, "steps": [],
                 "trace": [], "ms": int((time.perf_counter() - t0) * 1000),
-                "planner": planner}
+                "planner": planner, "planner_note": why_empty}
     trace = execute(steps, budget_s)
     answer = _say(trace)
     left = _num(budget_s) - (time.perf_counter() - t0)
@@ -743,21 +771,30 @@ def run(text: str, budget_s: float = DEFAULT_BUDGET_S,
             "trace": [{"step": r["step"], "tool": r["tool"], "ok": r["ok"],
                        "ms": r.get("ms", 0), "error": r.get("error"),
                        "args": r.get("args")} for r in trace],
-            "ms": int((time.perf_counter() - t0) * 1000), "planner": planner}
+            "ms": int((time.perf_counter() - t0) * 1000), "planner": planner,
+            "planner_note": why_empty}
 
 
 # --------------------------------------------------------- model-planned steps
-def _llm_plan(text: str) -> list[dict]:
+def _llm_plan(text: str) -> tuple[list[dict], str]:
     """Last resort when no rule compiled a plan: ask a model to compose one.
 
     It chooses only from the registry, and every choice is re-validated — an
     unknown tool, an argument the tool does not take, or a symbol the universe
     does not have is dropped here rather than executed.
+
+    Returns (steps, reason). The reason is empty when steps came back and names
+    why they did not otherwise, because the four ways to produce an empty list —
+    no provider, provider error, an answer that is not JSON, a model that chose
+    nothing valid — are four different truths and the second one means an
+    account to fix while the third means a wording to change. A bare `[]` made
+    the desk say one sentence for all of them.
     """
     try:
         from .llm import ROUTER, _extract_json
         if not _a_provider_is_enabled():
-            return []
+            return [], ("no model provider has a key, so only the rule router "
+                        "could try this")
         menu = "\n".join(f"- {t.name}: {t.what}" for t in TOOLS.values())
         prompt = (
             "You are the planner for a read-only quant trading desk. Compose at "
@@ -767,11 +804,13 @@ def _llm_plan(text: str) -> list[dict]:
             f"Operator request: \"{text[:300]}\"")
         r = ROUTER.chat(prompt, max_tokens=300, use_cache=False)
         if not r.ok or not r.text:
-            return []
+            return [], f"the model provider did not answer ({getattr(r, 'provider', '?')})"
         data = _extract_json(r.text)
         raw = data.get("steps") if isinstance(data, dict) else data
         if not isinstance(raw, list):
-            return []
+            return [], "the model answered but not as a step list"
+        if not raw:
+            return [], "the model looked at the registry and chose nothing"
         out: list[dict] = []
         for s in raw[:MAX_STEPS]:
             if not isinstance(s, dict):
@@ -782,6 +821,11 @@ def _llm_plan(text: str) -> list[dict]:
                 continue
             out.append({"tool": tool.name, "args": args,
                         "why": str(s.get("why") or "planned by the model")[:80]})
-        return out
-    except Exception:
-        return []
+        if not out:
+            return [], ("every step the model proposed named a tool or an "
+                        "argument this desk does not have")
+        return out, ""
+    except Exception as exc:
+        # A planner that crashes and reports an empty list is a broken
+        # component reading as a quiet one. Name the exception.
+        return [], f"the model planner raised {type(exc).__name__}"

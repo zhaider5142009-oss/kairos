@@ -624,7 +624,9 @@ def _plane_reply(r: dict) -> dict:
                   "data": {"kind": action, "intent": r.get("intent"),
                            "steps": r.get("steps") or [],
                            "trace": r.get("trace") or [],
-                           "planner": r.get("planner"), "ms": r.get("ms")}})
+                           "planner": r.get("planner"),
+                           "planner_note": r.get("planner_note"),
+                           "ms": r.get("ms")}})
 
 
 # ---------------------------------------------------------------- command plane
@@ -648,8 +650,9 @@ def command(req: CommandReq):
         return _safe({"ok": True, "intent": "help",
                       "answer": "Ask about an instrument, the PSX screen, the "
                                 "conductor board, a backtest, a portfolio, my "
-                                "realized record, or my health.",
-                      "steps": [], "trace": [], "ms": 0, "planner": "none"})
+                                "realized record, my rules, or my health.",
+                      "steps": [], "trace": [], "ms": 0, "planner": "none",
+                      "planner_note": "no message was sent, so no planner ran"})
     return _safe(plane.run(msg, budget_s=min(max(req.budget_s, 1.0), 120.0),
                            use_model=bool(req.use_model)))
 

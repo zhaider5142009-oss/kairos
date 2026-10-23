@@ -230,8 +230,9 @@ def test_the_model_cannot_choose_a_tool_that_is_not_in_the_registry(monkeypatch)
                      '{"tool": "predict", "args": {"nonsense": 1}}]}')
 
     monkeypatch.setattr(L.ROUTER, "chat", chat)
-    steps = C._llm_plan("anything")
+    steps, why = C._llm_plan("anything")
     assert [s["tool"] for s in steps] == ["record"]
+    assert why == ""
 
 
 def test_a_model_plan_with_nothing_valid_leaves_the_rule_plan_in_charge(monkeypatch):
@@ -239,13 +240,91 @@ def test_a_model_plan_with_nothing_valid_leaves_the_rule_plan_in_charge(monkeypa
 
     monkeypatch.setattr(C, "_a_provider_is_enabled", lambda: True)
     monkeypatch.setattr(L.ROUTER, "chat", lambda prompt, **kw: _Resp('{"steps": []}'))
-    assert C._llm_plan("anything") == []
+    steps, why = C._llm_plan("anything")
+    assert steps == []
+    assert "chose nothing" in why
 
 
 def test_the_model_is_not_asked_when_no_provider_is_enabled(monkeypatch):
     monkeypatch.setattr(C, "_a_provider_is_enabled", lambda: False)
     monkeypatch.setattr(C, "TOOLS", {})
-    assert C._llm_plan("anything") == []
+    steps, why = C._llm_plan("anything")
+    assert steps == []
+    assert "no model provider" in why
+
+
+# ------------------------------------------------- the four empties stay distinct
+def _plane_empty(monkeypatch, chat):
+    """Run `run()` with a rule plan that matches nothing and a given model reply."""
+    import kairos.llm as L
+
+    monkeypatch.setattr(C, "_a_provider_is_enabled", lambda: True)
+    monkeypatch.setattr(L.ROUTER, "chat", chat)
+    monkeypatch.setattr(C, "plan", lambda text: {
+        "intent": "none", "steps": [], "symbols": [], "movement": False})
+    return C.run("zzz", use_model=False)
+
+
+def test_a_dead_provider_is_reported_as_dead_not_as_a_hard_question(monkeypatch):
+    """`ok=False` is an account or an outage — something the operator can fix.
+    One sentence for all four empty answers made an outage read as a question
+    outside the toolset, which is the difference between calling the exchange
+    and rewriting the prompt."""
+    out = _plane_empty(monkeypatch, lambda prompt, **kw: _Resp("", ok=False))
+    assert out["planner"] == "model-empty"
+    assert "did not answer" in out["planner_note"]
+    assert "did not answer" in out["answer"]
+
+
+def test_an_answer_that_is_not_json_is_named_as_such(monkeypatch):
+    out = _plane_empty(monkeypatch, lambda prompt, **kw: _Resp("I cannot help"))
+    assert "not as a step list" in out["planner_note"]
+
+
+def test_a_model_that_proposes_only_unknown_tools_is_not_the_same_as_silence(monkeypatch):
+    out = _plane_empty(
+        monkeypatch,
+        lambda prompt, **kw: _Resp('{"steps": [{"tool": "place_order", "args": {}}]}'))
+    assert "does not have" in out["planner_note"]
+
+
+def test_a_crashed_planner_says_it_crashed(monkeypatch):
+    """`except Exception: return []` was the worst of the four: a bug in the
+    planner looked exactly like a model that had nothing to say."""
+    def boom(prompt, **kw):
+        raise RuntimeError("socket went away")
+
+    out = _plane_empty(monkeypatch, boom)
+    assert "RuntimeError" in out["planner_note"]
+    assert out["planner"] == "model-empty"
+
+
+def test_the_rule_plan_never_blames_the_model(monkeypatch):
+    monkeypatch.setattr(C, "_a_provider_is_enabled", lambda: True)
+    monkeypatch.setattr(C, "plan", lambda text: {
+        "intent": "record", "steps": [{"tool": "record", "args": {}, "why": "x"}],
+        "symbols": [], "movement": False})
+    monkeypatch.setattr(C, "execute", lambda steps, budget: [])
+    out = C.run("how is your record", use_model=False)
+    assert out["planner"] == "rule" and out["planner_note"] == ""
+
+
+def test_the_doctrine_family_reaches_the_rule_router():
+    """The router named the schools — Wyckoff, Dalio, CAN SLIM — but not the
+    plain question, so "what rules are you bound by?" fell to the model and the
+    desk credited the model with an answer the rules table had given."""
+    for q in ("what rules are you bound by?", "which rules do you enforce?",
+              "what are your risk limits?", "is there a position cap?",
+              "your doctrine", "what governs your entries?"):
+        p = C.plan(q)
+        assert [s["tool"] for s in p["steps"]] == ["doctrine"], q
+
+
+def test_a_forecast_question_is_not_stolen_by_the_doctrine_branch():
+    """Widening the doctrine triggers must not eat the ordinary ask."""
+    for q in ("is OGDC a buy this week", "where is gold heading",
+              "best PSX names to trade", "check your health"):
+        assert "doctrine" != C.plan(q)["intent"], q
 
 
 def test_a_placeholder_key_is_not_counted_as_a_provider(monkeypatch):
