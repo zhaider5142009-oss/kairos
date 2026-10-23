@@ -7,7 +7,7 @@ _Rebuilt from the on-disk journals by `tools/make_track_record.py`. Unaudited. N
 | measure | value |
 |---|---|
 | rebuilt from the journals on | 2026-10-24 |
-| predictions journaled | 3558 |
+| predictions journaled | 3580 |
 | horizons matured | 263 |
 | of which directional calls | 0 |
 | of which non-trades (HOLD) | 263 |
@@ -15,7 +15,7 @@ _Rebuilt from the on-disk journals by `tools/make_track_record.py`. Unaudited. N
 
 **There is no directional hit rate yet.** Every matured snapshot was a non-trade, and a non-trade cannot be a correct prediction — the scorer used to count them as wins, which is fixed as of v2.5.0. A forward record of live calls is what this table will show, and it accumulates on its own as horizons elapse.
 
-1401 directional calls are journaled and still waiting out their horizon, and the tenth of them cannot resolve before **2026-10-25**, five bars after it was written. This table publishes a hit rate the day it can.
+1415 directional calls are journaled and still waiting out their horizon, and the tenth of them cannot resolve before **2026-10-25**, five bars after it was written. This table publishes a hit rate the day it can.
 
 ## 2. Walk-forward strategy sweep
 
@@ -50,7 +50,7 @@ _Backtests are not returns. They include costs but not every market impact, and 
 ## 3. Live paper book
 
 - Capital Rs 1,000,000 · equity Rs 999,992 · realized P&L Rs -13.05 since 2026-10-23T18:56:48
-- Autopilot cycles run: **393** · mode `paper` · live-armed: False
+- Autopilot cycles run: **395** · mode `paper` · live-armed: False
 - Open paper positions: 0 · fills: 2
 
 ## 4. Funded account (read-only, from the broker)

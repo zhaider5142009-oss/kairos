@@ -286,7 +286,17 @@ class Attribution:
         base_h = (self.counts.get("base") or {}).get(str(horizon)) or {}
         bucket = (st.get("by_bucket") or {}).get(f"{horizon}|{regime}")
         if bucket and int(bucket[0]) >= MIN_REGIME_CALLS:
-            p_up = _p_up(base_h.get(regime)) or _p_up(base_h.get("_all"))
+            # `or`, not a None check: a regime in which nothing rose has a base
+            # rate of exactly 0.0, and 0.0 is falsy, so the chain silently swapped
+            # in the pooled rate. That is the one regime where the correction
+            # matters most — measured against a 70%-up `_all` instead of its own
+            # 0.0, a short-only strategy that was right purely because the tape
+            # never rose collects the full MAX_WEIGHT promotion for zero skill,
+            # while a long-only strategy that was right *against* that tape is
+            # scored as barely better than its bias and stays near 1.0.
+            p_up = _p_up(base_h.get(regime))
+            if p_up is None:
+                p_up = _p_up(base_h.get("_all"))
             if p_up is None:
                 return 1.0, "no base rate"
             return _weight_from(bucket, _expected(bucket, p_up)), "regime"

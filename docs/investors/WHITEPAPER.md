@@ -222,7 +222,7 @@ under "no coverage" rather than being credited or demoted on evidence it never s
 - Logs rotate; state persists across restarts; RAM, startup and per-cycle cost were profiled
   on a 2015-era i5 / 8 GB machine, which is a deliberate constraint — if it runs there, the
   infrastructure argument is cheap.
-- 675 regression tests, including the money path and the integrity cases below.
+- 676 regression tests, including the money path and the integrity cases below.
 
 ## 7. What the numbers say, and what they do not
 
@@ -235,13 +235,13 @@ and 9 instruments reported as losses.
 important finding in the project: the edge, if any, is in the global and commodity books,
 and any PSX strategy must be sized against costs before it is sized against conviction.
 
-The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 393
+The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 395
 autopilot cycles) with two fills. That is a system working as designed on a low-conviction
 market, not a strategy proving itself.
 
 ## 8. The integrity bugs, documented because they are the credibility
 
-An investor kit is only worth its willingness to publish its own audit. Fifty-seven defects
+An investor kit is only worth its willingness to publish its own audit. Fifty-eight defects
 are tabled below, each with what it would have cost had it shipped. Two of them arrived with
 this release's cross-asset axis and belong to the machinery that produces the numbers rather
 than to the code that trades on them: a skill key that credited a strategy for what it got
@@ -254,7 +254,7 @@ figure that guardrail had no word for. That group is
 worth naming first, because nothing about it was flattering: three were in code we had already
 declared finished, two were in numbers we had already printed, and three were inside an earlier
 repair or the guardrail we built for one — which is why the last ones were found at all.
-Thirty-one more were on the money path, the trail that records it, or a limit that
+Thirty-two more were on the money path, the trail that records it, or a limit that
 read as a control and was not wired to one; nine were a provider or a
 bridge answering in a way the desk then reported as health, and three were credentials — or the
 guard that was supposed to catch them — sitting in tracked files. The last two sat on the
@@ -321,6 +321,7 @@ a working one. Neither was caught by a click, because nobody clicks in a test su
 | Skill was credited against half of the condition it was earned in | strategy weights were polled by the instrument's own regime label — `Bull-Quiet`, `MeanRev-Volatile` — computed from that instrument's bars, while the tape it sat in went unrecorded. A strategy that is right only while credit is tightening carried the same weight in a risk-on melt-up, and the journal could not reconstruct the difference afterwards because the row had written down the micro label and nothing else. Every "regime-conditional" claim in the system was conditional on one axis of two | `kairos/macro.py` scores seven cross-asset prints into a risk-appetite tag, and the bucket key becomes `micro :: macro` produced by **one** function that both the live engine and the walk-forward call, because two spellings would make every live lookup miss and report "no coverage" as though no strategy had an edge. The tag is a function only of the date-truncated panel the strategies already receive, so a historical slice is classified by the tape as of that bar and not by today's volatility spike; an absent print is never averaged in as a neutral one — coverage is counted, three prints is a floor of its own, and an unclassifiable panel gets its own tag rather than a mid-range number. Risk-off cuts the suggested position to ×0.75 and says which print did it. The artifact's schema moved to 2 so the pre-axis evidence is **refused by name** rather than silently polled flat, and the snapshot journals the condition beside the regime so the next six months of calls are attributable by both axes — 45 new tests. The first cut of this fix broke every PSX prediction: it fetched the exchange breadth scan unguarded, so any data client without `psx_snapshot` raised inside the prediction. The existing parallel-fetch suite caught it, and the scan is now allowed to cost the desk one line and nothing more |
 | A strategy that could never see its own input | strategy 73, the Copper-Gold Growth Barometer, reads copper and gold out of the intermarket panel. `COPPER` was not in the panel's key list, so the fetch never asked for it, the lookup returned nothing, and the strategy abstained on every slice in **both** paths — live and walk-forward. That is indistinguishable from a careful component that looked at the data and said nothing, so the evidence file recorded it as having no edge, and the copper/gold print added this round would have silently carried a growth-versus-safety signal built from a series that was never fetched | `COPPER` joins the panel's ten keys, inside a batch that already ran nine in parallel, so no measurable latency. The regenerated artifact gives the strategy 900 directional votes across 1,029 slices where it previously had **0**, and the growth print now carries 12% of the macro score instead of abstaining. Found by reading the new module's inputs against the fetch list, then confirmed in the counts rather than in the code — a strategy that never votes is only visible if somebody counts the votes |
 | The staleness guard had no word for the figure that went stale | a count of matured snapshots that had been non-trades was published in six places — the deck, the one-pager, the landing page, both READMEs and the Show HN draft — and it named a real column of the generated ledger, so a reader takes it as current. It is written here as a shape rather than a number for the reason the guardrail row below gives: the rewriter matches on adjacency, and a historical value quoted in digits inside this table is a value it overwrites. The ledger's matured count had moved on by nearly double, and no refresh pass touched the quoted one because the guard only rewrites a digit sitting beside a word its vocabulary recognises, and "non-trades" was not in that vocabulary. Every figure in the sentences around it was restamped correctly on the same pass, which is what made the wrong one invisible: a checker that lists the phrases it knows reports an unknown phrase as absent, not as stale. Left alone, the kit would have gone on telling an investor that some fixed fraction of the matured record was non-trades in the same breath as disclosing that none of it was calls — the disclosure contradicted by the number supporting it | the ledger's non-trade column is now a figure of its own, with rules for both shapes the pack writes it in — "all N were non-trades", "every one of the N was a non-trade" — so the rewriter and the test agree about it by construction; the outreach draft's live tally was rewritten into a shape a rule already owns, and a new test pins the defect total named at the head of this table to the number of rows underneath it, because that count was a hand-typed figure too. A fixture carrying the old number now fails the suite in both shapes — the only proof that a rule exists is that it rejects the value it was written for |
+| A tape in which nothing rose was read as a tape with no data | `0.0` is falsy, and the regime's base rate was taken through an `or` chain, so the one condition the drift subtraction exists for — a market where no slice went up — silently inherited the pooled rate from every regime instead of its own. Measured on a fixture of forty slices in which every bar fell: a short-only component right on all of them, which is riding and nothing else, collected the maximum weight, while a long-only component right on thirty-two of them *against* that tape kept barely more than neutral. The two weights were inverted: the drifter was paid for skill and the skill was paid for drift. That is the failure mode the whole attribution layer was built to undo, arriving inside the undoing | the regime's own reading is taken as a measurement, and only a genuinely absent bucket falls back to the pooled one; a bucket with no slices *and* no base rate is still an explicit *no coverage*, never a weight. The module as it stood before the fix was loaded beside the fixed one and both asked the same question, so the inversion is a recorded pair of numbers rather than a claim, and the fixture pins both ends — reintroducing the `or` fails the drifter and the skiller at once. Nothing had traded on the wrong figure yet: the per-regime buckets are still under their own vote floor, which is why this one reaches the pack as a weight that was fixed before it had votes to move — 1 new test |
 
 Nothing moved money. The journal now says so itself: rebuilt from `data/audit_journal.jsonl`,
 the track record publishes the count of lines carrying the test signature and the count of
@@ -361,7 +362,7 @@ be mis-sized because of it.
 git clone https://github.com/zhaider5142009-oss/kairos && cd kairos
 cp config.example.yaml config.yaml      # add your own keys; config.yaml is git-ignored
 pip install -r requirements.txt
-python -m pytest tests -q                    # 675 tests
+python -m pytest tests -q                    # 676 tests
 python -m kairos.cli backtest GOLD WTI HBL   # walk-forward sweep, costs modelled
 python -m kairos.cli health                  # subsystem health, dead council seats
 python -m kairos.cli feedback                # realized track record, live from the journal

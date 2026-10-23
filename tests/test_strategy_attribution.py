@@ -160,6 +160,34 @@ def test_regime_evidence_is_used_when_there_is_enough_of_it():
     assert attr.weight("Split", 5, "Bull-Volatile") == pytest.approx(pooled, abs=1e-9)
 
 
+def test_a_regime_where_nothing_rose_still_has_a_base_rate():
+    """A base rate of exactly 0.0 is a measurement, not an empty cell.
+
+    `_derive` chained the regime's rate onto the pooled one with `or`, and 0.0 is
+    falsy — so the one regime where subtracting the tape matters most, a tape in
+    which *nothing* rose, silently scored against the pooled rate instead. That
+    cuts both ways and only one way is safe: measured against a 70%-up pooled
+    reference, 40 short votes that were right on all 40 slices look like huge skill
+    because the shorts were never credited to the drift that made them free, while
+    longs that were right *against* a tape that never rose are scored as barely
+    ahead of their own bias. The first buys leverage with nothing; the second is
+    the evidence the layer exists to find. On the fixture below the two weights
+    were inverted: 1.500 for the drift and 1.098 for the skill before the `or`,
+    1.000 and 1.500 after.
+    """
+    counts = _counts()
+    _base(counts, 5, 0.70)                                  # pooled: tape up 70%
+    _base(counts, 5, 0.00, regime="Crash")                  # in Crash: never rose
+    _strategy(counts, "Down Rider", in_regime=("Crash", 40, 40, 0))       # 40 shorts, all hit
+    _strategy(counts, "Against The Tape", in_regime=("Crash", 40, 32, 40))  # 40 longs, 32 hit
+    attr = A.Attribution(counts)
+    assert A._p_up([400, 0]) == 0.0, "the fixture no longer is the case under test"
+    assert attr.weight("Down Rider", 5, "Crash") == pytest.approx(1.0, abs=1e-9), \
+        "shorts in a tape that never rose were paid as skill"
+    assert attr.weight("Against The Tape", 5, "Crash") > 1.2, \
+        "counter-trend longs were scored against the pooled rate, not their own regime"
+
+
 def test_no_coverage_and_broken_and_no_base_are_all_said_loudly():
     counts = _counts()
     _strategy(counts, "Silent")                             # never voted
