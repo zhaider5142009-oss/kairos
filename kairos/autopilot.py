@@ -118,7 +118,8 @@ class Autopilot:
                 "last_error": None, "feedback_error": None,
                 "signals": [], "actions": [], "held": {}, "consec_losses": 0,
                 "equity_peak": 0.0, "peak_since": None,
-                "last_rotation": None, "rotated": [], "psx_day_start": None}
+                "last_rotation": None, "rotated": [], "psx_day_start": None,
+                "macro": None}
 
     def _load(self) -> dict[str, Any]:
         st = self._defaults()
@@ -261,6 +262,7 @@ class Autopilot:
 
         rows: list[dict[str, Any]] = []
         trades = 0
+        macro: dict[str, Any] | None = None
         for sym in st["symbols"]:
             inst = resolve(sym)
             if inst is None:
@@ -273,6 +275,11 @@ class Autopilot:
                 continue
             if not res.get("ok"):
                 continue
+            if macro is None:
+                # one condition for the whole cycle: every symbol is scored
+                # against the same panel, so the desk shows the state that
+                # sized the book rather than twelve copies of it
+                macro = res.get("macro")
             s, rk = res["signal"], res["risk"]
             score, price = s["score"], res["price"]
             is_psx = inst.market.upper() in ("PSX", "KSE")
@@ -362,13 +369,15 @@ class Autopilot:
                          "probability_up": res["probability_up"],
                          "weight": rk["suggested_weight"],
                          "regime": res["regime"]["regime"],
+                         "macro": (res.get("macro") or {}).get("tag"),
+                         "condition": res.get("condition"),
                          "action": action, "detail": detail})
 
         rows.sort(key=lambda r: -abs(r.get("score") or 0))
         with self._lock:
             st.update({"cycles": st["cycles"] + 1, "last_cycle": _now(),
                        "last_cycle_s": round(time.perf_counter() - started, 1),
-                       "signals": rows[:12]})
+                       "signals": rows[:12], "macro": macro})
             self._save()
         # self-improvement pulse: resolve realized outcomes so Fugu's
         # calibration anchor and the adaptive entry bar keep tracking truth
@@ -985,7 +994,7 @@ class Autopilot:
                  "entry_threshold", "max_trades_per_cycle", "horizon_days",
                  "cycles", "last_cycle", "last_cycle_s", "last_error",
                  "feedback_error", "signals", "actions",
-                 "held", "consec_losses", "psx_day_start")},
+                 "held", "consec_losses", "psx_day_start", "macro")},
                 "risk_posture": posture,
                 "kill_switch": KILL.engaged(),
                 "mt5": {"connected": self.mt5.connected,

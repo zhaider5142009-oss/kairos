@@ -51,7 +51,13 @@ from typing import Any
 from .config import CFG
 
 ARTIFACT_PATH = CFG.data_dir / "strategy_attribution.json"
-SCHEMA = 1
+# Bumped to 2 when the bucket key became a *condition* — micro regime plus the
+# cross-asset macro tag from kairos/macro.py. Old schema-1 files still hold real
+# counts, but their keys were spelled without the macro half, so every live
+# lookup would miss and report "no coverage" while looking like a finding. A
+# refusal that names the schema is honest; a flat poll that looks measured is
+# not. Re-measure with tools/strategy_attribution.py to produce schema 2.
+SCHEMA = 2
 
 # The horizons a thesis is graded at. 5 is what the desk trades; 21 is what an
 # investment committee claims to believe. Measuring both is the only way to

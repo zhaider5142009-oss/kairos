@@ -29,12 +29,12 @@ Built by one operator, running 24/7, publishing its own losses.
 
 | | |
 |---|---|
-| Code | 13,654 lines Python · 38 modules · public repo |
+| Code | 14,278 lines Python · 39 modules · public repo |
 | Strategies | 100 voting into the live consensus; the sweep fits one blended signal, not the library |
 | Council | 6 configured LLM seats across 2 providers; a dead seat shrinks the council |
 | Execution | paper + JS Global PSX bridge + MT5 |
 | Uptime | 24/7 daemon, watchdog, token-gated public API |
-| Tests | 405 passing, money path included |
+| Tests | 453 passing, money path included |
 
 Not a fund. No client money. No licence. No AUM.
 
@@ -67,9 +67,9 @@ conviction.
 
 ## 6. What is *not* proven
 
-- **No forward track record.** 3,197 predictions journaled, 263 horizons matured, all 140 were
+- **No forward track record.** 3,232 predictions journaled, 263 horizons matured, all 263 were
   non-trades. A directional hit rate does not yet exist.
-- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 361 cycles, 2 fills.
+- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 364 cycles, 2 fills.
 - Live execution path is built and gated, not exercised at scale.
 - No audit, no team, no third-party capital.
 
@@ -313,10 +313,19 @@ chart.
 2. Council integrity: a dead seat shrinks the council instead of substituting another
    provider's opinion into a "median".
 3. Self-calibration from realized outcomes, with a leash that refuses to trust thin evidence.
-4. Attribution that can be switched off: each strategy's vote is weighted by its own realized
-   excess over the base rate of its bucket — same instrument, horizon and regime — measured
-   out-of-sample, and the engine refuses the weights and runs a flat poll if the evidence is
-   stale, incomplete, or measured against a library of a different size.
+4. Attribution that can be switched off, inside a condition with two named axes: each
+   strategy's vote is weighted by its own realized excess over the base rate of its bucket,
+   measured out-of-sample — and the bucket is `Range :: Risk-Off`, the instrument's own
+   regime joined with a cross-asset reading of seven weighted prints scored point-in-time,
+   because skill earned while credit is tightening does not transfer into a melt-up. An
+   absent print is not a neutral one: below 55% of the panel's weight the macro axis abstains
+   and skill pools across the whole condition rather than crediting a regime nobody
+   measured. The same reading sizes the position (risk-off ×0.75, risk-on ×1.10), is carried
+   in every journal row, and is checked against the record: of the 21 joint conditions in the
+   1,029 graded slices, 14 carry enough votes to move a weight. The engine still refuses the
+   weights and runs a flat poll if the evidence is stale, incomplete, measured against a
+   library of a different size, or classified from a panel too thin to read. The divisors are
+   declared judgment constants, deliberately not fitted to the sample.
 5. Venue-agnostic risk layer — PSX cash, MT5 commodities and FX, PMEX futures. The
    bridge attaches only to the account it was configured for, and its link cost is a
    measured number (`tools/mt5_probe.py`), not an adjective.

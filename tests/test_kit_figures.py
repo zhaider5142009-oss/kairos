@@ -178,6 +178,89 @@ def test_the_stamped_date_and_version_are_not_typed(path):
     assert not bad, f"{path.relative_to(ROOT)} carries a stale stamp: {bad}"
 
 
+def test_a_non_trade_count_is_a_figure_that_can_go_stale(figures):
+    """The pack's other ledger count: how much of the matured record was a non-call.
+
+    It was not a figure at all until a published copy of it had been stale in six
+    files for four refresh passes. The guard rewrites a digit beside a word it
+    knows, and "non-trades" was not in the vocabulary, so the number named a real
+    ledger column while no rule owned it — and every other figure in the same
+    sentence was restamped correctly on the pass that walked over it.
+    """
+    n = figures["non_trades_comma"]
+    m = figures["matured_comma"]
+    current = _stale_figures(f"{m:,} horizons matured, all {n:,} were non-trades, "
+                             f"and every one of the {n:,} was a non-trade.", figures)
+    assert current == []
+    stale = _stale_figures("263 horizons matured, all 140 were non-trades, and "
+                           "every one of the 140 was a non-trade.", figures)
+    assert len(stale) == 2, stale
+
+
+_ONES = {"zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+         "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+         "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+         "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19}
+_TENS = {"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60,
+         "seventy": 70, "eighty": 80, "ninety": 90}
+DEFECT_TOTAL = re.compile(r"\b([A-Za-z]+(?:-[A-Za-z]+)?) defects\b")
+
+
+def _spelled(n: int) -> str:
+    if n in _ONES:
+        return next(k for k, v in _ONES.items() if v == n)
+    tens, units = divmod(n, 10)
+    word = next(k for k, v in _TENS.items() if v == tens * 10)
+    return word if not units else f"{word}-{next(k for k, v in _ONES.items() if v == units)}"
+
+
+def _defect_tally(body: str) -> tuple[str, int, int]:
+    """The total section 8 states in words, and the rows it actually tables."""
+    sec = body.split("## 8. ", 1)[1]
+    lines = sec.splitlines()
+    head = next(i for i, row in enumerate(lines) if row.startswith("| defect "))
+    rows = 0
+    for line in lines[head + 2:]:
+        if not line.strip().startswith("|"):
+            break
+        rows += 1
+    m = DEFECT_TOTAL.search(sec)
+    assert m, "section 8 no longer states a defect total"
+    return m.group(1), _spelled_number(m.group(1)), rows
+
+
+def _spelled_number(word: str) -> int:
+    total = 0
+    for part in word.lower().split("-"):
+        value = _TENS.get(part, _ONES.get(part))
+        assert value is not None, f"not a number word: {part!r}"
+        total += value
+    return total
+
+
+def test_the_stated_defect_total_is_the_number_of_defect_rows():
+    """How many bugs the kit admits to is a figure, and it was typed.
+
+    The table grew by a row and the sentence at its head did not, which is the
+    same failure the rest of this file exists to stop — except spelled out in
+    words, so no digit rule could see it. An investor who counts the rows finds
+    the difference, and the count is the credibility claim.
+    """
+    body = (PACK_DIR / "WHITEPAPER.md").read_text(encoding="utf-8")
+    word, claimed, rows = _defect_tally(body)
+    assert claimed == rows, (f"section 8 says {word!r} defects and tables {rows} "
+                             f"rows ({claimed} == {rows} required)")
+
+
+def test_the_defect_total_check_can_fire():
+    """A total read off a sentence has to disagree when the sentence is wrong."""
+    body = (PACK_DIR / "WHITEPAPER.md").read_text(encoding="utf-8")
+    word, claimed, rows = _defect_tally(body)
+    off = body.replace(f"{word} defects", f"{_spelled(claimed + 1)} defects", 1)
+    assert _defect_tally(off)[1] == claimed + 1
+    assert _defect_tally(off)[1] != _defect_tally(off)[2]
+
+
 def test_the_pack_cites_the_ledger_as_the_source():
     """A figure an investor can verify has to say where it comes from."""
     assert "make_track_record" in _text(PACK_DIR / "README.md")

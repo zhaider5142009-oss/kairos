@@ -107,6 +107,24 @@ def render_prediction(res: dict[str, Any], console: Console | None = None,
                     f"{reg['vol_percentile']:.1%}")
     console.print(reg_tbl)
 
+    # ---- macro: the other half of the condition a size was multiplied by
+    mac = res.get("macro")
+    if mac:
+        ma_tbl = Table(title="CROSS-ASSET CONDITION", box=box.SIMPLE_HEAD,
+                       title_style="bold")
+        for col, just in (("print", "left"), ("weight", "right"),
+                          ("risk appetite", "right"), ("reading", "left")):
+            ma_tbl.add_column(col, justify=just)
+        for c in mac["components"]:
+            sc = c["score"]
+            ma_tbl.add_row(f"[cyan]{c['key']}[/]", f"{c['weight']:.0%}",
+                           (f"[{'red' if sc < 0 else 'green' if sc > 0 else 'white'}]"
+                            f"{sc:+.2f}[/]") if c["present"] else "[dim]absent[/]",
+                           f"[dim]{c['why']}[/]")
+        console.print(ma_tbl)
+        console.print(f"[dim]{mac['label']} → position ×{mac['size_multiplier']:.2f} "
+                      f"· attribution bucket [bold]{res.get('condition', '—')}[/][/]")
+
     # ---- models
     if res.get("models"):
         m_tbl = Table(title=f"MODEL BATTERY ({len(res['models'])} models)",

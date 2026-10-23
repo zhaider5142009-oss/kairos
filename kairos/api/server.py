@@ -129,6 +129,24 @@ def scan(top: int = Query(20, ge=5, le=100)):
     return _safe(ENGINE.scan(top=top))
 
 
+# ---------------------------------------------------------------- macro
+@app.get("/api/macro")
+def macro(refresh: bool = False):
+    """The cross-asset condition tonight's positions are being sized inside.
+
+    Read-only and separate from `/api/predict` because the state is shared by
+    every instrument: an operator adjusting one size needs the prints behind
+    the multiplier, not a fresh prediction of six symbols to find them.
+    """
+    from kairos.macro import live_state
+    try:
+        if refresh:
+            ENGINE.intermarket(force=True)
+        return _safe({"ok": True, **live_state(ENGINE.md, ENGINE).as_dict()})
+    except Exception as exc:  # pragma: no cover - desk must answer
+        return {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+
+
 # ---------------------------------------------------------------- portfolio
 class PortfolioReq(BaseModel):
     symbols: list[str]

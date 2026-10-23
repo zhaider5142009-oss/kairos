@@ -72,7 +72,8 @@ def _model_weight(fc: ModelForecast, regime: str) -> float:
 
 
 def fuse(symbol: str, forecasts: list[ModelForecast], votes: list[StrategyVote],
-         regime: str, horizon: int, attribution=None) -> FusedSignal:
+         regime: str, horizon: int, attribution=None,
+         condition: str | None = None) -> FusedSignal:
     """Blend the battery and the strategy poll into one actionable signal.
 
     `attribution` is an optional `attribution.Attribution` view: when given,
@@ -80,6 +81,13 @@ def fuse(symbol: str, forecasts: list[ModelForecast], votes: list[StrategyVote],
     realized out-of-sample in this horizon and regime. Without it the poll is
     exactly what it always was — every vote at face value — which is the state
     the system must fall back to whenever the artifact cannot be read.
+
+    `regime` and `condition` are two different keys. The model affinity table is
+    written against the instrument's own micro regime ("Bull-Quiet"), while the
+    attribution buckets are addressed by the full condition — micro regime plus
+    macro tag. Collapsing them into one string would have REGIME_AFFINITY miss
+    on every prediction and silently flatten the trend/reversion tilt that has
+    been here since v1.
     """
     if not forecasts and not votes:
         return FusedSignal(symbol, 0.0, "HOLD", 0.0, horizon, 0.0, 0.0, 0.0, regime)
@@ -104,9 +112,10 @@ def fuse(symbol: str, forecasts: list[ModelForecast], votes: list[StrategyVote],
     # demoted strategy still speaks, at half voice — and the poll writes both
     # numbers out, so a changed consensus can be traced to the votes that
     # changed it.
+    cond = condition or regime
     scaled: list[tuple[StrategyVote, float]] = [
         (v, 1.0 if attribution is None else attribution.weight_tag(
-            v.name, horizon, regime)[0])
+            v.name, horizon, cond)[0])
         for v in votes]
     bull = sum(v.strength * w for v, w in scaled if v.direction > 0)
     bear = sum(v.strength * w for v, w in scaled if v.direction < 0)
@@ -154,6 +163,7 @@ def fuse(symbol: str, forecasts: list[ModelForecast], votes: list[StrategyVote],
 
     details: dict[str, Any] = {
         "shrinkage": round(shrink, 3),
+        "condition": cond,
         "models": {f.model: {"dir": f.direction, "er": round(f.expected_return, 5),
                              "conf": round(f.confidence, 3),
                              "detail": f.detail} for f in forecasts},

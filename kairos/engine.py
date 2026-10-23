@@ -30,6 +30,7 @@ from .features import (compute_features, cross_sectional_factors, detect_pattern
                        detect_regime)
 from .kse_regime import kse_regime
 from .llm import ROUTER
+from .macro import condition_label, macro_state, psx_breadth
 from .models_ml import neural_battery, tree_stack_forecast
 from .models_stat import ModelForecast, run_statistical_battery
 from .risk import compute_risk, portfolio_metrics
@@ -37,7 +38,8 @@ from .strategies import run_strategy_library
 from .universe import Instrument, resolve
 from .wsl_bridge import WSL
 
-INTERMARKET_KEYS = ("DXY", "US10Y", "VIX", "SPX", "WTI", "GOLD", "BTC", "USDPKR", "WHEAT")
+INTERMARKET_KEYS = ("DXY", "US10Y", "VIX", "SPX", "WTI", "GOLD", "COPPER", "BTC",
+                    "USDPKR", "WHEAT")
 
 
 class PredictionEngine:
@@ -56,7 +58,7 @@ class PredictionEngine:
     # ------------------------------------------------------------- context
     def intermarket(self, force: bool = False) -> dict[str, pd.DataFrame]:
         if self._intermarket is None or force:
-            # 9 independent HTTP fetches, and the wait is entirely on the
+            # 10 independent HTTP fetches, and the wait is entirely on the
             # network, not the CPU: sequentially this cost ~16s of a ~53s
             # prediction. Order of the result is the declared key order, and
             # an unreachable symbol still lands as "absent" rather than a
@@ -246,9 +248,32 @@ class PredictionEngine:
             factor_row = fut_factors.result()
             kse = fut_kse.result() if fut_kse is not None else None
 
+        # --- macro axis ------------------------------------------------------
+        # Scored off the panel the strategy library just read, so it costs no
+        # fetch of its own. PSX breadth rides along as live-only context: it is
+        # reported, never scored, because the walk-forward cannot reconstruct a
+        # past cross-section and a bucket tag computed from inputs the
+        # measurement never had would credit strategies with evidence they
+        # were never shown.
+        extras: dict[str, Any] = {"live_only": True}
+        if instrument.market == "PSX":
+            # The exchange scan is the least reliable fetch in the stack, and
+            # breadth is a decoration on the macro state — a scan that is down
+            # must cost the operator the breadth line, not the prediction.
+            try:
+                breadth = psx_breadth(self.md.psx_snapshot())
+            except Exception:
+                breadth = None
+            if breadth:
+                extras["psx_breadth"] = breadth
+        macro = macro_state(intermarket_ctx, extras=extras)
+        condition = condition_label(regime_info["regime"], macro)
+
         # --- strategy battery --------------------------------------------------
         ctx: dict[str, Any] = {
             "regime": regime_info["regime"],
+            "macro": macro.tag,
+            "macro_score": round(macro.score, 3),
             "intermarket": intermarket_ctx,
             "date_today": df["date"].iloc[-1],
             "factor_row": factor_row,
@@ -263,7 +288,8 @@ class PredictionEngine:
             "use_strategies", True) else []
 
         # --- fusion -------------------------------------------------------------
-        # Regime-conditional skill, measured out-of-sample by
+        # Condition-conditional skill — the instrument's own regime *and* the
+        # cross-asset macro tag it sat in — measured out-of-sample by
         # tools/strategy_attribution.py. When that evidence cannot be read the
         # poll stays exactly as flat as it always was and the reason is carried
         # into the result, because "no strategy has demonstrated an edge" and "I
@@ -275,7 +301,7 @@ class PredictionEngine:
         # ever scored
         attr_view = attr.view() if attr is not None else None
         signal = fuse(instrument.key, forecasts, votes, regime_info["regime"], horizon,
-                      attribution=attr_view)
+                      attribution=attr_view, condition=condition)
 
         # --- realized track-record calibration ---------------------------------
         adj = confidence_adjustment()
@@ -296,6 +322,14 @@ class PredictionEngine:
         kse_mult = kse.position_multiplier if kse is not None else 1.0
         if kse is not None:
             risk.suggested_weight *= kse_mult
+        # and the cross-asset state on top of it: a PSX blue chip that reads
+        # Bull-Quiet on its own bars while the dollar is squeezing and PKR is
+        # sliding is a smaller position than the local tape alone suggests.
+        risk.suggested_weight *= macro.size_multiplier
+        if macro.tag != "Neutral":
+            risk.position_notes += (
+                f"; macro {macro.tag} (score {macro.score:+.2f}, "
+                f"{macro.coverage:.0%} of panel) x{macro.size_multiplier:.2f}")
         vol = risk.annual_vol if risk.annual_vol > 0 else 0.2
         sigma_h = vol / math.sqrt(252) * math.sqrt(horizon)
         targets = {
@@ -338,6 +372,8 @@ class PredictionEngine:
             "price": round(price, 4),
             "history_bars": int(len(df)),
             "regime": regime_info,
+            "condition": condition,
+            "macro": macro.as_dict(),
             "signal": {
                 "direction": signal.direction, "score": signal.score,
                 "confidence": signal.confidence,

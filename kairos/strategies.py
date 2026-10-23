@@ -6,6 +6,9 @@ Votes are fused by the ensemble engine; nothing here trades on its own.
 
 Context keys (all optional):
   regime          str           detected regime label
+  macro           str           cross-asset state: Risk-On / Neutral / Risk-Off /
+                                Unknown (see kairos/macro.py)
+  macro_score     float         -1..+1 risk-appetite score behind that label
   intermarket     dict          {key: DataFrame} of related series
   date_today      datetime      evaluation date (calendar effects)
   factor_row      pd.Series     cross-sectional factor row (PSX)

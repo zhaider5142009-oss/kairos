@@ -274,6 +274,57 @@ def cmd_health(args) -> int:
     return 0
 
 
+def cmd_macro(args) -> int:
+    """The cross-asset condition on its own, asked without predicting anything.
+
+    An operator adjusting one position needs the prints behind the multiplier,
+    and needs to see which of them did not answer — a single `x0.75` in a
+    dossier does not say whether the tape is stressed or the VIX feed is down.
+    """
+    from rich.panel import Panel
+    from rich.table import Table
+    from .engine import ENGINE
+    from .macro import live_state
+    console = _console()
+    if args.refresh:
+        ENGINE.intermarket(force=True)
+    d = live_state(ENGINE.md, ENGINE).as_dict()
+    tbl = Table(title=f"KAIROS CROSS-ASSET CONDITION — {d['tag']}", box=box.ROUNDED)
+    for col, just in (("print", "left"), ("weight", "right"),
+                      ("risk appetite", "right"), ("reading", "left")):
+        tbl.add_column(col, justify=just)
+    for c in d["components"]:
+        ok = c["present"]
+        tbl.add_row(c["key"], f"{c['weight']:.0%}",
+                    (f"[{'red' if c['score'] < 0 else 'green' if c['score'] > 0 else 'white'}]"
+                     f"{c['score']:+.2f}[/]") if ok else "[dim]absent[/]",
+                    f"[dim]{c['why']}[/]")
+    console.print(tbl)
+    lines = [d["label"],
+             f"new positions scaled by [bold]×{d['size_multiplier']:.2f}[/] · "
+             f"panel as of {d['as_of'] or '?'}"]
+    ex = d.get("extras") or {}
+    b = ex.get("psx_breadth")
+    if b:
+        # either print can be missing on its own — a scan without the 1M column
+        # still owes the desk the trend breadth
+        parts = []
+        if "pct_above_sma50" in b:
+            parts.append(f"{b['pct_above_sma50']:.0%} of {b['symbols']} names "
+                         f"above their 50-day")
+        if "pct_up_1m" in b:
+            parts.append(f"{b['pct_up_1m']:.0%} up over a month")
+        lines.append("PSX breadth (reported, never scored): " + ", ".join(parts))
+    if ex.get("panel_error"):
+        lines.append(f"[red]{ex['panel_error']}[/]")
+    console.print(Panel("\n".join(lines), border_style="blue"))
+    if args.json:
+        out = CFG.reports_dir / "macro.json"
+        out.parent.mkdir(exist_ok=True)
+        out.write_text(json.dumps(d, indent=2, default=str))
+    return 0
+
+
 def cmd_setup_wsl(args) -> int:
     from .wsl_bridge import WSL
     console = _console()
@@ -857,6 +908,13 @@ def main(argv: list[str] | None = None) -> int:
 
     sp = sub.add_parser("health", help="subsystem health check")
     sp.set_defaults(fn=cmd_health)
+
+    sp = sub.add_parser("macro", help="cross-asset risk-appetite condition and "
+                                      "the prints (or absences) behind it")
+    sp.add_argument("--refresh", action="store_true",
+                    help="re-fetch the intermarket panel instead of the cache")
+    sp.add_argument("--json", action="store_true", help="also save JSON report")
+    sp.set_defaults(fn=cmd_macro)
 
     sp = sub.add_parser("setup-wsl", help="install Chronos/TimesFM/qlib in WSL")
     sp.set_defaults(fn=cmd_setup_wsl)

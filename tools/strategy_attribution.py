@@ -54,6 +54,7 @@ if hasattr(sys.stdout, "reconfigure"):
 from kairos import attribution as A                                    # noqa: E402
 from kairos.data import MarketData                                     # noqa: E402
 from kairos.features import compute_features, detect_patterns, detect_regime  # noqa: E402
+from kairos.macro import (MIN_COVERAGE, condition_label, macro_state)  # noqa: E402
 from kairos.store import atomic_write                                  # noqa: E402
 from kairos.strategies import STRATEGIES, run_strategy_library          # noqa: E402
 from kairos.universe import resolve                                     # noqa: E402
@@ -93,10 +94,14 @@ def measure(md: MarketData, symbols: list[str], step: int,
     counts["generated"] = date.today().isoformat()
     counts["step"] = step
     counts["min_slice_bars"] = MIN_SLICE_BARS
-    counts["ctx_supplied"] = ["regime", "intermarket (truncated by date)",
+    counts["ctx_supplied"] = ["regime", "macro (same date-truncated panel)",
+                              "intermarket (truncated by date)",
                               "date_today", "patterns", "tags"]
     counts["ctx_unavailable"] = ["factor_row (needs a live PSX snapshot)",
-                                 "news_sentiment (needs an LLM and today's feeds)"]
+                                 "news_sentiment (needs an LLM and today's feeds)",
+                                 "psx_breadth (live cross-section only, so it is "
+                                 "reported beside the macro state, never scored "
+                                 "into its bucket tag)"]
     intermarket = {}
     try:
         from kairos.engine import ENGINE
@@ -104,6 +109,8 @@ def measure(md: MarketData, symbols: list[str], step: int,
     except Exception as exc:
         print(f"intermarket context unavailable: {type(exc).__name__}: {exc}")
     counts["intermarket_keys"] = sorted(intermarket)
+    tags: dict[str, int] = {}
+    thin_coverage = 0
 
     for sym in symbols:
         inst = resolve(sym)
@@ -142,9 +149,20 @@ def measure(md: MarketData, symbols: list[str], step: int,
                 print(f"{sym} @{i}: features failed "
                       f"({type(exc).__name__}: {str(exc)[:80]}) -- slice dropped")
                 continue
-            label = str(regime.get("regime") or "Unknown")
-            ctx = {"regime": label,
-                   "intermarket": _truncated(intermarket, cutoff),
+            micro = str(regime.get("regime") or "Unknown")
+            # The macro state is read from the same date-truncated panel the
+            # strategies are handed, so a slice is classified by the world as it
+            # stood on that bar — not by today's VIX wearing yesterday's label.
+            panel = _truncated(intermarket, cutoff)
+            macro = macro_state(panel)
+            label = condition_label(micro, macro)
+            tags[macro.tag] = tags.get(macro.tag, 0) + 1
+            if macro.coverage < MIN_COVERAGE:
+                thin_coverage += 1
+            ctx = {"regime": micro,
+                   "macro": macro.tag,
+                   "macro_score": round(macro.score, 3),
+                   "intermarket": panel,
                    "date_today": cutoff,
                    "patterns": detect_patterns(sl),
                    "tags": inst.tags}
@@ -169,6 +187,8 @@ def measure(md: MarketData, symbols: list[str], step: int,
                   f"({elapsed}s)")
     counts["errors_total"] = sum(int(s.get("errors", 0))
                                  for s in counts["strategies"].values())
+    counts["macro_slices"] = dict(sorted(tags.items()))
+    counts["macro_thin_coverage"] = thin_coverage
     return counts
 
 
@@ -233,6 +253,28 @@ def _report(counts: dict, out_path: Path) -> tuple[A.Attribution | None, str]:
     print(f"strategies never voting: "
           f"{sum(1 for s in counts['strategies'].values() if not s['votes'])}"
           f" of {len(counts['strategies'])}")
+    ms = counts.get("macro_slices") or {}
+    print("slices by macro state: " +
+          (", ".join(f"{k} {v}" for k, v in ms.items()) or "none") +
+          f"  (panel too thin to classify: "
+          f"{counts.get('macro_thin_coverage', 0)})")
+    # Whether the macro axis is armed or decorative is a countable question, not
+    # a claim: a bucket has to clear MIN_REGIME_CALLS before it may move a vote,
+    # and splitting the sample by a new dimension always thins the buckets, so
+    # this number is the price of the extra resolution and it gets printed.
+    fired = sum(1 for st in counts["strategies"].values()
+                for b in (st.get("by_bucket") or {}).values()
+                if int(b[0]) >= A.MIN_REGIME_CALLS)
+    # the key is "horizon|micro :: macro" — splitting on the LAST separator
+    # would report three macro tags and call them conditions, which is the
+    # wrong question: what matters is how many joint conditions survived
+    seen_conds = {k.split("|", 1)[1] for st in counts["strategies"].values()
+                  for k in (st.get("by_bucket") or {})}
+    fired_conds = {k.split("|", 1)[1] for st in counts["strategies"].values()
+                   for k, b in (st.get("by_bucket") or {}).items()
+                   if int(b[0]) >= A.MIN_REGIME_CALLS}
+    print(f"condition buckets with enough votes to move a weight: {fired} "
+          f"across {len(fired_conds)} of the {len(seen_conds)} conditions seen")
     for horizon in counts["horizons"]:
         sel = [r for r in rows if r[2] == int(horizon)]
         pair = (base.get(str(horizon)) or {}).get("_all") or [0, 0]

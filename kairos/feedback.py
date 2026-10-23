@@ -47,6 +47,11 @@ class Snapshot:
     # they are recorded now, while there is nothing to attribute, because the
     # alternative is to discover in six months that the evidence was never kept.
     regime: str | None = None
+    # The macro half of the attribution key. Recorded beside `regime` rather
+    # than folded into it because the journal already has rows written under the
+    # micro label alone, and a resolver that has to tell "this row predates the
+    # macro axis" from "this row is missing data" cannot do either reliably.
+    condition: str | None = None
     strategies: dict[str, int] | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -54,6 +59,7 @@ class Snapshot:
                 "score": self.score, "confidence": self.confidence,
                 "expected_return": self.expected_return, "price": self.price,
                 "direction": self.direction, "regime": self.regime,
+                "condition": self.condition,
                 "strategies": self.strategies, "resolved": False}
 
 
@@ -76,6 +82,7 @@ def record(res: dict[str, Any]) -> None:
         confidence=sig["confidence"], expected_return=sig["expected_return"],
         price=res["price"], direction=sig["direction"],
         regime=str(regime)[:40] if regime else None,
+        condition=(str(res.get("condition"))[:40] if res.get("condition") else None),
         strategies=spoke or None)
     JOURNAL.parent.mkdir(parents=True, exist_ok=True)
     with _WRITE_LOCK, JOURNAL.open("a", encoding="utf-8") as fh:

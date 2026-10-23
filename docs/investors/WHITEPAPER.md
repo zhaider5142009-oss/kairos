@@ -63,6 +63,37 @@ training window; parameters are chosen out-of-sample, never in-sample. The model
 returns a score in [−1, +1] and a confidence, and disagreement across models is carried
 forward as a feature rather than averaged away.
 
+**A condition has two axes, and both are named.** The instrument's own bars say whether it is
+trending or reverting, quiet or volatile. They cannot say whether the dollar is being squeezed
+worldwide, whether PKR is sliding, or whether credit is tightening — and a blue chip in a quiet
+uptrend is a different trade in each of those tapes. So the state an order is made in is spelled
+`Bull-Quiet :: Risk-Off`: the micro regime from the instrument, the macro tag from seven
+cross-asset prints (VIX percentile, DXY, the 10-year's change, SPX trend, the copper/gold ratio,
+BTC's deviation, USDPKR) weighted into a score in [−1, +1]. Three properties are what make it
+usable rather than decorative:
+
+1. *The tag is a function only of what the measurement can also see.* It is computed from the
+   same date-truncated panel the strategies get, so a historical slice is classified by the tape
+   as of that bar and never by a volatility spike that has not happened yet. Live-only context —
+   PSX breadth, which no vendor will reconstruct for a past date — is reported beside the state
+   and excluded from the score that chooses the bucket.
+2. *An absent print is not a neutral print.* Coverage is counted against the panel's total
+   weight, three prints is a floor of its own, and a panel that cannot be read gets the tag
+   `Unknown` with a cautious size, not a mid-range score that reads as a finding.
+3. *One spelling, both producers.* The live engine and the walk-forward call the same function
+   to build the key. If they diverged by a space, every live lookup would miss, answer 1.0 with
+   "no coverage", and report that no strategy has demonstrated an edge when what happened is
+   that two halves of the system stopped describing the world in the same words.
+
+The weight then follows the condition, not the mood: skill is measured per
+`horizon | condition` bucket, so a strategy is paid for what it got right in the tape it is
+being asked about. The divisors behind each print are declared judgment constants, deliberately
+not fitted — a threshold tuned on the same history it scores is not a threshold. On the
+evidence so far (1,029 slices over 14 instruments), the census is 479 risk-on, 359 neutral,
+191 risk-off, and 14 of the 21 conditions carry enough graded votes to move a weight; the rest
+fall back to the pooled bucket and say so. That is the honest price of splitting the sample,
+and it is printed by the same command that produces the artifact rather than hidden in it.
+
 **The LLM council.** Up to six models vote through a router. Three properties matter:
 
 1. *Named-seat integrity.* If seat `meta-llama/llama-4-scout` is dead, the council shrinks.
@@ -187,7 +218,7 @@ one they vote in, and the reader of the weights is told so.
 - Logs rotate; state persists across restarts; RAM, startup and per-cycle cost were profiled
   on a 2015-era i5 / 8 GB machine, which is a deliberate constraint — if it runs there, the
   infrastructure argument is cheap.
-- 405 regression tests, including the money path and the integrity cases below.
+- 453 regression tests, including the money path and the integrity cases below.
 
 ## 7. What the numbers say, and what they do not
 
@@ -200,17 +231,22 @@ and 9 instruments reported as losses.
 important finding in the project: the edge, if any, is in the global and commodity books,
 and any PSX strategy must be sized against costs before it is sized against conviction.
 
-The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 361
+The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 364
 autopilot cycles) with two fills. That is a system working as designed on a low-conviction
 market, not a strategy proving itself.
 
 ## 8. The integrity bugs, documented because they are the credibility
 
-An investor kit is only worth its willingness to publish its own audit. Fifty-four defects
-are tabled below, each with what it would have cost had it shipped. Eight of them were in the
+An investor kit is only worth its willingness to publish its own audit. Fifty-seven defects
+are tabled below, each with what it would have cost had it shipped. Two of them arrived with
+this release's cross-asset axis and belong to the machinery that produces the numbers rather
+than to the code that trades on them: a skill key that credited a strategy for what it got
+right in one tape and paid for it in another, and a strategy whose input was never fetched, so
+it abstained forever and the evidence file read that as no edge. Nine of them were in the
 machinery that produces the numbers an investor would read — the scorer that turns a journal
 into a hit rate, the command that regenerates the evidence, the ledger repair meant to keep
-that history honest, and the guardrail built to keep the pack's figures current. That group is
+that history honest, and the guardrail built to keep the pack's figures current, including one
+figure that guardrail had no word for. That group is
 worth naming first, because nothing about it was flattering: three were in code we had already
 declared finished, two were in numbers we had already printed, and three were inside an earlier
 repair or the guardrail we built for one — which is why the last ones were found at all.
@@ -278,6 +314,9 @@ a working one. Neither was caught by a click, because nobody clicks in a test su
 | A regime flag changed meaning on its way through a disk | `high_volatility` was `percentile > 0.7 or vol20 > 1.6 * vol60`, and both operands are numpy floats, so `or` handed back a `numpy.bool_` whenever the percentile branch was false — which is the ordinary case for an ordinary tape, putting the leak on the main path, not in an edge. Every reader had its own excuse for missing it: the desk survived by accident because its endpoint coerces the whole payload, and a bare `json.dumps` of the dict raised `TypeError`. The CLI dossier writes with `default=str`, so a quiet market was saved as the *string* "False" — and anything asking `if regime["high_volatility"]` of that file read True out of a report that had recorded False, and False out of the live object that had never been written. Same market, two answers, depending on whether it had been through a disk, in a field whose whole job is to say whether the market is calm | the value is a Python bool where it is produced. The test counts how many of its walks actually reach the fall-through branch before it claims to cover it, and asks the dossier's own question — that a saved regime says the same thing as a live one. Removing the four-character guard fails all three tests, which is the difference between a regression test and a comment |
 | The desk answered nothing, and looked exactly like it was answering | the JS Global order panel closed its ternary one bracket short, so the entire inline `<script>` failed to parse. Nav, health, the watchlist, the prediction form and every tab went inert while the API kept answering and the page kept rendering — a classic script that dies on a syntax error leaves no trace but a window with no functions on it. The install instructions end with *open the desk*, and the desk was a poster: the shipped product's only interface had no test, because nothing in the suite had ever read the HTML, and nothing in the suite could tell a working page from a picture of one | the bracket is closed, and `tests/test_desk_script.py` walks the script's brackets now, ignoring the ones that are only text inside strings, comments, template literals and regexes, and fails with the offending HTML line rather than a parse error with no context. It replays the defect it was written for instead of describing it, and pins the cases a naive counter would cry wolf about — because a guard that only ever passes on good code is the same untested component it exists to catch |
 | The MT5 bridge attached to whichever terminal happened to be open | the account is read from `account_info()` of whatever `terminal64.exe` is running, so with a broker terminal and a PMEX terminal both reachable, sizing, free margin and the daily loss break would divide by the equity of an account nobody chose — while `terminal_path`, the one setting that could pin the install, was accepted by `attach()` and dropped on the floor, and the instruction it printed told a PMEX operator to sign in to JS Markets | the signed-in login must equal the configured one or the link is refused and the IPC handle closed, leaving the app alone; `path` is forwarded only once the running process is confirmed to *be* that install, because `initialize(path=…)` launches a terminal that is not running, which is the one thing this bridge promises it does not do; the message names the configured venue; `mt5.spawn` is the operator's explicit word to restart the app, and it never puts a credential on a command line, where every local process could read it — 6 tests |
+| Skill was credited against half of the condition it was earned in | strategy weights were polled by the instrument's own regime label — `Bull-Quiet`, `MeanRev-Volatile` — computed from that instrument's bars, while the tape it sat in went unrecorded. A strategy that is right only while credit is tightening carried the same weight in a risk-on melt-up, and the journal could not reconstruct the difference afterwards because the row had written down the micro label and nothing else. Every "regime-conditional" claim in the system was conditional on one axis of two | `kairos/macro.py` scores seven cross-asset prints into a risk-appetite tag, and the bucket key becomes `micro :: macro` produced by **one** function that both the live engine and the walk-forward call, because two spellings would make every live lookup miss and report "no coverage" as though no strategy had an edge. The tag is a function only of the date-truncated panel the strategies already receive, so a historical slice is classified by the tape as of that bar and not by today's volatility spike; an absent print is never averaged in as a neutral one — coverage is counted, three prints is a floor of its own, and an unclassifiable panel gets its own tag rather than a mid-range number. Risk-off cuts the suggested position to ×0.75 and says which print did it. The artifact's schema moved to 2 so the pre-axis evidence is **refused by name** rather than silently polled flat, and the snapshot journals the condition beside the regime so the next six months of calls are attributable by both axes — 45 new tests. The first cut of this fix broke every PSX prediction: it fetched the exchange breadth scan unguarded, so any data client without `psx_snapshot` raised inside the prediction. The existing parallel-fetch suite caught it, and the scan is now allowed to cost the desk one line and nothing more |
+| A strategy that could never see its own input | strategy 73, the Copper-Gold Growth Barometer, reads copper and gold out of the intermarket panel. `COPPER` was not in the panel's key list, so the fetch never asked for it, the lookup returned nothing, and the strategy abstained on every slice in **both** paths — live and walk-forward. That is indistinguishable from a careful component that looked at the data and said nothing, so the evidence file recorded it as having no edge, and the copper/gold print added this round would have silently carried a growth-versus-safety signal built from a series that was never fetched | `COPPER` joins the panel's ten keys, inside a batch that already ran nine in parallel, so no measurable latency. The regenerated artifact gives the strategy 900 directional votes across 1,029 slices where it previously had **0**, and the growth print now carries 12% of the macro score instead of abstaining. Found by reading the new module's inputs against the fetch list, then confirmed in the counts rather than in the code — a strategy that never votes is only visible if somebody counts the votes |
+| The staleness guard had no word for the figure that went stale | a count of matured snapshots that had been non-trades was published in six places — the deck, the one-pager, the landing page, both READMEs and the Show HN draft — and it named a real column of the generated ledger, so a reader takes it as current. It is written here as a shape rather than a number for the reason the guardrail row below gives: the rewriter matches on adjacency, and a historical value quoted in digits inside this table is a value it overwrites. The ledger's matured count had moved on by nearly double, and no refresh pass touched the quoted one because the guard only rewrites a digit sitting beside a word its vocabulary recognises, and "non-trades" was not in that vocabulary. Every figure in the sentences around it was restamped correctly on the same pass, which is what made the wrong one invisible: a checker that lists the phrases it knows reports an unknown phrase as absent, not as stale. Left alone, the kit would have gone on telling an investor that some fixed fraction of the matured record was non-trades in the same breath as disclosing that none of it was calls — the disclosure contradicted by the number supporting it | the ledger's non-trade column is now a figure of its own, with rules for both shapes the pack writes it in — "all N were non-trades", "every one of the N was a non-trade" — so the rewriter and the test agree about it by construction; the outreach draft's live tally was rewritten into a shape a rule already owns, and a new test pins the defect total named at the head of this table to the number of rows underneath it, because that count was a hand-typed figure too. A fixture carrying the old number now fails the suite in both shapes — the only proof that a rule exists is that it rejects the value it was written for |
 
 Nothing moved money. The journal now says so itself: rebuilt from `data/audit_journal.jsonl`,
 the track record publishes the count of lines carrying the test signature and the count of
@@ -318,7 +357,7 @@ be mis-sized because of it.
 git clone https://github.com/zhaider5142009-oss/kairos && cd kairos
 cp config.example.yaml config.yaml      # add your own keys; config.yaml is git-ignored
 pip install -r requirements.txt
-python -m pytest tests -q                    # 405 tests
+python -m pytest tests -q                    # 453 tests
 python -m kairos.cli backtest GOLD WTI HBL   # walk-forward sweep, costs modelled
 python -m kairos.cli health                  # subsystem health, dead council seats
 python -m kairos.cli feedback                # realized track record, live from the journal

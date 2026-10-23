@@ -78,7 +78,8 @@ def ledger() -> dict[str, str]:
     out: dict[str, str] = {}
     for label, key in (("predictions journaled", "journaled"),
                        ("horizons matured", "matured"),
-                       ("of which directional calls", "directional")):
+                       ("of which directional calls", "directional"),
+                       ("of which non-trades (HOLD)", "non_trades")):
         m = re.search(rf"\| {re.escape(label)} \| ([\d,]+) \|", body)
         out[key] = m.group(1) if m else "MISSING"
     for pattern, key in ((r"cycles run: \*\*([\d,]+)\*\*", "cycles"),
@@ -127,6 +128,14 @@ RULES = [
     (r"(?<!every )\b\d{2,6}(?=[\s>]*cycles)", "cycles", 0),
     (r"(?<![\d,])\d{1,7}(?=[\s>]*fills)", "fills", 0),
     (r"(?<![\d,])[\d,]{3,5}(?=[\s>]*-?[\s>]*point[\s>]*grid)", "grid", 0),
+    # The non-trade count is a ledger figure like any other, and the pack quoted it
+    # in two shapes — "all 140 were non-trades" and "every one of the 140 was a
+    # non-trade". Neither had a rule, so the number sat behind the words that name
+    # it and no pass moved it: the same sentence shipped four refreshes after the
+    # ledger's matured count had gone from 140 to 263. The number has to be glued to
+    # its word for a rule to own it, which is what these two shapes require.
+    (r"(?<![\d,])[\d,]{2,7}(?=[\s>]*(?:were[\s>]*)?non-trades)", "non_trades_comma", 0),
+    (r"(?<![\d,])[\d,]{2,7}(?=[\s>]*was a non-trade)", "non_trades_comma", 0),
 ]
 
 # Words that mean exactly one figure wherever the pack pairs them with a number.
@@ -147,6 +156,7 @@ FIGURE_WORDS = [
     ("cycles", r"\d{2,6}", r"(?:autopilot[\s>]*)?cycles"),
     ("fills", r"\d{1,7}", r"fills"),
     ("grid", r"[\d,]{3,5}", r"-?[\s>]*point[\s>]*grid"),
+    ("non_trades_comma", r"[\d,]{2,7}", r"(?:were )?non-trades|was a non-trade"),
 ]
 
 
@@ -843,6 +853,7 @@ def _values(facts: dict) -> dict[str, str]:
             "tests": num("tests", False), "strategies": num("strategies", False),
             "journaled_comma": num("journaled", True),
             "matured_comma": num("matured", True),
+            "non_trades_comma": num("non_trades", True),
             "cycles": num("cycles", False), "fills": num("fills", False),
             "grid": num("grid", True)}
 
@@ -912,7 +923,7 @@ def main() -> int:
             print(f"{name:34} {n} sweep figure(s) updated")
         facts = {**codebase(), **ledger()}   # re-read, the ledger is the source
     order = ["lines", "modules", "tests", "strategies", "grid", "journaled",
-             "matured", "directional", "cycles", "fills", "realized_pnl",
+             "matured", "directional", "non_trades", "cycles", "fills", "realized_pnl",
              "ledger_generated", "pack_date", "version"]
     facts.update(stamps(facts))
     if args.markdown:
