@@ -68,10 +68,10 @@
 <section>
   <h2>What is actually built</h2>
   <div class="stat">
-    <div><b>12,990</b><small>lines of Python, 37 modules, public</small></div>
+    <div><b>13,112</b><small>lines of Python, 37 modules, public</small></div>
     <div><b>100</b><small>strategies selected per instrument, walk-forward</small></div>
     <div><b>6</b><small>configured council seats; a dead one shrinks the vote</small></div>
-    <div><b>373</b><small>passing tests, money path included</small></div>
+    <div><b>395</b><small>passing tests, money path included</small></div>
     <div><b>24/7</b><small>supervised daemon, watchdog, token-gated API</small></div>
   </div>
 </section>
@@ -119,11 +119,11 @@
 <section>
   <h2>What is <em>not</em> proven</h2>
   <ul>
-    <li><b>No directional hit rate exists.</b> 3,076 predictions journaled, 263 horizons
+    <li><b>No directional hit rate exists.</b> 3,175 predictions journaled, 263 horizons
       matured, and every one of the 140 was a non-trade. A non-trade cannot be a correct
       prediction.</li>
     <li>The live paper book is essentially flat: −Rs 13.05 realized on Rs 1,000,000 across
-      350 autopilot cycles, 2 fills.</li>
+      359 autopilot cycles, 2 fills.</li>
     <li>The live order path is built, capped and tested against staging — it has not been
       exercised at scale.</li>
     <li>No audit, no team, no AUM, no regulatory licence, no third-party capital.</li>
@@ -185,6 +185,28 @@
   one lie a trading system must never tell. Both are fixed structurally, not cosmetically,
   and the journal that was polluted was <b>left as it is</b> — the containment event is
   appended to it, because a rewritten audit trail proves nothing.</p>
+  <p class="lede">This round built the thing every audit above was missing: a way to say
+  <b>which</b> vote deserved the weight. The strategy library was a flat poll, and the journal
+  stored only the fused answer, so nothing in the system could be credited or demoted from
+  evidence — the calibrations above graded the answer and none graded the voter. Now, every
+  fifth bar, the walk re-derives features from only the history that existed <i>then</i>, takes
+  each vote, and grades it once that horizon's bars print — against the up-rate of its own
+  bucket, same instrument, same horizon, same regime, because being right 70% of the time on a
+  tape that rose 70% of the time proves nothing. Weights are bounded to 0.5–1.5, shrunk toward
+  1.0 by sample size, and <b>the engine refuses them outright</b> — falling back to a flat poll
+  it names on the page — if the evidence is stale, incomplete, or measured against a library of
+  a different size. A weight you cannot switch off is a weight you cannot audit.</p>
+  <p class="lede">Two defects came out of using it rather than writing it. The first walk
+  printed a raw hit rate above 100% and raised nothing: a counter was adding long votes into the
+  <i>hits</i> column, so the arithmetic was impossible and every number built on it still looked
+  plausible. The second run died on its very first slice behind an exit code that reported
+  success. Both are gated now — the tool refuses to publish an artifact whose hits outnumber its
+  votes, names the bucket, and writes nothing, so the previous weights stay in force. And the
+  desk had been inert since the order panel landed: one missing bracket made the entire inline
+  script fail to parse, so no tab, no health dot and no form responded while the API kept
+  answering and the page kept rendering. Nothing in the suite had ever read the HTML. It walks
+  the script's brackets now, ignores the ones that are only text, and replays the defect instead
+  of describing it.</p>
   <p class="lede" style="margin-bottom:0"><b>The audit caught it before a live account paid
   for it.</b> That is the product.</p>
 </section>
@@ -220,7 +242,7 @@
   numbers and the code agree.</p>
   <pre>git clone https://github.com/zhaider5142009-oss/kairos &amp;&amp; cd kairos
 pip install -r requirements.txt
-python -m pytest tests -q                     # 373 tests
+python -m pytest tests -q                     # 395 tests
 python -m kairos.cli backtest GOLD WTI HBL    # reproduce a sweep, costs modelled
 python -m kairos.cli feedback                 # realized record, live from the journal
 python tools/make_track_record.py             # rebuild the published ledger</pre>

@@ -47,6 +47,7 @@ account without a human in the loop *only when three independent keys are turned
 | Features | `kairos/features.py` | deterministic, versioned feature frames |
 | Models | `kairos/models_stat.py`, `models_ml.py` | statistical + ML + neural battery |
 | Strategy | `kairos/strategies.py` | 100 strategies voting direction, strength and rationale into the live consensus |
+| Attribution | `kairos/attribution.py`, `tools/strategy_attribution.py` | which of those votes has earned its weight, measured out-of-sample per horizon and per regime — and a refusal to weigh what it cannot |
 | Council | `kairos/llm.py` | named-seat LLM consensus with provider integrity |
 | Ensemble | `kairos/ensemble.py`, `quantum.py` | fused expert scores, portfolio weights |
 | Risk | `kairos/risk.py` | position sizing, drawdown guard, price band |
@@ -135,6 +136,35 @@ Calibration then feeds back three ways:
 The leash is the point: self-improvement that raises confidence on evidence that does not
 exist is a way to lose money faster than the market teaches you.
 
+**A fourth feed, and why the other three needed one.** None of the above can say *which* vote
+deserved the weight. The strategy library was a flat poll and the journal stored only the fused
+composite, so no component of the system could ever be credited or demoted from evidence — the
+three calibrations above grade the *answer*, never the *voter*.
+`tools/strategy_attribution.py` walks history the way the library is asked to use it: every
+fifth bar it re-derives the features from the bars available *then*, takes each strategy's vote,
+and grades it once that horizon's bars exist. `kairos/attribution.py` turns those counts into
+weights, bounded to 0.5–1.5 and shrunk toward 1.0 by sample size, and `fuse()` applies them
+before votes become a consensus.
+
+Skill is a difference, not a ratio. A strategy that was right 70% of the time on a tape that
+rose 70% of the time has proved nothing, so every bucket is graded against its own up-rate —
+same instrument, same horizon, same regime — with a pooled fallback when a regime slice is too
+thin to mean anything. The current artifact covers 1,029 graded slices and 31,188 directional
+votes over 14 instruments. At a five-bar horizon in a Range market, 56 of the library earn a
+regime-specific weight, 20 are weighed on pooled evidence, and 24 have too little data to be
+weighed at all and stay at 1.0. The applied span is 0.79 to 1.18.
+
+Two rules stop this becoming a self-justifying number. The engine refuses the artifact outright
+— falling back to a flat poll, named as such in the prediction, on the desk and in the CLI
+dossier — if it is stale, incomplete, or measured against a library of a different size. And the
+live journal now records the regime and the names of the strategies that spoke, so the first
+real forward results can confirm or break this hypothesis instead of being compared with nothing.
+
+What the walk cannot reproduce is written into the artifact rather than smoothed away:
+`ctx_unavailable` names the factor panel (it needs a live PSX snapshot) and news sentiment (it
+needs a model and the day's feeds), so those strategies are graded on poorer context than the
+one they vote in, and the reader of the weights is told so.
+
 ## 6. Operations
 
 - Runs 24/7 as a supervised daemon with a watchdog; the API server is restarted by the loop
@@ -144,7 +174,7 @@ exist is a way to lose money faster than the market teaches you.
 - Logs rotate; state persists across restarts; RAM, startup and per-cycle cost were profiled
   on a 2015-era i5 / 8 GB machine, which is a deliberate constraint — if it runs there, the
   infrastructure argument is cheap.
-- 373 regression tests, including the money path and the integrity cases below.
+- 395 regression tests, including the money path and the integrity cases below.
 
 ## 7. What the numbers say, and what they do not
 
@@ -157,13 +187,13 @@ and 9 instruments reported as losses.
 important finding in the project: the edge, if any, is in the global and commodity books,
 and any PSX strategy must be sized against costs before it is sized against conviction.
 
-The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 350
+The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 359
 autopilot cycles) with two fills. That is a system working as designed on a low-conviction
 market, not a strategy proving itself.
 
 ## 8. The integrity bugs, documented because they are the credibility
 
-An investor kit is only worth its willingness to publish its own audit. Fifty-one defects
+An investor kit is only worth its willingness to publish its own audit. Fifty-three defects
 are tabled below, each with what it would have cost had it shipped. Eight of them were in the
 machinery that produces the numbers an investor would read — the scorer that turns a journal
 into a hit rate, the command that regenerates the evidence, the ledger repair meant to keep
@@ -174,7 +204,10 @@ repair or the guardrail we built for one — which is why the last ones were fou
 Thirty-one more were on the money path, the trail that records it, or a limit that
 read as a control and was not wired to one; nine were a provider or a
 bridge answering in a way the desk then reported as health, and three were credentials — or the
-guard that was supposed to catch them — sitting in tracked files.
+guard that was supposed to catch them — sitting in tracked files. The last two sat on the
+surface itself: a flag whose type let it read back as its own opposite once it had been through
+a disk, and a desk whose script never parsed at all, which left a page that looked exactly like
+a working one. Neither was caught by a click, because nobody clicks in a test suite.
 
 | defect | consequence had it shipped | fix |
 |---|---|---|
@@ -229,6 +262,8 @@ guard that was supposed to catch them — sitting in tracked files.
 | An ack rewrote the queue from a list that was already stale | the release is completed by rewriting the whole file minus the ticket just sent — from the list read *before* the broker POST, which can sit out there for seconds. Anything staged in that window, by the desk or by an armed autopilot placing on its own, was put back by the overwrite. And the write came before the record, so a disk that refused it also cost the "this order may or may not have reached the broker" line — the one event the trail most needs | the ticket is removed by re-reading the queue under a lock, the unknown-outcome record is written before the queue is touched, and a removal that fails after the order did go out is a warning on the answer and a journalled event: an executed order with a re-ackable ticket still in the queue says so instead of looking clean |
 | A ticket the TTL ate left no trace | staged orders expire after fifteen minutes, and expiry simply filtered them out of the next write with no event behind it, so the ack that later answered "no pending order (stale after 15 min)" described a stage that had stopped existing without ever being closed. A ticket whose timestamp could not be read was neither kept nor recorded either | every ticket the TTL drops is journalled with its own identity and age, a row that cannot be aged is expired loudly rather than silently, and the ISO stamp the desk already prints is the fallback for a missing epoch — so a live ticket is not discarded over a field the queue does not need |
 | A date it could not read was invented as today | `Autopilot._age_days` answered 0.0 for any timestamp it failed to parse, and both callers took the invention: a held entry with an unreadable start date never reached maturity, which is the exit that closes a position at its horizon, and the watchlist read its own corrupt stamp as "rotated seconds ago", so daily PSX rotation stopped for the life of the process. Both looked like a system behaving normally | an unreadable age is no answer at all. The maturity exit stays off — other exits keep working — and the row says so once on the desk and in the trail; the rotation throttle does not fire on a stamp it cannot read, which also lets the next rotation repair it |
+| A regime flag changed meaning on its way through a disk | `high_volatility` was `percentile > 0.7 or vol20 > 1.6 * vol60`, and both operands are numpy floats, so `or` handed back a `numpy.bool_` whenever the percentile branch was false — which is the ordinary case for an ordinary tape, putting the leak on the main path, not in an edge. Every reader had its own excuse for missing it: the desk survived by accident because its endpoint coerces the whole payload, and a bare `json.dumps` of the dict raised `TypeError`. The CLI dossier writes with `default=str`, so a quiet market was saved as the *string* "False" — and anything asking `if regime["high_volatility"]` of that file read True out of a report that had recorded False, and False out of the live object that had never been written. Same market, two answers, depending on whether it had been through a disk, in a field whose whole job is to say whether the market is calm | the value is a Python bool where it is produced. The test counts how many of its walks actually reach the fall-through branch before it claims to cover it, and asks the dossier's own question — that a saved regime says the same thing as a live one. Removing the four-character guard fails all three tests, which is the difference between a regression test and a comment |
+| The desk answered nothing, and looked exactly like it was answering | the JS Global order panel closed its ternary one bracket short, so the entire inline `<script>` failed to parse. Nav, health, the watchlist, the prediction form and every tab went inert while the API kept answering and the page kept rendering — a classic script that dies on a syntax error leaves no trace but a window with no functions on it. The install instructions end with *open the desk*, and the desk was a poster: the shipped product's only interface had no test, because nothing in the suite had ever read the HTML, and nothing in the suite could tell a working page from a picture of one | the bracket is closed, and `tests/test_desk_script.py` walks the script's brackets now, ignoring the ones that are only text inside strings, comments, template literals and regexes, and fails with the offending HTML line rather than a parse error with no context. It replays the defect it was written for instead of describing it, and pins the cases a naive counter would cry wolf about — because a guard that only ever passes on good code is the same untested component it exists to catch |
 
 Nothing moved money. The journal now says so itself: rebuilt from `data/audit_journal.jsonl`,
 the track record publishes the count of lines carrying the test signature and the count of
@@ -269,10 +304,12 @@ be mis-sized because of it.
 git clone https://github.com/zhaider5142009-oss/kairos && cd kairos
 cp config.example.yaml config.yaml      # add your own keys; config.yaml is git-ignored
 pip install -r requirements.txt
-python -m pytest tests -q                    # 373 tests
+python -m pytest tests -q                    # 395 tests
 python -m kairos.cli backtest GOLD WTI HBL   # walk-forward sweep, costs modelled
 python -m kairos.cli health                  # subsystem health, dead council seats
 python -m kairos.cli feedback                # realized track record, live from the journal
+python tools/strategy_attribution.py         # re-measures every strategy, writes the weights
+                                             # the engine refuses to use if they are stale
 python tools/make_track_record.py            # rebuilds docs/investors/TRACK_RECORD.md
 python tools/kit_stats.py                    # the only figures this pack may quote
 python tools/kit_stats.py --write            # point every quoted figure at them

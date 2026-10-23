@@ -29,12 +29,12 @@ Built by one operator, running 24/7, publishing its own losses.
 
 | | |
 |---|---|
-| Code | 12,990 lines Python · 37 modules · public repo |
+| Code | 13,112 lines Python · 37 modules · public repo |
 | Strategies | 100 voting into the live consensus; the sweep fits one blended signal, not the library |
 | Council | 6 configured LLM seats across 2 providers; a dead seat shrinks the council |
 | Execution | paper + JS Global PSX bridge + MT5 |
 | Uptime | 24/7 daemon, watchdog, token-gated public API |
-| Tests | 373 passing, money path included |
+| Tests | 395 passing, money path included |
 
 Not a fund. No client money. No licence. No AUM.
 
@@ -67,9 +67,9 @@ conviction.
 
 ## 6. What is *not* proven
 
-- **No forward track record.** 3,076 predictions journaled, 263 horizons matured, all 140 were
+- **No forward track record.** 3,175 predictions journaled, 263 horizons matured, all 140 were
   non-trades. A directional hit rate does not yet exist.
-- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 350 cycles, 2 fills.
+- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 359 cycles, 2 fills.
 - Live execution path is built and gated, not exercised at scale.
 - No audit, no team, no third-party capital.
 
@@ -260,6 +260,46 @@ exactly like a system behaving normally. **A component that cannot answer a ques
 allowed to answer it** — that is the whole rule, and it now holds all the way down to the file a
 real order waits in.
 
+This round moved off the money path and onto the system's own bookkeeping, and started by
+building the thing the integrity story had been missing: a way to say **which** of the votes
+deserved weight. The library was a flat poll, and the journal stored only the fused composite,
+so nothing in the system could ever be credited or demoted from evidence — every calibration
+above graded the answer and none graded the voter. `tools/strategy_attribution.py` re-derives
+the features at every fifth bar from only the bars that existed *then*, takes each strategy's
+vote, and grades it once that horizon's bars print. `kairos/attribution.py` turns the resulting
+counts into weights, bounded to 0.5–1.5 and shrunk toward 1.0 by sample size, measured against
+the up-rate of its own bucket — same instrument, same horizon, same regime — because a strategy
+that was right 70% of the time on a tape that rose 70% of the time has proved nothing. The
+artifact in this build carries 1,029 graded slices and 31,188 directional votes over 14
+instruments; the weights actually applied span 0.79 to 1.18, 24 of the 100 strategies still have
+too little evidence to be weighed at all and stay at 1.0, and 15 never cast a directional vote
+in the walk. **The engine refuses the artifact** — and says so, on the desk, in the prediction
+and in the CLI dossier, running a flat poll instead — if it is stale, incomplete, or measured
+against a library of a different size. A weight you cannot switch off is a weight you cannot
+audit.
+
+Two defects came out of *using* it rather than writing it. The first walk printed a raw hit rate
+over 100% and raised nothing: a counter was adding a long vote into the **hits** column and a
+short vote into the **longs** column, so the arithmetic was impossible and every number built on
+it still looked plausible. The second run died on its very first slice, inside a helper that had
+quietly pre-created an empty bucket, and the exit code reported success. Both shapes are gated
+now: the tool refuses to publish an artifact in which hits outnumber votes, names the bucket, and
+writes nothing, so whatever weights were in force stay in force; and a test asserts the column
+layout itself rather than trusting the totals.
+
+The desk was the quieter find. Clicking any tab did nothing, because a `)` was missing from the
+JS Global order panel's ternary and the entire inline `<script>` failed to parse — so nav,
+health, the watchlist and every handler were gone, while the API kept answering and the page kept
+rendering. **A classic script that dies on a syntax error leaves no trace but a window with no
+functions on it**, and nothing in the suite had ever read the HTML: the shipped product's only
+interface had been inert since the order desk landed. It has a bracket walk as a test now, one
+that replays the defect instead of describing it and fails with the offending HTML line. The same
+round caught another in that category: `high_volatility` was a numpy bool, the CLI dossier writes
+with `default=str`, and a quiet market was saved as the *string* "False" — so a saved report read
+back as True where the live object said False, and the field whose entire job is to say whether
+the market is calm meant the opposite on disk. A flag that changes meaning on its way through a
+disk is a component nobody ever asked whether it worked.
+
 **A system that audits its own performance numbers is the product.** Everything else is a
 chart.
 
@@ -273,8 +313,12 @@ chart.
 2. Council integrity: a dead seat shrinks the council instead of substituting another
    provider's opinion into a "median".
 3. Self-calibration from realized outcomes, with a leash that refuses to trust thin evidence.
-4. Venue-agnostic risk layer — PSX today, MT5 now, PMX scaffolded.
-5. Secrets handling: broker PIN storable in git-ignored config only, never logged or echoed,
+4. Attribution that can be switched off: each strategy's vote is weighted by its own realized
+   excess over the base rate of its bucket — same instrument, horizon and regime — measured
+   out-of-sample, and the engine refuses the weights and runs a flat poll if the evidence is
+   stale, incomplete, or measured against a library of a different size.
+5. Venue-agnostic risk layer — PSX today, MT5 now, PMX scaffolded.
+6. Secrets handling: broker PIN storable in git-ignored config only, never logged or echoed,
    one-click disarm.
 
 ---
