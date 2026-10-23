@@ -828,7 +828,7 @@ async function loadJsg(){
     $('#jopending').innerHTML=qband+(JO.length?`<table><thead><tr><th>Staged</th><th>Symbol</th><th class="c">Side</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Notional</th><th>Type</th><th>Age</th><th></th></tr></thead><tbody>${JO.map(x=>
       `<tr><td class="mono">${esc(x.id)}</td><td class="mono">${esc(x.symbol)}</td><td class="c ${x.side==='BUY'?'up':'down'}">${esc(x.side)}</td><td class="r mono">${num(x.qty,0)}</td><td class="r mono">${num(x.price)}</td><td class="r mono">${num(x.qty*x.price,0)}</td><td class="mono">${esc(x.order_type)}</td><td class="dim mono">${jsgAge(x.t)}</td><td style="white-space:nowrap"><button class="btn small" onclick="jAck('${esc(x.id)}')">Ack with PIN</button> <button class="btn ghost small" onclick="jDrop('${esc(x.id)}')">Drop</button></td></tr>`).join('')}</tbody></table>`
       :((q&&!q.ok)?'<span class="dim">the queue could not be read — the tickets above are not all of them</span>'
-                  :'<span class="dim">no staged orders — staging is only enabled when <b>js_global.allow_orders</b> is true</span>');
+                  :'<span class="dim">no staged orders — staging is only enabled when <b>js_global.allow_orders</b> is true</span>'));
   }catch(e){$('#jgsgate').innerHTML=`<span class="down">order desk unreachable: ${esc(e.message)}</span>`}
 }
 function jsgGateHtml(s){
