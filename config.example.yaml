@@ -155,6 +155,27 @@ news:
       url: "https://feeds.content.dowjones.io/public/rss/mw_topstories"
   max_items_per_feed: 25
 
+# The news desk: a per-instrument headline tone, scored by a declared lexicon,
+# cached, and read (never fetched) on the prediction path. This is the floor
+# under the LLM's `news_sentiment` — it needs no key and no model, so "News
+# Sentiment Tilt" votes on a machine where OpenRouter is switched off, and stops
+# voting only when the host is genuinely not answering. Every number below is
+# judgment or measurement, not a fitted parameter; the reasons are in kairos/news.
+newsdesk:
+  enabled: true
+  # Days of headlines to keep. The feed query is bounded by `when:<n>d`, so this
+  # is both the freshness window and the query.
+  window_d: 2
+  # How long a reading stays usable. A cycle that finds a reading younger than
+  # this does not re-ask the host for that symbol.
+  ttl_s: 900
+  # Per-query HTTP timeout. Measured 2026-10-23 on this machine's single uplink:
+  # one query takes 3.7-5.1s alone and materially longer with four in parallel.
+  timeout_s: 9
+  # Parallel queries per batch. More workers do not make a 5s host answer
+  # faster on one uplink; they only make each answer slower for the others.
+  max_workers: 4
+
 engine:
   min_history: 40
   forecast_horizons: [1, 5, 21]

@@ -98,7 +98,14 @@ def measure(md: MarketData, symbols: list[str], step: int,
                               "intermarket (truncated by date)",
                               "date_today", "patterns", "tags"]
     counts["ctx_unavailable"] = ["factor_row (needs a live PSX snapshot)",
-                                 "news_sentiment (needs an LLM and today's feeds)",
+                                 "news_sentiment (the news desk scores headlines it "
+                                 "can still reach, which is today's window: a feed "
+                                 "query is bounded by when:N d from the day the "
+                                 "measure runs, so no historical slice can be shown "
+                                 "the tape its bar actually had. The strategy that "
+                                 "reads it therefore stays ungraded and keeps weight "
+                                 "1.0 tagged 'no coverage' rather than being "
+                                 "credited or demoted on evidence it never saw)",
                                  "psx_breadth (live cross-section only, so it is "
                                  "reported beside the macro state, never scored "
                                  "into its bucket tag)"]

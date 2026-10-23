@@ -119,7 +119,7 @@ class Autopilot:
                 "signals": [], "actions": [], "held": {}, "consec_losses": 0,
                 "equity_peak": 0.0, "peak_since": None,
                 "last_rotation": None, "rotated": [], "psx_day_start": None,
-                "macro": None}
+                "macro": None, "news_desk": None}
 
     def _load(self) -> dict[str, Any]:
         st = self._defaults()
@@ -263,6 +263,29 @@ class Autopilot:
         rows: list[dict[str, Any]] = []
         trades = 0
         macro: dict[str, Any] | None = None
+        # One news round trip for the whole watchlist, once a cycle. `predict`
+        # only reads the desk cache, because a host that takes 3.7-5.1s per query
+        # does not belong on a path that already costs 9.7s per instrument; here
+        # the twelve fetches run in parallel and the cycle pays for one slow
+        # symbol, not twelve. Measured 2026-10-23: 12 instruments in 8.7s.
+        watch = [i for i in (resolve(s) for s in st["symbols"]) if i is not None]
+        try:
+            readings = ENGINE.refresh_news(watch)
+            news_desk = {"asked": len(watch),
+                         "available": sum(1 for v in readings.values()
+                                          if v.get("available")),
+                         "paused": ENGINE.news_paused}
+        except Exception as exc:
+            # A dead news desk must not cost the cycle: the strategies that do
+            # not read news carry on, and "News Sentiment Tilt" abstains. But it
+            # has to be *recorded* as dead, or a broken feed looks exactly like
+            # a market with no news in it.
+            news_desk = {"asked": len(watch), "available": 0,
+                         "paused": ENGINE.news_paused,
+                         "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+        with self._lock:
+            self.st["news_desk"] = news_desk
+            self._save()
         for sym in st["symbols"]:
             inst = resolve(sym)
             if inst is None:
@@ -370,6 +393,8 @@ class Autopilot:
                          "weight": rk["suggested_weight"],
                          "regime": res["regime"]["regime"],
                          "macro": (res.get("macro") or {}).get("tag"),
+                         "news": (res.get("news") or {}).get("score"),
+                         "news_source": (res.get("news") or {}).get("source"),
                          "condition": res.get("condition"),
                          "action": action, "detail": detail})
 
@@ -994,7 +1019,8 @@ class Autopilot:
                  "entry_threshold", "max_trades_per_cycle", "horizon_days",
                  "cycles", "last_cycle", "last_cycle_s", "last_error",
                  "feedback_error", "signals", "actions",
-                 "held", "consec_losses", "psx_day_start", "macro")},
+                 "held", "consec_losses", "psx_day_start", "macro",
+                 "news_desk")},
                 "risk_posture": posture,
                 "kill_switch": KILL.engaged(),
                 "mt5": {"connected": self.mt5.connected,

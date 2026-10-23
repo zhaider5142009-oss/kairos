@@ -147,6 +147,40 @@ def macro(refresh: bool = False):
         return {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
 
 
+# --------------------------------------------------------------- news tone
+@app.get("/api/newsdesk")
+def newsdesk(symbols: str = "", refresh: bool = False):
+    """The headline tone behind a news-driven signal, with the evidence count.
+
+    Not `/api/news`, which is the raw headline list the desk panel already
+    reads: two routes on one path make the second one unreachable, and the
+    desk UI would ask for stories and get tones.
+
+    Read-only by default: the desk is a cache, and `/api/predict` reads it
+    without ever waiting on a headline host, so this is the one place the
+    operator can see what the news axis actually answered — including the
+    abstentions, whose `reason` says whether the tape was quiet or the host was
+    not. `refresh=true` asks the host for the named symbols and costs a few
+    seconds; with no `symbols` it shows everything already cached, best first.
+    """
+    from kairos.news import DESK
+    wanted = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    unknown = [s for s in wanted if resolve(s) is None]
+    insts = [i for i in (resolve(s) for s in wanted) if i is not None]
+    try:
+        if insts:
+            if refresh:
+                readings = ENGINE.refresh_news(insts)
+            else:
+                readings = {i.key.upper(): DESK.tone(i).as_dict() for i in insts}
+        else:
+            readings = {r["key"]: r for r in DESK.holdings()}
+        return _safe({"ok": True, "desk": DESK.status(), "readings": readings,
+                      "unknown": unknown})
+    except Exception as exc:  # pragma: no cover - desk must answer
+        return {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+
+
 # ---------------------------------------------------------------- portfolio
 class PortfolioReq(BaseModel):
     symbols: list[str]

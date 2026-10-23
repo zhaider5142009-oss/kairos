@@ -325,6 +325,62 @@ def cmd_macro(args) -> int:
     return 0
 
 
+def cmd_newsdesk(args) -> int:
+    """The headline tone the news axis is trading, one row per instrument.
+
+    `predict` reads this off a cache, so the operator needs the same view
+    without running a prediction per symbol — and needs the `why` column, which
+    is the difference between "this stock has no news", "the host is not
+    answering" and "four headlines, none of them mention it".
+    """
+    from rich.table import Table
+    from .engine import ENGINE
+    from .news import DESK
+    from .universe import resolve
+    console = _console()
+    wanted = [s.strip().upper() for s in args.symbols]
+    unknown = [s for s in wanted if resolve(s) is None]
+    insts = [i for i in (resolve(s) for s in wanted) if i is not None]
+    if insts:
+        readings = (ENGINE.refresh_news(insts) if args.refresh else
+                    {i.key.upper(): DESK.tone(i).as_dict() for i in insts})
+    else:
+        readings = {r["key"]: r for r in DESK.holdings()}
+    st = DESK.status()
+    tbl = Table(title=f"KAIROS NEWS DESK — {st['source']} · {st['window_d']}d · "
+                      f"{st['held']} cached · {'paused' if st['paused'] else 'live'}",
+                box=box.ROUNDED)
+    for col, just in (("symbol", "left"), ("tone", "right"), ("stories", "right"),
+                      ("age", "right"), ("what the desk saw", "left")):
+        tbl.add_column(col, justify=just)
+    for key in sorted(readings, key=lambda k: -(readings[k].get("score") or -9)):
+        r = readings[key]
+        s = r.get("score")
+        if s is None:
+            tone = "[dim]absent[/]"
+        else:
+            tone = f"[{'green' if s > 0 else 'red' if s < 0 else 'white'}]{s:+.2f}[/]"
+        age = r.get("age_s")
+        tbl.add_row(key, tone, str(r.get("matching") or 0),
+                    f"{age:.0f}s" if age is not None else "?",
+                    f"[dim]{r.get('reason') or ''}[/]")
+    console.print(tbl)
+    top = [(k, r) for k, r in readings.items() if r.get("top")]
+    for k, r in top[:3]:
+        console.print(f"[bold]{k}[/] read from: " + " | ".join(r["top"][:2]))
+    if unknown:
+        console.print(f"[yellow]not in the universe:[/] {', '.join(unknown)}")
+    if st["paused"]:
+        console.print("[red]news host paused after a failure — these readings are "
+                      "stale or absent, not a quiet tape[/]")
+    if args.json:
+        out = CFG.reports_dir / "newsdesk.json"
+        out.parent.mkdir(exist_ok=True)
+        out.write_text(json.dumps({"desk": st, "readings": readings,
+                                   "unknown": unknown}, indent=2, default=str))
+    return 0
+
+
 def cmd_setup_wsl(args) -> int:
     from .wsl_bridge import WSL
     console = _console()
@@ -915,6 +971,16 @@ def main(argv: list[str] | None = None) -> int:
                     help="re-fetch the intermarket panel instead of the cache")
     sp.add_argument("--json", action="store_true", help="also save JSON report")
     sp.set_defaults(fn=cmd_macro)
+
+    sp = sub.add_parser("newsdesk", help="per-instrument headline tone from the "
+                                        "news desk, with the evidence behind each "
+                                        "reading (the radar is `kairos news`)")
+    sp.add_argument("symbols", nargs="*", help="symbols to show; blank shows every "
+                                               "cached reading, best tone first")
+    sp.add_argument("--refresh", action="store_true",
+                    help="ask the headline host now instead of reading the cache")
+    sp.add_argument("--json", action="store_true", help="also save JSON report")
+    sp.set_defaults(fn=cmd_newsdesk)
 
     sp = sub.add_parser("setup-wsl", help="install Chronos/TimesFM/qlib in WSL")
     sp.set_defaults(fn=cmd_setup_wsl)

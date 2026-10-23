@@ -33,6 +33,7 @@ from .llm import ROUTER
 from .macro import condition_label, macro_state, psx_breadth
 from .models_ml import neural_battery, tree_stack_forecast
 from .models_stat import ModelForecast, run_statistical_battery
+from .news import DESK as NEWS_DESK
 from .risk import compute_risk, portfolio_metrics
 from .strategies import run_strategy_library
 from .universe import Instrument, resolve
@@ -122,6 +123,77 @@ class PredictionEngine:
         if isinstance(data, dict) and isinstance(data.get("sentiment"), (int, float)):
             return float(np.clip(data["sentiment"], -1, 1))
         return None
+
+    def news_context(self, instrument: Instrument) -> tuple[float | None, dict[str, Any]]:
+        """The news axis for the strategy battery: (score, what produced it).
+
+        Two estimators of one thing, and the one with better input goes first.
+        That ordering is a measurement, not a preference: asked on 2026-10-23
+        what HBL's news was, the wire feed's own relevance filter returned a
+        Bank of Canada rate note, two ECB notes, a vendor's "NBP share price
+        today" page and a KSE-100 chart — not one story about Habib Bank — and
+        the model scored that pile 0.0, which was a correct reading of the wrong
+        headlines. The desk builds its query from the symbol, refuses when no
+        headline names it, and answered +0.73 on seven HBL profit-and-dividend
+        stories that same minute.
+
+        The model is therefore asked only when the desk cannot answer — which
+        also keeps an LLM round trip off the prediction thread in the common
+        case, since `news_context` runs inside `predict` and the desk is a cache
+        read. Until 2026-10-23 neither path worked with OpenRouter switched off,
+        and "News Sentiment Tilt" abstained on every instrument in every regime:
+        an absent print, not a neutral one.
+
+        The second half of the answer is always returned, availability included,
+        because a report that says the tone was +0.36 without saying that it
+        came from four headlines is not auditable, and one that says nothing
+        without saying *why* is indistinguishable from a quiet tape.
+        """
+        reading = NEWS_DESK.tone(instrument)
+        view = reading.as_dict()
+        fresh = reading.available and reading.age_s <= NEWS_DESK.ttl_s
+        if fresh:
+            return (round(float(reading.score), 3),
+                    {"source": "desk", "available": True,
+                     "score": round(float(reading.score), 3), "desk": view})
+
+        llm_on = bool(CFG.apis.get("openrouter", {}).get("enabled", False))
+        sent = self.news_sentiment(instrument) if llm_on else None
+        if sent is not None:
+            return (round(float(sent), 3), {"source": "llm", "available": True,
+                                            "score": round(float(sent), 3),
+                                            "desk": view})
+        if reading.available:
+            # Adopted from disk or simply overdue: better than nothing, and said
+            # to be overdue, because a two-hour-old tone moving a position is a
+            # different fact from a fresh one.
+            return (round(float(reading.score), 3), {"source": "desk-stale",
+                                                    "available": True,
+                                                    "score": round(float(reading.score),
+                                                                    3),
+                                                    "desk": view})
+        return None, {"source": "desk", "available": False, "score": None,
+                      "desk": view}
+
+    def refresh_news(self, instruments: list[Instrument]) -> dict[str, dict[str, Any]]:
+        """Fill the desk cache for a batch. This is where the network is paid for.
+
+        A watchlist costs one parallel round trip here and nothing in `predict`,
+        which reads the cache — the same arithmetic that took the intermarket
+        panel from ~16s to ~2s. Measured 2026-10-23: twelve instruments in 8.7s
+        wall clock on four workers.
+        """
+        return {k: v.as_dict() for k, v in NEWS_DESK.refresh(instruments).items()}
+
+    @property
+    def news_paused(self) -> bool:
+        """True while the desk is refusing to ask the host again after a failure.
+
+        The operator needs this distinction: "no instrument has news" and "the
+        news host is not answering and we stopped calling it" both arrive as an
+        empty tone, and only one of them is a fault.
+        """
+        return NEWS_DESK.paused
 
     # ------------------------------------------------------------- predict
     def predict(self, symbol: str, horizon: int = 5, use_llm: bool = False,
@@ -280,10 +352,11 @@ class PredictionEngine:
             "patterns": patterns,
             "tags": instrument.tags,
         }
-        if include_news and CFG.apis.get("openrouter", {}).get("enabled", False):
-            sent = self.news_sentiment(instrument)
-            if sent is not None:
-                ctx["news_sentiment"] = sent
+        news_score, news_view = (self.news_context(instrument) if include_news
+                                 else (None, {"source": "off", "available": False}))
+        if news_score is not None:
+            ctx["news_sentiment"] = news_score
+        ctx["news_tone"] = news_view
         votes = run_strategy_library(df, features, ctx) if CFG.engine.get(
             "use_strategies", True) else []
 
@@ -374,6 +447,7 @@ class PredictionEngine:
             "regime": regime_info,
             "condition": condition,
             "macro": macro.as_dict(),
+            "news": news_view,
             "signal": {
                 "direction": signal.direction, "score": signal.score,
                 "confidence": signal.confidence,

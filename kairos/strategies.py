@@ -1167,8 +1167,20 @@ def s99(df, f, ctx):
     s = ctx.get("news_sentiment")
     if s is None or abs(float(s)) < 0.15:
         return None
-    return _vote(int(np.sign(s)), min(0.6, abs(float(s))),
-                 f"news sentiment {float(s):+.2f}")
+    # The number is the same whichever estimator produced it, and the vote says
+    # which one did and how many headlines stood behind it: a tone from two
+    # stories and one from nine are the same sign and not the same evidence, and
+    # an operator reviewing a news-driven entry should not have to go and find
+    # out afterwards.
+    tone = ctx.get("news_tone") or {}
+    desk = tone.get("desk") or {}
+    detail = f"news sentiment {float(s):+.2f}"
+    if tone.get("source"):
+        detail += f" [{tone['source']}"
+        if desk.get("matching"):
+            detail += f", {int(desk['matching'])} headlines"
+        detail += "]"
+    return _vote(int(np.sign(s)), min(0.6, abs(float(s))), detail)
 
 
 @strategy("Multi-Strategy Confluence Master", "Sentiment")
