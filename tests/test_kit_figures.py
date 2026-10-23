@@ -19,7 +19,8 @@ imports: adding a layout makes the rewriter and the checker agree by constructio
 And `test_no_figure_phrase_lacks_a_rule` is the part neither of the old files had —
 a scan for digits standing next to a word that can only mean a figure, failing if
 no rule covers that spot. Write "999 passed" into the deck and the suite goes red
-instead of publishing it.
+instead of publishing it. The binary is scanned by that lint too, not just held to
+the figure comparison: see `LINTED` below for what that found.
 
 Two kinds of figure, both pinned to the same command:
 
@@ -53,6 +54,16 @@ PACK_DIR = ROOT / "docs" / "investors"
 PACK = [PACK_DIR / name for name in
         ("DECK.md", "ONE_PAGER.md", "WHITEPAPER.md", "landing.html", "README.md",
          "OUTREACH.md")] + [ROOT / "README.md"]
+DECK_PPTX = PACK_DIR / "KAIROS_Investor_Deck.pptx"
+# The binary gets the same vocabulary lint as the text files. It used to get only
+# the figure comparison, and that turned out to be the weaker half: slide 5 wrote
+# "17,212 lines, 42 modules, 665 tests" and no rule ends in a bare "lines," or a
+# bare "tests", so of that triple only the module count was ever compared. The
+# other two sat one refresh behind while the same sentence restamped "41" — a
+# guard that reads the forms it knows reports an unknown form as absent, and the
+# deck is the copy that gets emailed.
+LINTED = PACK + [pytest.param(DECK_PPTX, marks=pytest.mark.skipif(
+    not DECK_PPTX.is_file(), reason="no pptx in this checkout"))]
 
 # A figure can sit inside markup, so the scan that looks for one has to cross the
 # tags that the layout rules have to spell out.
@@ -60,6 +71,10 @@ SEP = r"(?:[\s>.,:;/-]|</?b>|<small>|<em>|</em>)*"
 
 
 def _text(p: Path) -> str:
+    if p.suffix == ".pptx":
+        # the runs come out of the zip already flattened, so the same rules that
+        # read the markdown read the binary without a second vocabulary
+        return kit_stats.pptx_text(p)
     body = p.read_text(encoding="utf-8", errors="replace")
     # Figures get wrapped, and a blockquote continuation marker lands between the
     # number and the word it belongs to. Match on the flattened text so a line
@@ -121,7 +136,7 @@ def test_the_powerpoint_deck_quotes_the_same_figures(figures):
     It found the deck six passes stale: 10,691 lines, 35 modules, 121 tests and a
     v2.5.0 stamp, under a footer claiming the figures were verified that day.
     """
-    path = PACK_DIR / "KAIROS_Investor_Deck.pptx"
+    path = DECK_PPTX
     if not path.is_file():
         pytest.skip("no pptx in this checkout")
     body = kit_stats.pptx_text(path)
@@ -137,7 +152,31 @@ def test_the_powerpoint_deck_quotes_the_same_figures(figures):
                      f"it from DECK.md: {bad}")
 
 
-@pytest.mark.parametrize("path", PACK, ids=lambda p: p.name)
+def test_a_deck_figure_in_a_prose_sentence_is_reachable(figures):
+    """A figure the guard cannot read is a figure the deck may print stale forever.
+
+    Slide 5 held the repository triple as prose — "17,212 lines, 42 modules, 665
+    tests" — and a rule only owns a digit that ends in the word it knows, so of
+    those three claims the module count alone was compared. The deck went on
+    shipping a line count and a test total that no pass had ever looked at, in the
+    same sentence that got its "41" reported. The wording now ends in "lines of
+    Python" and "passing tests", which the rules do end in, and this checks both
+    homes for each figure: the stat card and the sentence. Reword either into a
+    shape no rule finishes with, or delete one, and this fails.
+    """
+    if not DECK_PPTX.is_file():
+        pytest.skip("no pptx in this checkout")
+    body = kit_stats.pptx_text(DECK_PPTX)
+    sites = ((f"{figures['lines_comma']:,} lines of Python", "9,999 lines of Python"),
+             (f"{figures['modules']} modules", "99 modules"),
+             (f"{figures['tests']} passing tests", "999 passing tests"))
+    for good, wrong in sites:
+        assert body.count(good) >= 2, f"{good!r} is quoted in one place only"
+        assert _stale_figures(body.replace(good, wrong, 1), figures), \
+            f"corrupting {good!r} left the deck guard green"
+
+
+@pytest.mark.parametrize("path", LINTED, ids=lambda p: p.name)
 def test_no_figure_phrase_lacks_a_rule(path, figures):
     """A digit next to a figure word must be a figure the rules rewrite.
 
