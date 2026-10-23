@@ -283,6 +283,35 @@ def mt5(symbols: str = "XAUUSD,XAGUSD,EURUSD", benchmark: bool = False):
     return out
 
 
+# ---------------------------------------------------------------- binance
+@app.get("/api/binance")
+def binance_venue(symbols: str = "BTC,ETH", account: bool = False):
+    """The third venue's state: which keys are turned, what the key is permitted
+    to do, and how the host answered. Never the key material.
+
+    `state()` reads no network — the desk polls this. `account=true` opts into
+    the signed balance read, which costs a round trip and is why it is opt-in.
+    """
+    from kairos import binance as _BN
+    out = dict(_BN.BINANCE.state())
+    out["ok"] = bool(out.get("connected"))
+    if account:
+        acc = _BN.BINANCE.account()
+        out["account"] = acc
+        if acc is None:
+            out["account_error"] = _BN.BINANCE.error or "balance read unanswered"
+    ticks = []
+    for key in [s.strip().upper() for s in symbols.split(",") if s.strip()]:
+        pair = _BN.pair_for(key)
+        if not pair:
+            continue
+        px = _BN.BINANCE.tick(pair)
+        if px is not None:
+            ticks.append({"symbol": key, "pair": pair, "price": px})
+    out["ticks"] = ticks
+    return out
+
+
 # ---------------------------------------------------------------- autopilot
 class AutopilotReq(BaseModel):
     action: str = "status"          # status | start | stop | configure

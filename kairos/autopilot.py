@@ -23,7 +23,7 @@ from typing import Any
 from .config import CFG
 from .execution import (Fill, JOURNAL, KILL, JsGlobalTicket, get_mt5,
                         OrderIntent, PaperBroker, RiskGate)
-from .store import atomic_write
+from .store import atomic_write, dumps_strict
 
 DEFAULT_WATCHLIST = ["GOLD", "WTI", "EURUSD", "BTC", "SPX"]
 MAX_ACTIONS_KEPT = 80
@@ -46,6 +46,22 @@ def _psx_live_ready() -> bool:
     """auto_place AND the broker-side keys: the only combination that makes a
     PSX verdict a real order, so it is also what makes PSX a live venue."""
     return bool((CFG.section("autopilot") or {}).get("auto_place")) and _jsg_auto_ok()
+
+
+def _binance_live_ready() -> bool:
+    """`binance.allow_orders` AND a usable key pair — the two keys in front of a
+    real crypto order, mirroring `_jsg_auto_ok`.
+
+    This one flag decides whether Binance is a venue at all: the loop may name it,
+    count its balances in the exposure picture, and forget a managed entry it no
+    longer reports only when the operator has armed it. Unarmed, a crypto verdict
+    keeps going where it goes today.
+    """
+    try:
+        from . import binance as _BN
+        return _BN.enabled()
+    except Exception:
+        return False
 
 
 def _figure(raw: Any) -> float:
@@ -84,12 +100,15 @@ class Autopilot:
 
     mode:
       paper  — fills against live prices in the persistent PaperBroker book.
-      live   — each venue runs on its own bridge: MT5 needs a connected
-               terminal, PSX needs auto_place + allow_orders + the PIN. Either
-               one alone is enough to arm; arming requires an explicit
-               confirm, and a venue that drops mid-loop stops taking entries
-               there while the other keeps working. PSX flow without those
-               three keys stays a human-confirmed JS Global ticket.
+      live   — each of the three venues runs on its own bridge: MT5 (commodities,
+               FX) needs a connected terminal, JS Global (PSX cash) needs
+               auto_place + allow_orders + the broker PIN, Binance (crypto) needs
+               binance.allow_orders + a key pair that the key itself permits to
+               trade. Any one of them alone is enough to make the loop live; a
+               venue that drops mid-loop stops taking entries there while the
+               others keep working, and its open trades are kept rather than
+               forgotten. PSX flow without all three keys stays a human-confirmed
+               JS Global ticket.
     """
 
     def __init__(self) -> None:
@@ -101,6 +120,7 @@ class Autopilot:
         self.mt5 = get_mt5()
         self.jsg = JsGlobalTicket()
         self._posture: dict[str, Any] | None = None
+        self._bn_armed = False
         # this cycle's live venue snapshots — never persisted, the real book
         # carries account numbers
         self._live_acct: dict[str, Any] | None = None
@@ -116,6 +136,7 @@ class Autopilot:
                 "max_trades_per_cycle": 2, "horizon_days": 5,
                 "cycles": 0, "last_cycle": None, "last_cycle_s": None,
                 "last_error": None, "feedback_error": None,
+                "state_saved": None, "state_error": None,
                 "signals": [], "actions": [], "held": {}, "consec_losses": 0,
                 "equity_peak": 0.0, "peak_since": None,
                 "last_rotation": None, "rotated": [], "psx_day_start": None,
@@ -126,8 +147,12 @@ class Autopilot:
         try:
             saved = _read_json(self.state_path)
             st.update({k: v for k, v in saved.items() if k in st})
-        except Exception:
-            pass
+        except Exception as exc:
+            # An unreadable state file used to be indistinguishable from a first
+            # run: full capital, no positions, peak reset. The loop trades on that
+            # as an account, and the desk calls it healthy.
+            st["state_error"] = (f"state file unreadable ({type(exc).__name__}: "
+                                 f"{str(exc)[:140]}) — running on defaults")
         st["running"] = False   # a restart never resurrects a live loop
         # and it must never *report* one either: the desk shows LIVE straight
         # from these fields, so a stale arming in the file would tell the
@@ -137,10 +162,37 @@ class Autopilot:
         return st
 
     def _save(self) -> None:
+        """Persist the live state, and keep the failure visible.
+
+        `except Exception: pass` used to sit here. The desk reads `cycles`,
+        `equity_peak`, `held` and `consec_losses` out of this file, so a stopped
+        write left the operator reading a state from hours ago while the loop went
+        on trading — and the next restart recomputed the circuit breakers from that
+        stale peak. `state_error` rides inside the file when the file can still be
+        written, and in `status()` when it cannot.
+        """
+        self.st["state_error"] = None
         try:
-            atomic_write(self.state_path, json.dumps(self.st, default=str))
-        except Exception:
-            pass
+            text = dumps_strict(self.st)
+        except Exception as exc:
+            self._state_failed("serialize", exc)
+            return
+        try:
+            atomic_write(self.state_path, text)
+        except Exception as exc:
+            self._state_failed("write", exc)
+            return
+        self.st["state_saved"] = time.time()
+
+    def _state_failed(self, stage: str, exc: Exception) -> None:
+        reason = f"state {stage} failed ({type(exc).__name__}: {str(exc)[:160]})"
+        self.st["state_error"] = reason
+        if reason != getattr(self, "_state_err", None):
+            # one journal row per distinct failure: a full disk fails every cycle,
+            # and 288 identical rows a day buries the event it is meant to mark.
+            self._state_err = reason
+            JOURNAL.log("AUTOPILOT_STATE_" + stage.upper() + "_FAILED",
+                        {"error": reason})
 
     # ------------------------------------------------------------- controls
     def _mt5_connect(self) -> bool:
@@ -243,19 +295,25 @@ class Autopilot:
         mt5_up = bool(self.mt5.ensure()) if want_live else False
         psx_book = self._psx_book() if want_live else None
         psx_up = psx_book is not None
-        live = want_live and (mt5_up or psx_up)
+        # Armed, not merely configured: an unarmed Binance contributes nothing to
+        # this picture, so a read-only API key cannot quietly become a third
+        # account whose balances the exposure breaker counts as blind rows.
+        bn_armed = _binance_live_ready() if want_live else False
+        live = want_live and (mt5_up or psx_up or bn_armed)
         # live sizing/braking is REAL money only: never fall back to the
         # paper book (Rs 1,000,000 of simulated equity would justify orders
         # the funded account could not settle)
-        acct = self._live_account(mt5_up, psx_book) if live else broker.account()
-        pos_list = self._venue_positions(mt5_up, psx_book) if live \
+        acct = self._live_account(mt5_up, psx_book, bn_armed) if live else broker.account()
+        pos_list = self._venue_positions(mt5_up, psx_book, bn_armed) if live \
             else broker.open_positions()
         self._live_acct = acct if live else None
         self._psx_live = psx_book
+        self._bn_armed = bn_armed
         held = {p["symbol"].upper(): p for p in (pos_list or [])}
         # the venue is the source of truth: drop managed entries it no
         # longer reports (manual close, broker-side stop hit, restart drift)
-        self._reconcile(held, live, mt5_up, psx_up, pos_known=pos_list is not None)
+        self._reconcile(held, live, mt5_up, psx_up, pos_known=pos_list is not None,
+                        bn_up=bn_armed)
         posture = self._risk_posture(acct, pos_list)
         with self._lock:
             self._posture = posture
@@ -311,7 +369,8 @@ class Autopilot:
 
             # ---- manage an existing position: stops/targets/trail/flip/age.
             # Risk reduction is never rate-limited by max_trades_per_cycle.
-            hp = held.get((self._venue_symbol(inst.key, is_psx, live)).upper())
+            hp = next((held[s] for s in self._venue_symbols(inst.key, is_psx, live)
+                       if s in held), None)
             if hp is not None:
                 hb = st["held"].get(inst.key, {})
                 reason = self._manage_exit(inst, hp, hb, price, score)
@@ -532,10 +591,26 @@ class Autopilot:
         self._save()
 
     # ------------------------------------------------------------- execution
-    def _venue_symbol(self, key: str, is_psx: bool, live: bool) -> str:
-        if live and not is_psx:
-            return self.mt5.resolve_symbol(key) or key
-        return key
+    def _venue_symbols(self, key: str, is_psx: bool, live: bool) -> list[str]:
+        """Every symbol a live venue could report this name under, most likely first.
+
+        A crypto key now has two candidates — the Binance pair on the armed book
+        and whatever the MT5 map says — because arming one venue does not retire
+        the position the other one already holds. Callers therefore match against
+        the set, and reconciliation drops an entry only when no venue that
+        answered holds it: forgetting a live trade on the strength of a guessed
+        symbol is the exact failure this function would otherwise introduce.
+        """
+        if not live or is_psx:
+            return [key.upper()]
+        out: list[str] = []
+        if getattr(self, "_bn_armed", False):
+            from . import binance as _BN
+            pair = _BN.pair_for(key)
+            if pair:
+                out.append(pair.upper())
+        out.append(str(self.mt5.resolve_symbol(key) or key).upper())
+        return out
 
     def _age_days(self, iso: str) -> float | None:
         """Days between now and an ISO stamp, or None when there is no answer.
@@ -557,7 +632,8 @@ class Autopilot:
 
     # ------------------------------------------------- reconciliation & posture
     def _reconcile(self, held: dict[str, Any], live: bool, mt5_up: bool = True,
-                   psx_up: bool = False, pos_known: bool = True) -> None:
+                   psx_up: bool = False, pos_known: bool = True,
+                   bn_up: bool = False) -> None:
         """Trust the venue over our memory: a managed entry the venue no
         longer reports is dropped (manual close / broker-side stop hit).
 
@@ -576,10 +652,9 @@ class Autopilot:
             is_psx = bool(inst) and inst.market.upper() in ("PSX", "KSE")
             if is_psx and not (live and psx_up):
                 continue        # ticket, paper entry or portal outage: not a state
-            if not is_psx and live and not mt5_up:
-                continue        # MT5 unreachable — keep the memory
-            vsym = (self._venue_symbol(key, is_psx, live) or key).upper()
-            if vsym not in held:
+            if not is_psx and live and not (mt5_up or bn_up):
+                continue        # no non-PSX venue answered — keep the memory
+            if not any(s in held for s in self._venue_symbols(key, is_psx, live)):
                 self.st["held"].pop(key, None)
                 self._act(key, "RECONCILE", "venue no longer holds it")
                 JOURNAL.log("AUTOPILOT_RECONCILE", {"symbol": key})
@@ -647,12 +722,18 @@ class Autopilot:
                 "equity": book["equity"], "day_pnl": self._psx_day_pnl(book),
                 "open_positions": len(book["holdings"])}
 
-    def _live_account(self, mt5_up: bool,
-                      book: dict[str, Any] | None) -> dict[str, Any] | None:
+    def _live_account(self, mt5_up: bool, book: dict[str, Any] | None,
+                      bn_up: bool = False) -> dict[str, Any] | None:
         """Real-currency account snapshot across whichever live venues are up.
 
         None when nothing is reachable — RiskGate and the doctrine check both
         fail closed on None, which is the point.
+
+        The sum below mixes currencies (MT5/Binance quote USD, JS Global quotes
+        PKR) and is therefore only an upper bound in rupee terms — it overstates
+        a PKR-heavy book against a USD one, which errs toward refusing, never
+        toward sizing up. `_execute` never sizes from this: each venue branch
+        reads its own account, in its own currency.
         """
         parts: list[dict[str, Any]] = []
         if mt5_up:
@@ -661,6 +742,11 @@ class Autopilot:
                 parts.append(a)
         if book:
             parts.append(self._psx_part(book))
+        if bn_up:
+            from . import binance as _BN
+            a = _BN.BINANCE.account()
+            if a:
+                parts.append(a)
         if not parts:
             return None
         if len(parts) == 1:
@@ -677,6 +763,7 @@ class Autopilot:
 
     def _venue_positions(self, mt5_up: bool,
                          book: dict[str, Any] | None,
+                         bn_up: bool = False,
                          ) -> list[dict[str, Any]] | None:
         """Every live position, or None when a venue that was up could not read.
 
@@ -698,6 +785,13 @@ class Autopilot:
                         "entry": h["avg"], "last": h["mtm"],
                         "pnl": round((h["mtm"] - h["avg"]) * h["qty"], 2),
                         "venue": "JS_GLOBAL"})
+        if bn_up:
+            from . import binance as _BN
+            poss = _BN.BINANCE.positions()
+            if poss is None:
+                # Armed and unreadable is the same fact a dead terminal is.
+                return None
+            out.extend(poss)
         return out
 
     def _risk_posture(self, acct: dict | None,
@@ -840,6 +934,7 @@ class Autopilot:
     def _execute(self, inst, side: str, qty: float, price: float,
                  res: dict[str, Any], broker: PaperBroker, live: bool,
                  close: bool) -> tuple[str, str]:
+        from . import binance as _BN
         if KILL.engaged():
             self.st["actions"].insert(0, {"ts": _now(), "symbol": inst.key,
                                           "action": "BLOCKED", "why": "kill switch"})
@@ -857,11 +952,20 @@ class Autopilot:
 
         venue = "PAPER"
         if live and not is_psx:
-            venue = "MT5"
+            # A crypto name has a home venue now, but only once that venue is
+            # armed: naming an unarmed one would route the order to a bridge
+            # whose only answer is a refusal.
+            venue = ("BINANCE" if (getattr(self, "_bn_armed", False)
+                                   and _BN.pair_for(inst.key)) else "MT5")
         elif live and is_psx:
             venue = "JS_GLOBAL"
         if venue == "MT5":
             acc, pos = self.mt5.account(), self.mt5.positions()
+        elif venue == "BINANCE":
+            # USD sizing against the USD book. A PKR figure from the PSX book (or
+            # the paper Rs 1,000,000) would misprice every guard on this order for
+            # the same reason it misprices a PSX one, in the other direction.
+            acc, pos = _BN.BINANCE.account(), _BN.BINANCE.positions()
         elif venue == "JS_GLOBAL":
             # PKR sizing against the PKR book only. A USD MT5 equity figure
             # (or the paper Rs 1,000,000) would misprice every risk check on
@@ -932,6 +1036,51 @@ class Autopilot:
                 time.sleep(1.0)
                 syms = [str(p.get("symbol", "")).upper()
                         for p in (self.mt5.positions() or [])]
+                if fill.symbol.upper() not in syms:
+                    act = "LIVE-UNVERIFIED"
+                    JOURNAL.log("AUTOPILOT_UNVERIFIED",
+                                {"coid": intent.client_order_id,
+                                 "symbol": fill.symbol})
+        elif venue == "BINANCE":
+            if not close:
+                # A 24/7 tape moves while the daily bar the call was made on does
+                # not. If the venue's price and the decided price have come apart
+                # past the doctrine's crossing tolerance, the call is stale and
+                # the honest action is to send nothing.
+                pair = _BN.pair_for(inst.key) or inst.key
+                px = _BN.BINANCE.tick(pair)
+                msp = float(_R.get_rule("max_spread_pct", 0.6))
+                if px is None:
+                    why = f"{pair}: the venue gave no price, so this order " \
+                          f"cannot be checked against the tape it will execute on"
+                    self._act(inst.key, "NOPRICE", why)
+                    JOURNAL.log("AUTOPILOT_NOPRICE", {"symbol": inst.key, "why": why})
+                    return "NOPRICE", why
+                if price > 0 and abs(px - price) / price * 100 > msp:
+                    why = (f"venue {px:g} vs decided {price:g} = "
+                           f"{abs(px - price) / price * 100:.2f}% > {msp}%")
+                    self._act(inst.key, "TAPE-DIVERGE", why)
+                    JOURNAL.log("AUTOPILOT_TAPE_DIVERGE",
+                                {"symbol": inst.key, "why": why})
+                    return "TAPE-DIVERGE", why
+            fill = _BN.BINANCE.place_order(intent)
+            # None is three different facts on a venue: refused, rejected, or sent
+            # and unanswered. The last one may be a live order, so it must not be
+            # booked as a refusal.
+            oc = _BN.BINANCE.outcome(intent.client_order_id)
+            if oc == "UNCONFIRMED":
+                act = "LIVE-UNCONFIRMED"
+                JOURNAL.log("AUTOPILOT_UNCONFIRMED",
+                            {"coid": intent.client_order_id, "symbol": inst.key,
+                             "venue": venue})
+            else:
+                act = "LIVE-FILLED" if fill else "LIVE-REJECT"
+            if fill and not close:
+                # spot has no position object to close — the sell IS the exit — so
+                # the acknowledgement is checked against the balance instead.
+                time.sleep(1.0)
+                syms = [str(p.get("symbol", "")).upper()
+                        for p in (_BN.BINANCE.positions() or [])]
                 if fill.symbol.upper() not in syms:
                     act = "LIVE-UNVERIFIED"
                     JOURNAL.log("AUTOPILOT_UNVERIFIED",
@@ -1033,15 +1182,41 @@ class Autopilot:
         return "PLACED", detail
 
     def _mt5_close_one(self, symbol: str) -> None:
+        """Close the terminal-side leg of a position the autopilot just sold.
+
+        A swallowed failure here used to leave the terminal holding a position the
+        book had already booked as closed — an open trade with nobody managing its
+        stop, and no trace of it in the journal. So a close that does not go out is
+        reported, and reported loudly enough that the desk shows it.
+        """
         try:
-            for p in (self.mt5.positions() or []):
-                if p["symbol"] == symbol:
-                    self.mt5.close_position(int(p["ticket"]))
-        except Exception:
-            pass
+            positions = self.mt5.positions()
+        except Exception as exc:
+            positions = None
+            JOURNAL.log("AUTOPILOT_CLOSE_READ_FAIL", {"symbol": symbol,
+                                                      "error": str(exc)[:200]})
+        if positions is None:
+            self._act(symbol, "CLOSE-UNVERIFIED",
+                      f"terminal position list unreadable for {symbol}")
+            return
+        for p in positions:
+            if p.get("symbol") != symbol:
+                continue
+            try:
+                out = self.mt5.close_position(int(p["ticket"]))
+            except Exception as exc:
+                out = None
+                JOURNAL.log("AUTOPILOT_CLOSE_FAIL", {"symbol": symbol,
+                                                     "ticket": p.get("ticket"),
+                                                     "error": str(exc)[:200]})
+            if not out:
+                self._act(symbol, "CLOSE-FAILED",
+                          f"terminal close for {symbol} ticket {p.get('ticket')} "
+                          f"did not come back DONE — the position may still be live")
 
     # ------------------------------------------------------------- reporting
     def status(self) -> dict[str, Any]:
+        from . import binance as _BN
         broker = PaperBroker()
         acct = broker.account()
         pos = broker.open_positions()
@@ -1050,7 +1225,8 @@ class Autopilot:
                 ("running", "mode", "armed_live", "symbols", "interval_s",
                  "entry_threshold", "max_trades_per_cycle", "horizon_days",
                  "cycles", "last_cycle", "last_cycle_s", "last_error",
-                 "feedback_error", "signals", "actions",
+                 "feedback_error", "state_saved", "state_error",
+                 "signals", "actions",
                  "held", "consec_losses", "psx_day_start", "macro",
                  "news_desk")},
                 "risk_posture": posture,
@@ -1059,16 +1235,26 @@ class Autopilot:
                         "error": self.mt5.last_error},
                 "psx_live": {"keys_on": _psx_live_ready(),
                              "book_this_cycle": self._psx_live is not None},
+                "binance": _BN.BINANCE.state(),
                 "live_account": self._live_acct,
                 "paper_account": acct,
                 "paper_positions": pos}
 
 
 def _read_json(path) -> dict[str, Any]:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    """A missing file is a first run. An unreadable one is a fault, and raises.
+
+    This used to swallow every exception and return `{}`, which is the shape of
+    "no state yet": a state file truncated by a full disk or a power cut sent the
+    loop back to full capital, no positions and a reset equity peak, and the desk
+    read that as the same healthy account it had reported an hour earlier.
+    """
+    if not path.exists():
         return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"state file held a {type(data).__name__}, not an object")
+    return data
 
 
 AUTOPILOT = Autopilot()

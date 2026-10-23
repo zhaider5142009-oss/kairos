@@ -36,7 +36,13 @@ def system_health() -> dict[str, Any]:
         "yahoo": "ok" if src.yahoo else "down",
         "tradingview": "ok" if src.tradingview else "down",
         "psx-local": "ok" if src.psx_local else "down",
+        "binance": "ok" if src.binance else "down",
     }
+    # `binance` is listed but not counted below. It is the crypto *failover* and
+    # the venue tape for orders, not a source of PSX or global history: letting it
+    # alone turn the data banner green would advertise a live engine that has no
+    # PSX quotes and no gold.
+    primaries = {k: v for k, v in market_data.items() if k != "binance"}
 
     from .llm import council_models, dead_seats, provider_status
 
@@ -66,7 +72,7 @@ def system_health() -> dict[str, Any]:
            "models_ready": any(ready.values()),
            "detail": ready}
 
-    data_ok = any(v in _STATE_OK for v in market_data.values())
+    data_ok = any(v in _STATE_OK for v in primaries.values())
     return {"ok": True,
             "market_data": market_data,
             "data_online": data_ok,

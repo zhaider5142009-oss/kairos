@@ -54,6 +54,8 @@ os.environ["KAIROS_CONFIG"] = str(_TMP / "config.yaml")
 os.environ["KAIROS_TOKEN"] = "test-token"
 os.environ["KAIROS_AUTH"] = "0"
 for _var in ("JSG_PIN", "JSG_LOGIN", "JSG_PASSWORD", "JSG_ALLOW_ORDERS",
+             "BINANCE_API_KEY", "BINANCE_SECRET", "BINANCE_ALLOW_ORDERS",
+             "BINANCE_BASE_URL",
              "OPENROUTER_API_KEY", "MOONSHOT_API_KEY", "KIMI_API_KEY"):
     os.environ.pop(_var, None)
 
@@ -64,6 +66,7 @@ for _var in ("JSG_PIN", "JSG_LOGIN", "JSG_PASSWORD", "JSG_ALLOW_ORDERS",
 @pytest.fixture(scope="session", autouse=True)
 def _no_network():
     import requests
+    import urllib.request
 
     def _blocked(self, method, url, *args, **kwargs):
         raise AssertionError(
@@ -71,11 +74,21 @@ def _no_network():
             "every data vendor must stay stubbed")
 
     real = requests.Session.request
+
+    def _blocked_urlopen(req, *args, **kwargs):
+        target = getattr(req, "full_url", None) or req
+        raise AssertionError(
+            f"a test reached for the network (urlopen {str(target)[:120]}); the "
+            "broker and every data vendor must stay stubbed")
+
+    real_urlopen = urllib.request.urlopen
+    urllib.request.urlopen = _blocked_urlopen
     requests.Session.request = _blocked
     try:
         yield
     finally:
         requests.Session.request = real
+        urllib.request.urlopen = real_urlopen
 
 
 @pytest.fixture(scope="session", autouse=True)

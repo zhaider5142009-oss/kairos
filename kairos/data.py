@@ -4,6 +4,7 @@ Source chain (health-probed at runtime):
   GLOBAL instruments -> Yahoo Finance v8 chart API (2y daily OHLCV)
   PSX quotes/factors -> TradingView scanner (484 stocks, live fields)
   PSX history        -> local operator API (localhost:8000) -> accumulated store
+  crypto history     -> Yahoo primary, Binance spot klines as the failover
   News               -> RSS feeds (Google News, BRecorder, Dawn, FXStreet, MW)
 
 Nothing is ever fabricated: when no source is reachable the layer reports
@@ -66,6 +67,18 @@ def _http_post_json(url: str, payload: dict[str, Any], timeout: int = 20,
     req = urllib.request.Request(url, data=body, headers=hdrs, method="POST")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8", errors="replace"))
+
+
+def _binance():
+    """The Binance client, imported on first use.
+
+    `kairos.binance` pulls in the execution layer (audit journal, kill switch,
+    order intents), and reading a price must not require any of that. It also
+    keeps the signed-order code out of the import graph that every CLI one-off
+    and test fixture drags in.
+    """
+    from .binance import BINANCE
+    return BINANCE
 
 
 # ---------------------------------------------------------------------------
@@ -509,11 +522,13 @@ class SourceHealth:
     yahoo: bool = False
     tradingview: bool = False
     psx_local: bool = False
+    binance: bool = False
     checked_at: str = ""
 
     @property
     def any_live(self) -> bool:
-        return self.yahoo or self.tradingview or self.psx_local
+        return (self.yahoo or self.tradingview or self.psx_local
+                or self.binance)
 
 
 class MarketData:
@@ -539,6 +554,7 @@ class MarketData:
                 yahoo=self.yahoo.history("GC=F", days=5) is not None,
                 tradingview=not self.tv.scan_psx(columns=["name", "close"], limit=5).empty,
                 psx_local=self.local_psx.alive(),
+                binance=_binance().alive(),
                 checked_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             )
         return self._health
@@ -564,11 +580,21 @@ class MarketData:
                 if df is not cached_df:
                     self._hist_cache[instrument.yahoo] = (time.time(), df)
                 if use_cache and instrument.market == "PSX":
-                    # PSX: merge live store bars (TradingView) over Yahoo history
+                    # PSX: grow the accumulated store with this fetch and hand back
+                    # the union — Yahoo has the history, the store has the bars
+                    # TradingView caught on the days Yahoo was missing them.
                     return self._merge_with_store(instrument.key, df)
                 if use_cache:
                     STORE.save(instrument.key, df)
                 return df
+            # Yahoo is down. For a crypto name the venue's own tape answers, but
+            # it answers *without* writing the store: the published paper record
+            # was measured on Yahoo closes, and a failover series must not
+            # silently rewrite the history the record was built from.
+            if instrument.binance:
+                df = self._binance_history(instrument, days, persist=False)
+                if df is not None:
+                    return df
             cached = STORE.load(instrument.key)
             if cached is not None and len(cached) >= 10:
                 return cached
@@ -587,7 +613,35 @@ class MarketData:
             # bootstrap: today's bar from TradingView (genuine accumulation)
             self._accumulate_psx_bar(instrument)
             return STORE.load(instrument.key)
+
+        # A Binance-listed name Yahoo does not carry: the venue tape is primary
+        # here, so the store accumulates the same series the order desk prices on.
+        if instrument.binance:
+            df = self._binance_history(instrument, days,
+                                       persist=use_cache)
+            if df is not None:
+                return df
         return STORE.load(instrument.key)
+
+    def _binance_history(self, instrument: Instrument, days: int | None,
+                         persist: bool) -> pd.DataFrame | None:
+        """Daily bars from the Binance spot tape, cached like every other source."""
+        pair = (instrument.binance or "").upper()
+        if not pair:
+            return None
+        ts, cached_df = self._hist_cache.get(pair, (0.0, None))
+        if cached_df is not None and time.time() - ts < 900.0:
+            return cached_df
+        # Binance takes a bar count, not a lookback: 1000 daily bars is ~2.7 years
+        # and is the API's own ceiling per request.
+        limit = min(1000, max(60, int(days or 730)))
+        df = _binance().klines(pair, "1d", limit)
+        if df is None or len(df) < 10:
+            return None
+        self._hist_cache[pair] = (time.time(), df)
+        if persist:
+            STORE.save(instrument.key, df)
+        return df
 
     @staticmethod
     def _merge_with_store(key: str, df: pd.DataFrame) -> pd.DataFrame:
@@ -596,7 +650,10 @@ class MarketData:
             STORE.save(key, df)
             return df
         merged = pd.concat([cached, df], ignore_index=True)
-        # store bars (live TradingView) win over Yahoo on duplicate dates
+        # The live fetch wins on a duplicate date (`keep="last"` over
+        # [store, live]), so today's bar follows the vendor instead of freezing at
+        # the intraday price the store happened to catch. The comment here used to
+        # claim the store's bars won, which is the opposite of this line.
         merged = (merged.drop_duplicates(subset="date", keep="last")
                   .sort_values("date").reset_index(drop=True))
         STORE.save(key, merged)

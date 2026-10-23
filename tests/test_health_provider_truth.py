@@ -11,6 +11,7 @@ direct Moonshot key answering every request with `429 account … is suspended`
 
 import pytest
 
+from kairos.data import SourceHealth
 from kairos.health import system_health
 from kairos.llm import LLMResponse, ROUTER, provider_status
 
@@ -73,7 +74,9 @@ def _patch_probes(monkeypatch, pstat):
     monkeypatch.setattr("kairos.llm.dead_seats", lambda: [])
     monkeypatch.setattr("kairos.llm.council_models", lambda: ["a", "b", "c", "d",
                                                              "e", "f"])
-    src = type("Src", (), {"yahoo": True, "tradingview": True, "psx_local": False})()
+    # the real dataclass, not a duck-typed stand-in: a hand-rolled object here is
+    # one new source row away from a TypeError that says nothing about the page
+    src = SourceHealth(yahoo=True, tradingview=True, psx_local=False)
     monkeypatch.setattr("kairos.engine.ENGINE.md",
                         type("M", (), {"health": lambda self: src})(),
                         raising=False)

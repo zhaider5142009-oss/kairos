@@ -87,6 +87,35 @@ apis:
     channel: "ibm_quantum_platform"
 
 # ---------------------------------------------------------------------------
+# Binance spot — the third venue (crypto).
+#   kairos/binance.py  public klines (no key needed), the signed balance read,
+#   and the order bridge — but an order needs BOTH keys below AND an API key
+#   that the exchange itself permits to trade. A read-only key is reported as
+#   read-only instead of discovered as a rejection.
+# Put real credentials ONLY in the git-ignored config.yaml, never here.
+#
+# Same values work as environment variables for headless deploys:
+#   BINANCE_API_KEY / BINANCE_SECRET        — the key pair
+#   BINANCE_ALLOW_ORDERS=1                  — the standing "orders allowed" key
+#   BINANCE_BASE_URL                        — alternate host (testnet etc.)
+#
+# A signed Binance URL contains the signature, so it IS a credential: every
+# failure text this module produces is redacted before it can reach a log, a
+# journal row or a terminal. Rotate a key the moment it has been pasted into
+# anything — chat, an issue, a screenshot.
+# ---------------------------------------------------------------------------
+binance:
+  api_key: "YOUR-API-KEY"
+  secret_key: "YOUR-SECRET-KEY"
+  base_url: "https://api.binance.com"
+
+  # THE key — standing permission for KAIROS to place crypto orders at all.
+  # false = place_order refuses before any network call.
+  allow_orders: false
+
+  timeout_s: 15
+
+# ---------------------------------------------------------------------------
 # JS Global Securities (PSX broker) web terminal.
 #   kairos/jsgsync.py  reads the real book (READ-ONLY endpoints only)
 #   kairos/jsgtrade.py places orders — but ONLY if you turn both keys below.

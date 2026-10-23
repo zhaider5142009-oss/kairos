@@ -22,6 +22,7 @@ class Instrument:
     yahoo: str | None = None          # Yahoo Finance symbol
     tv: str | None = None             # TradingView symbol
     psx_ticker: str | None = None     # ticker on the local PSX API
+    binance: str | None = None        # Binance spot pair, e.g. "BTCUSDT"
     tags: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -151,7 +152,17 @@ RATES: list[Instrument] = [
 ]
 
 def _cr(key: str, name: str, yahoo: str, tags: tuple[str, ...] = ()) -> Instrument:
-    return _yf(key, name, "crypto", "Crypto", yahoo, tags=("crypto", "risk-appetite", *tags))
+    # The Binance pair is derived from the Yahoo quote ("BTC-USD" -> "BTCUSDT").
+    # It is not decoration: Binance is one of the three venues KAIROS is built to
+    # serve, so a crypto name carries the tape its orders would actually be
+    # priced on. Yahoo stays the *primary history* for these names because the
+    # published paper record was measured on Yahoo closes — see `MarketData.history`.
+    return Instrument(
+        key=key, name=name, asset_class="crypto", sector="Crypto",
+        currency="USD", market="GLOBAL", yahoo=yahoo,
+        binance=yahoo.split("-")[0].upper() + "USDT",
+        tags=("crypto", "risk-appetite", *tags),
+    )
 
 
 CRYPTO: list[Instrument] = [
@@ -185,15 +196,17 @@ ALL: list[Instrument] = [PSX_INDEX, *PSX_BLUE_CHIPS, *COMMODITIES,
 _BY_KEY = {i.key.upper(): i for i in ALL}
 _BY_YAHOO = {i.yahoo.upper(): i for i in ALL if i.yahoo}
 _BY_TV = {(i.tv or "").upper(): i for i in ALL if i.tv}
+_BY_BINANCE = {(i.binance or "").upper(): i for i in ALL if i.binance}
 # the static list above is the floor; scan-admitted tickers live beside it and
 # must survive a daemon restart (see _registered_path)
 _SEED_KEYS = frozenset(i.key.upper() for i in ALL)
 
 
 def resolve(symbol: str) -> Instrument | None:
-    """Resolve any symbol form (KAIROS key, Yahoo, TV, or PSX ticker) to an Instrument."""
+    """Resolve any symbol form (KAIROS key, Yahoo, TV, Binance pair, or PSX ticker)."""
     s = symbol.strip().upper()
-    return _BY_KEY.get(s) or _BY_YAHOO.get(s) or _BY_TV.get(f"PSX:{s}")
+    return (_BY_KEY.get(s) or _BY_YAHOO.get(s) or _BY_BINANCE.get(s)
+            or _BY_TV.get(f"PSX:{s}"))
 
 
 _MISSING = ("", "nan", "none", "null", "n/a", "-", "?")
