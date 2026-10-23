@@ -253,21 +253,23 @@ def compute_features(df: pd.DataFrame) -> dict[str, float]:
                            if len(vol_hist) >= 20 and np.isfinite(f["vol20"]) else 0.5)
     logret = np.diff(_log_close(c))
     if len(logret) > 30:
-        with np.errstate(divide="ignore", invalid="ignore"):
-            hl = np.log((h.values / lo.values)[1:] ** 2)
-            cc = np.log((c.values / c.shift().values)[1:] ** 2)
-        gk = 0.5 * hl - (2 * np.log(2) - 1) * cc
-        with np.errstate(divide="ignore", invalid="ignore"):
-            park = np.sqrt(np.nanmean(np.log(h.values / lo.values)[1:] ** 2)) \
-                / np.sqrt(4 * np.log(2))
-        # Both range estimators are per-bar statistics; every other volatility
-        # field in this dict is annualized. Left daily, a strategy comparing
-        # Garman-Klass against `vol20` was dividing a 1-day number by a
-        # 252-day one and could never reach its own threshold.
         ann = float(np.sqrt(252))
-        f["garman_klass"] = float(np.sqrt(np.nanmean(np.nan_to_num(
-            gk[-60:], nan=0.0, posinf=0.0, neginf=0.0) ** 2)) * ann if len(gk) > 0 else 0.0)
-        f["parkinson"] = float(park * ann if np.isfinite(park) else 0.0)
+        win = 20
+        with np.errstate(divide="ignore", invalid="ignore"):
+            hl2 = np.log(h.values / lo.values) ** 2
+            oc2 = np.log(c.values / df["open"].values) ** 2
+        # Garman-Klass is a per-bar *variance* estimate,
+        # 0.5*ln(H/L)^2 - (2*ln2-1)*ln(C/O)^2, and it is legitimately negative on
+        # a bar that closes almost exactly where it opened. So the mean is taken
+        # first and the root second; a root of the mean of squares turns every
+        # negative bar into a positive contribution.
+        gk_var = 0.5 * hl2 - (2 * np.log(2) - 1) * oc2
+        mean_gk = float(np.nanmean(np.nan_to_num(
+            gk_var[-win:], nan=0.0, posinf=0.0, neginf=0.0)))
+        f["garman_klass"] = max(mean_gk, 0.0) ** 0.5 * ann
+        mean_hl = float(np.nanmean(np.nan_to_num(
+            hl2[-win:], nan=0.0, posinf=0.0, neginf=0.0)))
+        f["parkinson"] = max(mean_hl, 0.0) ** 0.5 / np.sqrt(4 * np.log(2)) * ann
         f["skew60"] = float(np.nan_to_num(pd.Series(logret[-60:]).skew()))
         f["kurt60"] = float(np.nan_to_num(pd.Series(logret[-60:]).kurt()))
         f["downside_vol"] = float(ret[ret < 0].tail(60).std() or 0.0) * np.sqrt(252)
