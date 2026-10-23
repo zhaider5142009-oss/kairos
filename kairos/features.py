@@ -242,6 +242,15 @@ def compute_features(df: pd.DataFrame) -> dict[str, float]:
     f["vol20"] = float(ret.rolling(20, min_periods=5).std().iloc[-1] or 0.0) * np.sqrt(252)
     f["vol60"] = float(ret.rolling(60, min_periods=10).std().iloc[-1] or 0.0) * np.sqrt(252)
     f["vol_ratio"] = f["vol20"] / f["vol60"] if f["vol60"] > 0 else 1.0
+    # Where this bar's volatility sits in the instrument's own history. A fixed
+    # threshold on an annualized volatility means different things on a cement
+    # scrip and on EURUSD, so anything asking "is vol high *here*" needs a
+    # rank, not a number — and the strategies are handed `features`, not the
+    # regime dict, so a rank that exists only in `detect_regime` is invisible
+    # to them.
+    vol_hist = (ret.rolling(20, min_periods=5).std().dropna() * np.sqrt(252)).tail(252)
+    f["vol_percentile"] = (round(float((vol_hist <= f["vol20"]).mean()), 3)
+                           if len(vol_hist) >= 20 and np.isfinite(f["vol20"]) else 0.5)
     logret = np.diff(_log_close(c))
     if len(logret) > 30:
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -251,9 +260,14 @@ def compute_features(df: pd.DataFrame) -> dict[str, float]:
         with np.errstate(divide="ignore", invalid="ignore"):
             park = np.sqrt(np.nanmean(np.log(h.values / lo.values)[1:] ** 2)) \
                 / np.sqrt(4 * np.log(2))
+        # Both range estimators are per-bar statistics; every other volatility
+        # field in this dict is annualized. Left daily, a strategy comparing
+        # Garman-Klass against `vol20` was dividing a 1-day number by a
+        # 252-day one and could never reach its own threshold.
+        ann = float(np.sqrt(252))
         f["garman_klass"] = float(np.sqrt(np.nanmean(np.nan_to_num(
-            gk[-60:], nan=0.0, posinf=0.0, neginf=0.0) ** 2)) if len(gk) > 0 else 0.0)
-        f["parkinson"] = float(park if np.isfinite(park) else 0.0)
+            gk[-60:], nan=0.0, posinf=0.0, neginf=0.0) ** 2)) * ann if len(gk) > 0 else 0.0)
+        f["parkinson"] = float(park * ann if np.isfinite(park) else 0.0)
         f["skew60"] = float(np.nan_to_num(pd.Series(logret[-60:]).skew()))
         f["kurt60"] = float(np.nan_to_num(pd.Series(logret[-60:]).kurt()))
         f["downside_vol"] = float(ret[ret < 0].tail(60).std() or 0.0) * np.sqrt(252)
@@ -292,11 +306,34 @@ def compute_features(df: pd.DataFrame) -> dict[str, float]:
         f["cmf20"] = float((((c - lo) - (h - c)) / ((h - lo).replace(0, np.nan)) * v).rolling(20, min_periods=1).sum().iloc[-1] /
                            (v.rolling(20, min_periods=1).sum().iloc[-1] or 1e-9))
         dollar = c * v
-        f["amihud"] = float((ret.abs() / (dollar + 1e-9)).rolling(21, min_periods=5).mean().iloc[-1] * 1e9)
+        # `+ 1e-9` was silently inventing the most illiquid reading possible: a
+        # bar with no volume at all divides by the epsilon and returns an
+        # Amihud of order 1e16, so a missing print out-ranked a genuinely dead
+        # book. Only bars that actually traded are averaged, and the veto that
+        # consumes this figure reads a rank against the instrument's own
+        # history — the raw value is a rupee-share-scale number whose absolute
+        # threshold means nothing across venues.
+        traded = dollar > 0
+        illiq = (ret.abs() / dollar.where(traded)).dropna()
+        f["amihud"] = float(illiq.rolling(21, min_periods=5).mean().iloc[-1] * 1e9
+                            if len(illiq) >= 5 else 0.0)
+        illiq_hist = (illiq.rolling(21, min_periods=5).mean() * 1e9).dropna().tail(252)
+        # A rank against the instrument's own history is the only comparison
+        # that means the same thing on a cement scrip and on BTC — but a rank
+        # also goes blind to a book that has been dry for weeks, because every
+        # window inside the drought ties with the last one. Against the median
+        # it does not: a hundred-times-drier tape is a hundred times the
+        # baseline however flat the drought itself is. 1.0 is the answer for
+        # "no usable reading", which includes the bars nobody traded.
+        baseline = float(illiq_hist.median()) if len(illiq_hist) >= 20 else 0.0
+        f["amihud_relative"] = (
+            round(float(f["amihud"] / baseline), 3)
+            if baseline > 0 and f["amihud"] > 0 and bool((dollar.tail(5) > 0).all())
+            else 1.0)
         f["vwap_dist"] = float(c.iloc[-1] / ((dollar.rolling(20, min_periods=1).sum() / v.rolling(20, min_periods=1).sum().replace(0, np.nan)).iloc[-1] or px) - 1)
     else:
         f.update(vol_z=0.0, volume_trend=1.0, obv_slope=0.0, mfi14=50.0,
-                 cmf20=0.0, amihud=0.0, vwap_dist=0.0)
+                 cmf20=0.0, amihud=0.0, amihud_relative=1.0, vwap_dist=0.0)
 
     # structure & statistical properties
     f["hurst"] = _hurst(c)

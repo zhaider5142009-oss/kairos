@@ -16,8 +16,8 @@ appears in one document and not in another, the journals win — and the mistake
 
 ## Standing rules for this pack
 
-1. **No forward track record exists.** 3,580 predictions journaled, 263 horizons matured,
-   and all 263 were non-trades. Never quote a hit rate; the ledger says "not yet measurable"
+1. **No forward track record exists.** 3,613 predictions journaled, 288 horizons matured,
+   and all 288 were non-trades. Never quote a hit rate; the ledger says "not yet measurable"
    and so must every other document.
 2. **Backtests are labelled backtests**, per instrument, including the 9 unprofitable ones.
 3. **No return promise, projection, or illustration of future performance** in any channel.

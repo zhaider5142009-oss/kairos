@@ -646,8 +646,8 @@ def s56(df, f, ctx):
 
 @strategy("Beta-Vol Overlay", "Volatility")
 def s57(df, f, ctx):
-    if f["vol_percentile"] > 0.85 if "vol_percentile" in f else False:
-        return _vote(-1, 0.4, "vol at 85th percentile — de-risk")
+    if f.get("vol_percentile", 0.5) > 0.85:
+        return _vote(-1, 0.4, f"vol at the {f['vol_percentile']:.0%} of its own history — de-risk")
     return None
 
 
@@ -1073,9 +1073,9 @@ def s91(df, f, ctx):
 
 @strategy("Amihud Illiquidity Cost", "Volume")
 def s92(df, f, ctx):
-    a = f["amihud"]
-    if a > 5:
-        return _vote(0, 0.5, f"Amihud {a:.1f} — high price impact, reduce size")
+    if f.get("amihud_relative", 1.0) > 5:
+        return _vote(0, 0.5, f"price impact {f['amihud_relative']:.0f}x this "
+                             "instrument's own median — reduce size")
     return None
 
 

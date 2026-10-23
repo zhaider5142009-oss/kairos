@@ -271,9 +271,18 @@ def test_a_non_trade_count_is_a_figure_that_can_go_stale(figures):
     current = _stale_figures(f"{m:,} horizons matured, all {n:,} were non-trades, "
                              f"and every one of the {n:,} was a non-trade.", figures)
     assert current == []
-    stale = _stale_figures("263 horizons matured, all 140 were non-trades, and "
-                           "every one of the 140 was a non-trade.", figures)
-    assert len(stale) == 2, stale
+    # The wrong numbers are built from the live ones rather than copied out of an
+    # old ledger. A hand-typed historical value is a figure like any other: 263 sat
+    # in this sentence as "the stale example" for three refreshes and then became
+    # the live count, at which point the sentence had three stale digits in it and
+    # the test that claimed to prove two started failing for a reason nobody could
+    # read off the assertion.
+    wrong_m, wrong_n = m - 1, n - 2
+    stale = _stale_figures(f"{wrong_m:,} horizons matured, all {wrong_n:,} were non-trades, "
+                           f"and every one of the {wrong_n:,} was a non-trade.", figures)
+    assert len(stale) == 3, stale
+    reported = " ".join(stale)
+    assert f"{wrong_m:,}" in reported and f"{wrong_n:,}" in reported, stale
 
 
 _ONES = {"zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
