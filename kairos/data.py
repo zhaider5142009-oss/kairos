@@ -214,6 +214,51 @@ def _num(value) -> float | None:
     return v if math.isfinite(v) else None
 
 
+# ---------------------------------------------------------------------------
+# Bar integrity (every provider)
+# ---------------------------------------------------------------------------
+def out_of_range_bars(df: pd.DataFrame | None) -> int:
+    """How many bars contradict their own range: an open or a close outside it."""
+    if df is None or df.empty or not {"open", "high", "low", "close"} <= set(df.columns):
+        return 0
+    above = (df["open"] > df["high"]) | (df["close"] > df["high"])
+    below = (df["open"] < df["low"]) | (df["close"] < df["low"])
+    return int((above | below).sum())
+
+
+def coerce_bar_range(df: pd.DataFrame) -> pd.DataFrame:
+    """Widen each bar's range until it contains its own open and close.
+
+    A bar is a promise that the price travelled between ``low`` and ``high``,
+    so ``low <= min(open, close)`` and ``high >= max(open, close)`` hold for any
+    real session. The provider series does not always keep the promise: a daily
+    FX print whose close comes from a later fix than its own range lands outside
+    it outright — measured on USDPKR, thirteen of the last twenty bars, one of
+    them closing three percent above the day's recorded high. Nothing raises,
+    because the row still parses as a row.
+
+    Every range-based reading of such a bar is then a statement about a bar that
+    cannot exist. Garman-Klass is a per-bar variance estimate, and on a valid bar
+    the range term always covers the body term, so it cannot go negative — here
+    its window mean did, and the field reported *zero intraday volatility* on a
+    currency that had just moved sixteen percent annualized. Stochastics and
+    Williams %R place the close outside their own band, and a candlestick
+    detector is handed a wick shorter than the body it hangs off.
+
+    Widening only, never narrowing: the printed extremes are prices the market
+    reached, and so are the open and the close, so their union is the smallest
+    range the row cannot contradict. No price already inside the range is moved,
+    so the closes the paper record and the sweep were measured on still match.
+    """
+    if df is None or df.empty or not {"open", "high", "low", "close"} <= set(df.columns):
+        return df
+    out = df.copy()
+    prices = out[["high", "low", "open", "close"]]
+    out["high"] = prices.max(axis=1)
+    out["low"] = prices.min(axis=1)
+    return out
+
+
 class YahooClient:
     def __init__(self) -> None:
         cfg = CFG.section("data").get("yahoo", {})
@@ -562,6 +607,14 @@ class MarketData:
     # -- primary: OHLCV history ----------------------------------------------
     def history(self, instrument: Instrument, days: int | None = None,
                 use_cache: bool = True) -> pd.DataFrame | None:
+        # One door for every provider, so a bar that contradicts its own range is
+        # repaired before any feature, regime, risk limit or backtest sees it —
+        # `history()` is called by all of them, and each one would otherwise have
+        # to remember to ask.
+        return coerce_bar_range(self._history(instrument, days, use_cache))
+
+    def _history(self, instrument: Instrument, days: int | None = None,
+                 use_cache: bool = True) -> pd.DataFrame | None:
         # KSE-100: Yahoo does not carry the index — build an equal-weight
         # composite of index heavyweights (genuine, reproducible proxy)
         if instrument.key == "KSE100":

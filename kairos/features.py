@@ -255,17 +255,29 @@ def compute_features(df: pd.DataFrame) -> dict[str, float]:
     if len(logret) > 30:
         ann = float(np.sqrt(252))
         win = 20
-        with np.errstate(divide="ignore", invalid="ignore"):
-            hl2 = np.log(h.values / lo.values) ** 2
-            oc2 = np.log(c.values / df["open"].values) ** 2
         # Garman-Klass is a per-bar *variance* estimate,
         # 0.5*ln(H/L)^2 - (2*ln2-1)*ln(C/O)^2, and it is legitimately negative on
         # a bar that closes almost exactly where it opened. So the mean is taken
         # first and the root second; a root of the mean of squares turns every
         # negative bar into a positive contribution.
-        gk_var = 0.5 * hl2 - (2 * np.log(2) - 1) * oc2
+        with np.errstate(divide="ignore", invalid="ignore"):
+            hl2 = np.log(h.values / lo.values) ** 2
+            oc2 = np.log(c.values / df["open"].values) ** 2
+            # Inside the same errstate: a bar with no printed range and a close
+            # outside it makes both terms infinite, and inf - inf is invalid. The
+            # nan_to_num below is what drops it; the warning is what fills the
+            # daemon's log with a stack of arithmetic nobody can act on.
+            gk_var = 0.5 * hl2 - (2 * np.log(2) - 1) * oc2
         mean_gk = float(np.nanmean(np.nan_to_num(
             gk_var[-win:], nan=0.0, posinf=0.0, neginf=0.0)))
+        # Clamped, so 0.0 here means *this estimator has nothing to say* — not that
+        # the market was still. A *valid* bar can never drive it negative, because
+        # |C-O| <= H-L always; a bar whose open or close lies outside its own printed
+        # range can, and the provider series for a pegged FX pair does exactly that
+        # (USDPKR's last twenty bars read 0.0 for Garman-Klass while Parkinson reads
+        # 0.16 — the close sat above the day's high on thirteen of them). The same
+        # value also covers "not enough history" below. Any consumer must test for it;
+        # `Garman-Klass vs Close Divergence` abstains on 0.0.
         f["garman_klass"] = max(mean_gk, 0.0) ** 0.5 * ann
         mean_hl = float(np.nanmean(np.nan_to_num(
             hl2[-win:], nan=0.0, posinf=0.0, neginf=0.0)))
