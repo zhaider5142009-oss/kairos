@@ -409,7 +409,15 @@ def detect_regime(df: pd.DataFrame) -> dict[str, Any]:
     trend_up = bool(c.iloc[-1] > sma50 and sma50 >= sma200)
     trend_down = bool(c.iloc[-1] < sma50 and sma50 <= sma200)
     adx = float(_adx(df).iloc[-1])
-    high_vol = vol_percentile > 0.7 or (vol20 > 1.6 * vol60 if vol60 > 0 else False)
+    # `bool(...)` is not decoration. `vol20` and `vol60` are numpy floats, so the
+    # second comparison answers numpy.bool_, and `or` returns that operand
+    # whenever the first is false — which is the common case. The desk survives
+    # only because its endpoint round-trips every value through `_safe`; the CLI
+    # dossier, which writes with `default=str`, saved the string "False" for a
+    # quiet market, and any reader that later asks `if regime["high_volatility"]`
+    # gets True out of a saved report and False out of the live one.
+    high_vol = bool(vol_percentile > 0.7 or
+                    (vol20 > 1.6 * vol60 if vol60 > 0 else False))
 
     if adx > 25 and trend_up:
         regime = "Bull-Volatile" if high_vol else "Bull-Quiet"
