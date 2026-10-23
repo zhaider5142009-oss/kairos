@@ -146,7 +146,7 @@ class WslBridge:
                               f"quantile10={out.get('q10')} median={out.get('q50')} "
                               f"quantile90={out.get('q90')} ({out.get('backend', 'wsl')})",
                               extras={"q10": out.get("q10"), "q50": out.get("q50"),
-                                      "q90": out.get("q90")})
+                                      "q90": out.get("q90"), "via": "wsl"})
 
     def timesfm_forecast(self, close_series: list[float], horizon: int = 5):
         from .models_stat import ModelForecast, _direction
@@ -160,7 +160,8 @@ class WslBridge:
                               float(out.get("confidence", 0.55)),
                               f"experimental quantiles "
                               f"({out.get('backend', 'wsl')})",
-                              extras={"q10": out.get("q10"), "q90": out.get("q90")})
+                              extras={"q10": out.get("q10"), "q90": out.get("q90"),
+                                      "via": "wsl"})
 
 
 WSL = WslBridge()

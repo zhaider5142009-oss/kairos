@@ -55,6 +55,39 @@ def _trend_period() -> Any:
     return get_rule("trend_sma_period", 50)
 
 
+def foundation_forecasts(series: list[float], horizon: int) -> tuple[list[ModelForecast],
+                                                                    list[dict[str, Any]]]:
+    """Ask each foundation-model route for one forecast, and say what each did.
+
+    A foundation model that is not running has always been dropped in silence here,
+    so a bridge that died left a forecast built from fewer models wearing the same
+    numbers as one that had them all. Which of them spoke, on which route, and why
+    the other did not, is part of the answer.
+
+    The route is stamped by whoever produced the forecast rather than inferred from
+    which function was called: `GPU.chronos_forecast` answers for Chronos on either
+    route, because it falls through to the WSL bridge when the sidecar refuses, and
+    both answers carry the same model name.
+    """
+    out: list[ModelForecast] = []
+    report: list[dict[str, Any]] = []
+    for label, fn in (("Chronos", GPU.chronos_forecast), ("TimesFM", WSL.timesfm_forecast)):
+        try:
+            fc = fn(series, horizon)
+        except Exception as exc:
+            report.append({"model": label, "state": "raised", "via": "none",
+                           "why": f"{type(exc).__name__}: {str(exc)[:110]}"})
+            continue
+        if fc is None:
+            report.append({"model": label, "state": "absent", "via": "none",
+                           "why": "no forecast returned (bridge down or model not loaded)"})
+            continue
+        out.append(fc)
+        report.append({"model": label, "state": "forecast", "why": None,
+                       "via": (fc.extras or {}).get("via") or "unknown"})
+    return out, report
+
+
 class PredictionEngine:
     def __init__(self, md: MarketData | None = None) -> None:
         self.md = md or MarketData()
@@ -302,31 +335,11 @@ class PredictionEngine:
             fut_kse = ex.submit(kse_regime, self.md) if instrument.market == "PSX" else None
 
             forecasts: list[ModelForecast] = self._battery(instrument, df, horizon)
-            # A foundation model that is not running has always been dropped
-            # here in silence, so a bridge that died left a forecast built from
-            # fewer models wearing the same numbers as one that had them all.
-            # Which of them spoke, and why the others did not, is now part of the
-            # answer instead of a hole in it.
             wsl_report: list[dict[str, Any]] = []
             if use_wsl:
-                series = [float(x) for x in close.tail(400).values]
-                for label, fn in (("Chronos", GPU.chronos_forecast),
-                                  ("TimesFM", WSL.timesfm_forecast)):
-                    try:
-                        fc = fn(series, horizon)
-                    except Exception as exc:
-                        fc = None
-                        wsl_report.append({"model": label, "state": "raised",
-                                           "why": f"{type(exc).__name__}: {str(exc)[:110]}"})
-                        continue
-                    if fc is not None:
-                        forecasts.append(fc)
-                        wsl_report.append({"model": label, "state": "forecast",
-                                           "why": None})
-                    else:
-                        wsl_report.append({"model": label, "state": "absent",
-                                           "why": "no forecast returned (bridge down or "
-                                                  "model not loaded)"})
+                extra, wsl_report = foundation_forecasts(
+                    [float(x) for x in close.tail(400).values], horizon)
+                forecasts.extend(extra)
 
             intermarket_ctx = fut_intermarket.result()
             factor_row = fut_factors.result()

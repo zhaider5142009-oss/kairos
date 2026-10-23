@@ -431,7 +431,7 @@ def chronos_forecast(close_series: list[float], horizon: int = 5,
                          % (out.get("q10"), out.get("q50"), out.get("q90"),
                             out.get("backend"), out.get("batch"), out.get("seconds")),
                          extras={"q10": out.get("q10"), "q50": out.get("q50"),
-                                 "q90": out.get("q90"), "gpu": True})
+                                 "q90": out.get("q90"), "gpu": True, "via": "gpu"})
 
 
 def _wsl_fallback(close_series: list[float], horizon: int = 5):

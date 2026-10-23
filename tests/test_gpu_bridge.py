@@ -17,7 +17,10 @@ tests is a claim about the daemon's survival:
   off the GPU in 0.6 s was displayed to the operator as "WSL offline" — a live
   capability shown as an absent one;
 * the server answers on its port before its weights are loaded, because that port
-  is how a supervisor knows a process is on duty.
+  is how a supervisor knows a process is on duty;
+* one prediction says which route answered *it*. `Chronos-Bolt` is the same model
+  name on both routes and the GPU client serves both, so the route is stamped by
+  the producer, read by the report, and pinned in the template that prints it.
 
 The GPU path itself is deliberately not exercised here: it needs the RX 560, an
 812 MB exported graph and roughly 2 GB of the 8 GB this box has, and a test that
@@ -27,6 +30,7 @@ only passes on one operator's hardware is a test the repository cannot run.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -146,6 +150,7 @@ def test_the_server_reply_shape_is_what_the_client_presents(gpu, monkeypatch):
     assert f.expected_return == pytest.approx(0.05)
     assert f.confidence == pytest.approx(0.71)
     assert f.extras["gpu"] is True
+    assert f.extras["via"] == "gpu", "an answer off the card that cannot say so"
     assert "gpu-directml" in f.detail and "batch=4" in f.detail
 
 
@@ -351,3 +356,106 @@ def test_a_gpu_answer_that_is_not_ok_falls_back(gpu, monkeypatch):
     monkeypatch.setattr(W.WSL, "chronos_forecast", lambda s, h=5: "from-wsl")
     gpu._CLIENT["down_until"] = 0.0
     assert gpu.chronos_forecast([100.0, 101.0], port=1) == "from-wsl"
+
+
+# --------------------------------------------------- which route answered this call
+def _fc(via=None, model="Chronos-Bolt"):
+    from kairos.models_stat import ModelForecast
+
+    extras = {"q10": 100.0, "q50": 105.0, "q90": 110.0}
+    if via is not None:
+        extras["via"] = via
+    return ModelForecast(model, 1, 0.05, 5, 0.6, "quantile10=100.0 (test)",
+                         extras=extras)
+
+
+def _routes(monkeypatch, chronos, timesfm):
+    """`foundation_forecasts` reads the two callables off the module globals, so a
+    test decides what each route did without a GPU, a distro or a bar of history."""
+    import kairos.engine as E
+
+    monkeypatch.setattr(E, "GPU", type("G", (), {
+        "chronos_forecast": staticmethod(chronos)}), raising=True)
+    monkeypatch.setattr(E, "WSL", type("W", (), {
+        "timesfm_forecast": timesfm}), raising=True)
+    return E.foundation_forecasts([100.0] * 40, 5)
+
+
+def test_the_prediction_names_the_route_that_answered(monkeypatch):
+    """`health` says which route is up; an operator reading one prediction needs to
+    know which route answered *it*, because the exported graph and the eager bridge
+    are two implementations of one model name and only one of them was repaired."""
+    out, report = _routes(monkeypatch, lambda s, h=5: _fc("gpu"),
+                          lambda s, h=5: _fc("wsl", "TimesFM-2.5"))
+    assert len(out) == 2, "a forecast the route named was not added to the battery"
+    assert [(r["model"], r["state"], r["via"]) for r in report] == [
+        ("Chronos", "forecast", "gpu"), ("TimesFM", "forecast", "wsl")]
+
+
+def test_the_route_follows_the_producer_not_the_caller(monkeypatch):
+    """The GPU client answers for Chronos on both routes: it calls the bridge itself
+    when the sidecar refuses. Crediting the function the engine happened to call
+    would file every one of those fall-through answers under the card."""
+    _, report = _routes(monkeypatch, lambda s, h=5: _fc("wsl"),
+                        lambda s, h=5: None)
+    assert report[0]["via"] == "wsl", "the report named the caller, not the answer"
+
+
+def test_a_forecast_that_stamped_no_route_does_not_claim_one(monkeypatch):
+    """`unknown` on the desk is the honest reading of a producer that forgot the
+    stamp; guessing from context is how a bridge answer spends an afternoon
+    advertised as GPU work."""
+    _, report = _routes(monkeypatch, lambda s, h=5: _fc(None),
+                        lambda s, h=5: None)
+    assert report[0]["via"] == "unknown"
+    assert report[0]["state"] == "forecast", "the answer itself was still wanted"
+
+
+def test_a_route_that_did_not_answer_says_it_answered_nothing(monkeypatch):
+    """`via: none` beside `absent` is what stops the desk printing a route for a
+    model that contributed nothing to this prediction."""
+    out, report = _routes(monkeypatch, lambda s, h=5: None,
+                          lambda s, h=5: None)
+    assert out == []
+    assert all(r["state"] == "absent" and r["via"] == "none" for r in report)
+    assert len(report) == 2
+
+    def _boom(series, horizon):
+        raise ValueError("bridge returned a non-numeric point")
+
+    _, raised = _routes(monkeypatch, _boom, lambda s, h=5: None)
+    assert raised[0]["state"] == "raised" and raised[0]["via"] == "none"
+    assert "ValueError" in raised[0]["why"]
+
+
+def test_both_producers_stamp_their_own_route(monkeypatch):
+    """The report is only as true as the stamps. Nothing type-checks these dicts,
+    so each producer is pinned where it builds the forecast."""
+    import kairos.wsl_bridge as W
+
+    monkeypatch.setattr(W.WSL, "_call", lambda payload: {
+        "point": 105.0, "q10": 100.0, "q50": 105.0, "q90": 110.0,
+        "confidence": 0.6})
+    W.WSL._cache.clear()
+    assert W.WSL.chronos_forecast([100.0] * 40, horizon=5).extras["via"] == "wsl"
+    assert W.WSL.timesfm_forecast([100.0] * 40, horizon=5).extras["via"] == "wsl"
+    W.WSL._cache.clear()
+
+
+def test_the_desk_reads_only_keys_the_foundation_report_sends(monkeypatch):
+    """A renamed key in an HTML template string is an `undefined` the conditional
+    swallows: the row simply stops appearing, in a file no Python test executes."""
+    html = (Path(__file__).resolve().parents[1] / "kairos" / "api" /
+            "ui.html").read_text(encoding="utf-8")
+    block = re.search(r"if\(r\.foundation_models&&r\.foundation_models\.length\)\{"
+                      r"(.*?)\n  \}\n", html, re.S)
+    assert block, ("the prediction panel no longer renders the per-prediction "
+                   "foundation report — the engine has been publishing it to nobody")
+    read = set(re.findall(r"\b(?:r|fm)\.([A-Za-z_][A-Za-z_0-9]*)", block.group(1)))
+    assert read, "the block reads no fields, so the contract below proves nothing"
+
+    _, report = _routes(monkeypatch, lambda s, h=5: _fc("gpu"),
+                        lambda s, h=5: _fc("wsl", "TimesFM-2.5"))
+    sent = {"foundation_models"} | set(report[0])
+    assert read <= sent, (f"the desk asks for {sorted(read - sent)}, which the "
+                          "report does not send")

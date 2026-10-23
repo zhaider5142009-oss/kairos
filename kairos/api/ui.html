@@ -595,6 +595,11 @@ function renderDossier(r){
     for(const m of r.models)h+=`<tr><td class="mono" style="color:var(--blue)">${esc(m.model)}</td><td class="c">${m.direction>0?'<span class="up">▲</span>':m.direction<0?'<span class="down">▼</span>':'<span class="flat">—</span>'}</td><td class="r mono">${pct(m.expected_return)}</td><td class="r mono">${(m.confidence*100).toFixed(0)}%</td><td class="dim" style="white-space:normal">${esc(m.detail)}</td></tr>`;
     h+=`</tbody></table></div></div>`;
   }
+  if(r.foundation_models&&r.foundation_models.length){
+    h+=`<div class="card"><div class="sectiontitle" style="margin-top:0">Foundation models — which route answered</div>`;
+    for(const fm of r.foundation_models)h+=`<div class="kpi"><span class="dim">${esc(fm.model)} · ${esc(fm.state)}</span><b>${fm.state==='forecast'?(fm.via==='gpu'?'GPU sidecar':fm.via==='wsl'?'WSL bridge':esc(fm.via||'route not stated')):esc(fm.why||'no reason given')}</b></div>`;
+    h+=`</div>`;
+  }
   if(r.top_strategies&&r.top_strategies.length){
     const at=r.strategy_attribution||{};const wcol=at.applied;
     h+=`<div class="card"><div class="sectiontitle" style="margin-top:0">Strategy library — top votes of ${r.strategies_voted}/100 · consensus ${(s.strategy_consensus??0).toFixed(2)}</div><div style="overflow-x:auto"><table><thead><tr><th>Strategy</th><th class="dim">Family</th><th class="c">Dir</th><th class="r">Strength</th>${wcol?'<th class="r" title="realized out-of-sample skill for this strategy, in this regime — the multiplier on its vote. Named Skill, not Weight: the Weight column elsewhere on this desk is the portfolio weight a position is sized to">Skill</th>':''}<th class="dim" style="white-space:normal">Why</th></tr></thead><tbody>`;

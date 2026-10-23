@@ -143,6 +143,11 @@ that trades to feed a model server.
 Chronos answering in half a second was previously displayed as "WSL offline" — the
 same defect as any capability that is present but shown as absent.
 
+Each prediction names the route that answered *it*: the desk prints `GPU sidecar`,
+`WSL bridge`, or the reason a model stayed silent, under the model battery. The
+engine asks the sidecar and falls through to the bridge inside one call, so both
+answers carry the same model name and only the producer knows which one served.
+
 ## Always-on & deployment
 
 **On your PC (the trading brain):** `tools/kairos-daemon.bat` is a 30-second
@@ -337,7 +342,7 @@ python -m kairos.cli feedback       # realized record, live
 ```
 
 [docs/investors/](docs/investors/) holds the ledger, a one-pager, the whitepaper and the
-deck. Read the ledger first: there is **no forward track record yet** — 3,788 predictions
+deck. Read the ledger first: there is **no forward track record yet** — 3,812 predictions
 journaled, 404 horizons matured, all 404 non-trades — and 10 of 14 instruments in the
 walk-forward sweep lost money. That is the honest state of the project, and it is the reason
 the risk layer exists.
