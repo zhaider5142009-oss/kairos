@@ -29,12 +29,12 @@ Built by one operator, running 24/7, publishing its own losses.
 
 | | |
 |---|---|
-| Code | 17,275 lines Python · 42 modules · public repo |
+| Code | 17,411 lines Python · 42 modules · public repo |
 | Strategies | 100 voting into the live consensus; the sweep fits one blended signal, not the library |
 | Council | 6 configured LLM seats across 2 providers; a dead seat shrinks the council |
 | Execution | paper + JS Global PSX bridge + MT5 |
 | Uptime | 24/7 daemon, watchdog, token-gated public API |
-| Tests | 683 passing, money path included |
+| Tests | 696 passing, money path included |
 
 Not a fund. No client money. No licence. No AUM.
 
@@ -44,11 +44,11 @@ Not a fund. No client money. No licence. No AUM.
 
 One composite signal per instrument: four components blended, their weights chosen by a 2,592-point grid search on a rolling 252-bar window, re-fitted every 30 bars, traded only out-of-sample with PSX commission and slippage modelled. It is not the 100-strategy library, and none of these returns come from it.
 
-5 / 14 instruments profitable:
+4 / 14 instruments profitable:
 
-SILVER **+43.5%** · GOLD **+29.3%** (vs +11.6% buy-and-hold, Sharpe 1.57) · WHEAT **+26.8%** (Sharpe 1.60) · WTI **+16.0%** · HBL **+12.4%**
+SILVER **+46.2%** · GOLD **+24.5%** (vs +8.9% buy-and-hold, Sharpe 1.32) · WHEAT **+27.2%** (Sharpe 1.59) · WTI **+7.3%** · HBL **+12.4%**
 
-Reported as losses: OGDC −14.3% · BRENT −9.4% · COPPER −9.1% · LUCK −6.1% · BTC −3.9% · KSE100 −1.8% · NATGAS −1.5% · EURUSD −1.3% · MCB −1.1%
+Reported as losses: OGDC −15.8% · BRENT 2.9% · COPPER −6.5% · LUCK −7.0% · BTC −5.8% · KSE100 −5.0% · NATGAS −15.7% · EURUSD −1.3% · MCB −3.0%
 
 > *Note: read the losses before the winners. It is the only slide that makes the winners credible.*
 
@@ -56,8 +56,8 @@ Reported as losses: OGDC −14.3% · BRENT −9.4% · COPPER −9.1% · LUCK −
 
 ## 5. The uncomfortable finding
 
-**PSX equities lost money net of local costs.** −2.2% mean across the equity book against
-+10.0% across the global book. Observed fee-and-slippage drag on active stock trials: ~8%.
+**PSX equities lost money net of local costs.** −3.7% mean across the equity book against
++8.8% across the global book. Observed fee-and-slippage drag on active stock trials: ~8%.
 
 That is not a bug, it is a market structure fact, and it is the reason most PSX "signals"
 never survive to a real account. Any PSX strategy here is sized against cost before
@@ -67,9 +67,9 @@ conviction.
 
 ## 6. What is *not* proven
 
-- **No forward track record.** 3,646 predictions journaled, 288 horizons matured, all 288 were
+- **No forward track record.** 3,690 predictions journaled, 288 horizons matured, all 288 were
   non-trades. A directional hit rate does not yet exist.
-- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 401 cycles, 2 fills.
+- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 405 cycles, 2 fills.
 - Live execution path is built and gated, not exercised at scale.
 - No audit, no team, no third-party capital.
 

@@ -16,10 +16,10 @@ appears in one document and not in another, the journals win — and the mistake
 
 ## Standing rules for this pack
 
-1. **No forward track record exists.** 3,646 predictions journaled, 288 horizons matured,
+1. **No forward track record exists.** 3,690 predictions journaled, 288 horizons matured,
    and all 288 were non-trades. Never quote a hit rate; the ledger says "not yet measurable"
    and so must every other document.
-2. **Backtests are labelled backtests**, per instrument, including the 9 unprofitable ones.
+2. **Backtests are labelled backtests**, per instrument, including the 10 unprofitable ones.
 3. **No return promise, projection, or illustration of future performance** in any channel.
 4. **Nothing is sent or published without the operator's approval for that specific
    channel**, one at a time. Approvals do not cascade.
@@ -55,7 +55,7 @@ old under a footer saying they were verified that day.
 `--write` rewrites the sweep as well as the codebase counts: each instrument's net return,
 buy-and-hold, drawdown and Sharpe, the `profitable`/`unprofitable` verdict words, the HTML
 row colour classes, the headline ratio and the loser count — in whichever shape the sentence
-writes them, because "5 of 14 profitable", "profitable on 5 of 14 instruments" and "9 of 14
+writes them, because "4 of 14 profitable", "profitable on 4 of 14 instruments" and "10 of 14
 instruments in the sweep lost money" are one claim and the first version of the rule only knew
 the glued form — and the per-venue means, which a venue phrase beside the number identifies as
 readily as the word "mean" does. It attributes a figure to the nearest instrument name before

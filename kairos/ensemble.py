@@ -36,6 +36,25 @@ REGIME_AFFINITY: dict[str, dict[str, float]] = {
     "MeanRev-Volatile": {"trend": 0.60, "reversion": 1.40},
 }
 
+# The most a single standing warning may take off a position. It is a brake, not
+# a kill switch: a member that says "stand aside" at full strength halves the
+# book rather than emptying it, because the warning is an opinion about
+# executability and the desk still has a right to act on its thesis. One
+# warning is the whole of it — `risk_veto` takes the loudest, not the sum, since
+# six members noticing the same thin book is one fact, not six.
+RISK_VETO_SIZE_CUT = 0.5
+
+
+def veto_size_multiplier(risk_veto: float) -> float:
+    """How much of a position a standing warning leaves.
+
+    Lives here rather than inline at the one call site because it multiplies
+    real order size on three venues: the number a desk sees as a suggested
+    weight has to have one definition, and a guard on this path must be able to
+    test the arithmetic and not only the wiring.
+    """
+    return float(1.0 - RISK_VETO_SIZE_CUT * min(1.0, max(0.0, risk_veto)))
+
 
 @dataclass
 class StrategyVote:
@@ -57,6 +76,10 @@ class FusedSignal:
     model_agreement: float              # fraction of models agreeing
     strategy_consensus: float           # net strategy vote -1..+1
     regime: str
+    # The loudest standing warning from a strategy that refused to name a
+    # direction — 0..1, strength scaled by measured skill. It sizes, it does not
+    # argue; see `risk_veto` in `fuse`.
+    risk_veto: float = 0.0
     details: dict[str, Any] = field(default_factory=dict)
 
 
@@ -112,18 +135,45 @@ def fuse(symbol: str, forecasts: list[ModelForecast], votes: list[StrategyVote],
     # demoted strategy still speaks, at half voice — and the poll writes both
     # numbers out, so a changed consensus can be traced to the votes that
     # changed it.
+    #
+    # The library contains two kinds of vote and they must not share a
+    # denominator. Six members speak with `direction == 0` about *size* — "cut
+    # size, tail risk", "stand aside", "reduce size" — which is a different
+    # argument from which way the price goes. Counting such a warning as a seat
+    # in a directional poll made it a hidden dampener on the side it never
+    # disputed, and its stated strength was thrown away with the count: a 0.6
+    # "stand aside" and a 0.25 "mixed momentum" suppressed consensus identically,
+    # by an amount set by how many *unrelated* members voted that bar (one veto
+    # costs 16.7% of a five-vote poll and 2.4% of a forty-vote one). So the
+    # directional average is normalized over the votes that took a side, exactly
+    # as `model_agreement` above has always done, and the warnings leave as
+    # `risk_veto` — strength and measured skill included — which `engine` spends
+    # on position size, the only thing they ever spoke about.
     cond = condition or regime
     scaled: list[tuple[StrategyVote, float]] = [
         (v, 1.0 if attribution is None else attribution.weight_tag(
             v.name, horizon, cond)[0])
         for v in votes]
-    bull = sum(v.strength * w for v, w in scaled if v.direction > 0)
-    bear = sum(v.strength * w for v, w in scaled if v.direction < 0)
-    if scaled:
-        strategy_consensus = float(np.clip((bull - bear) / max(len(scaled) * 0.35, 1.0),
+    cast = [(v, w) for v, w in scaled if v.direction != 0]
+    bull = sum(v.strength * w for v, w in cast if v.direction > 0)
+    bear = sum(v.strength * w for v, w in cast if v.direction < 0)
+    if cast:
+        strategy_consensus = float(np.clip((bull - bear) / max(len(cast) * 0.35, 1.0),
                                            -1.0, 1.0))
     else:
         strategy_consensus = 0.0
+
+    # One loud warning is enough to cut size; five of them do not multiply, so
+    # the channel takes the strongest rather than the sum. `risk_veto_name` is
+    # journaled because a smaller position has to be traceable to the member
+    # that asked for it.
+    vetoes = [(v, v.strength * w) for v, w in scaled if v.direction == 0]
+    risk_veto = 0.0
+    risk_veto_name = ""
+    if vetoes:
+        loudest = max(vetoes, key=lambda x: x[1])
+        risk_veto = float(np.clip(loudest[1], 0.0, 1.0))
+        risk_veto_name = loudest[0].name
 
     # -- disagreement shrinkage ----------------------------------------------
     if forecasts:
@@ -169,6 +219,9 @@ def fuse(symbol: str, forecasts: list[ModelForecast], votes: list[StrategyVote],
                              "detail": f.detail} for f in forecasts},
         "strategy_bull": round(bull, 2),
         "strategy_bear": round(bear, 2),
+        "strategy_votes": len(cast),
+        "risk_veto": round(risk_veto, 3),
+        "risk_veto_name": risk_veto_name,
         "strategies": {v.name: {"dir": v.direction, "s": round(v.strength, 2),
                                 **({"w": round(w, 3)} if w != 1.0 else {})}
                        for v, w in sorted(scaled, key=lambda x: -x[0].strength)[:15]}}
@@ -180,4 +233,4 @@ def fuse(symbol: str, forecasts: list[ModelForecast], votes: list[StrategyVote],
         confidence=round(confidence, 4),
         model_agreement=round(model_agreement, 3),
         strategy_consensus=round(strategy_consensus, 3), regime=regime,
-        details=details)
+        risk_veto=round(risk_veto, 3), details=details)

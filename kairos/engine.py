@@ -24,7 +24,7 @@ from .config import CFG
 from .data import MarketData
 from . import attribution
 from .calendar import risk_calendar
-from .ensemble import fuse
+from .ensemble import fuse, veto_size_multiplier
 from .feedback import confidence_adjustment, record
 from .features import (compute_features, cross_sectional_factors, detect_patterns,
                        detect_regime, doctrine_snapshot)
@@ -415,6 +415,19 @@ class PredictionEngine:
             risk.position_notes += (
                 f"; macro {macro.tag} (score {macro.score:+.2f}, "
                 f"{macro.coverage:.0%} of panel) x{macro.size_multiplier:.2f}")
+        # A member that refuses to name a direction is talking about size, and
+        # size is the only place its warning may land. Until here the six
+        # non-directional votes in the library could reach the book only by
+        # diluting the directional poll — which lowers `confidence`, which
+        # `compute_risk` spends as a win probability, so a thin untradeable tape
+        # was executed as a worse *thesis*. The veto is now a brake with its own
+        # lever, and it signs the notes so a smaller position is traceable.
+        if signal.risk_veto > 0:
+            veto_mult = veto_size_multiplier(signal.risk_veto)
+            risk.suggested_weight *= veto_mult
+            risk.position_notes += (
+                f"; veto by {signal.details.get('risk_veto_name') or 'a risk member'} "
+                f"(strength {signal.risk_veto:.2f}) x{veto_mult:.2f}")
         vol = risk.annual_vol if risk.annual_vol > 0 else 0.2
         sigma_h = vol / math.sqrt(252) * math.sqrt(horizon)
         targets = {
@@ -473,6 +486,11 @@ class PredictionEngine:
                 "horizon_days": horizon,
                 "model_agreement": signal.model_agreement,
                 "strategy_consensus": signal.strategy_consensus,
+                # Journaled separately from consensus because it is the other
+                # half of the poll: the warning that cut this position, from the
+                # member that raised it. Without the number a shrunken book is
+                # only deniable prose in `notes`.
+                "risk_veto": signal.risk_veto,
                 "shrinkage": signal.details.get("shrinkage"),
             },
             "targets": {k: round(v, 4) for k, v in targets.items()},

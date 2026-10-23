@@ -27,8 +27,8 @@ approval for that specific channel, one at a time.*
 >
 > 1. A walk-forward sweep in which one blended signal per instrument is fitted from 2,592
 >    candidate parameter sets on a rolling window and traded only out-of-sample, with
->    Pakistani commission and slippage modelled. 5 of 14 instruments came out net-positive; the PSX
->    equity book came out **negative**, mean −2.2%, because fee and slippage drag exceeded
+>    Pakistani commission and slippage modelled. 4 of 14 instruments came out net-positive; the PSX
+>    equity book came out **negative**, mean −3.7%, because fee and slippage drag exceeded
 >    the signal. That cost finding is published rather than buried.
 > 2. An integrity bug I found in my own scorer: it was grading non-trades as correct
 >    predictions and reporting a 100% hit rate, then feeding a confidence bonus into live
@@ -79,14 +79,14 @@ person reads a published failure and replies.*
 >
 > Fix: a snapshot only counts if the score exceeds the entry threshold, only resolves if the
 > horizon's bars exist, and the confidence multiplier is pinned to 1.0 until 10 real
-> directional calls have matured. Eight regression tests. The honest record today: 3,646
+> directional calls have matured. Eight regression tests. The honest record today: 3,690
 > predictions journaled, 288 horizons matured, 0 directional calls, hit rate not yet measurable.
 >
 > Also in there: a council of LLM seats where a dead seat must shrink the council rather
 > than silently substitute a different provider's opinion into the median.
 >
 > Repo + the ledger generator that rebuilds every published number from JSONL journals.
-> Ask me anything, including about the 9 instruments where the strategy sweep lost money.
+> Ask me anything, including about the 10 instruments where the strategy sweep lost money.
 
 ## D. r/algotrading / r/quant — methodology post, no pitch
 
@@ -106,7 +106,7 @@ person reads a published failure and replies.*
 > what it reported → why it was wrong → what it fed into live entries → the fix → the honest
 > number today (0 directional calls matured).
 >
-> **Week 2 — the market-structure finding.** PSX equity book loses ~2.2% mean net of costs
+> **Week 2 — the market-structure finding.** PSX equity book loses ~3.7% mean net of costs
 > out-of-sample while the commodity book makes +13.6%. One chart, one table, no advice.
 >
 > **Week 3 — the engineering.** The three-key live-arming design and why a broker PIN never
@@ -131,7 +131,7 @@ person reads a published failure and replies.*
 | "guaranteed / consistent / passive income" | untrue and, in most jurisdictions, actionable |
 | any forward projection, even illustrative | reads as a promise once it is screenshotted |
 | the 100% or any hit rate | there is no directional record yet; the ledger says so |
-| Sharpe or returns from a single best instrument without the 9 losers | cherry-picking is the one thing that ends a diligence conversation |
+| Sharpe or returns from a single best instrument without the 10 losers | cherry-picking is the one thing that ends a diligence conversation |
 | screenshots of the funded account, the portal, or any credential | the operator's money and identity, not marketing material |
 | pooled capital, managed accounts, "invest with me" | a regulated activity KAIROS is not licensed to perform |
 | mass DM, purchased lists, engagement bots | destroys the credibility that is the entire pitch |
