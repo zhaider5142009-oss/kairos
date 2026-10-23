@@ -7,7 +7,6 @@ console command after installation) for the full command list.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 import time
@@ -58,11 +57,33 @@ def _console():
     return Console(highlight=False)
 
 
+def _write_json(console, out, obj) -> bool:
+    """Write a report through the strict serializer; a refusal is a failed command.
+
+    These files used `json.dumps(..., default=str)`, which converts *anything*: a
+    `numpy.bool_` landed as the string `"False"`, which the next reader calls
+    truthy, so a wrong type became a wrong fact on disk instead of an error. Now
+    the producer names the type, the operator sees it, and the exit code says the
+    run did not finish. Imported lazily so `numpy` still loads after the
+    thread-count defaults above.
+    """
+    from .store import dumps_strict
+    out.parent.mkdir(exist_ok=True)
+    try:
+        out.write_text(dumps_strict(obj, indent=2))
+    except Exception as exc:
+        console.print(f"[red]could not write {out.name}: "
+                      f"{type(exc).__name__}: {exc}[/]")
+        return False
+    return True
+
+
 def cmd_predict(args) -> int:
     from .engine import ENGINE
     from .report import render_prediction
     console = _console()
     console.print(BANNER, style="bold blue")
+    rc = 0
     for i, sym in enumerate(args.symbols):
         if i:
             time.sleep(0.2)
@@ -71,10 +92,11 @@ def cmd_predict(args) -> int:
         render_prediction(res, console)
         if args.json:
             out = CFG.reports_dir / f"predict_{res.get('symbol', 'x')}.json"
-            out.parent.mkdir(exist_ok=True)
-            out.write_text(json.dumps(res, indent=2, default=str))
-            console.print(f"[dim]saved → {out}[/]")
-    return 0
+            if _write_json(console, out, res):
+                console.print(f"[dim]saved → {out}[/]")
+            else:
+                rc = 1
+    return rc
 
 
 def cmd_scan(args) -> int:
@@ -84,9 +106,8 @@ def cmd_scan(args) -> int:
     res = ENGINE.scan(top=args.top)
     render_scan(res, console, top=args.top)
     if args.json:
-        out = CFG.reports_dir / "psx_scan.json"
-        out.parent.mkdir(exist_ok=True)
-        out.write_text(json.dumps(res, indent=2, default=str))
+        if not _write_json(console, CFG.reports_dir / "psx_scan.json", res):
+            return 1
     return 0 if res.get("ok") else 1
 
 
@@ -107,8 +128,8 @@ def cmd_backtest(args) -> int:
     res = run_paper_session(ENGINE.md, args.symbols, ENGINE, days=args.days)
     render_backtest(res, console)
     out = CFG.reports_dir / "paper_session.json"
-    out.parent.mkdir(exist_ok=True)
-    out.write_text(json.dumps(res, indent=2, default=str))
+    if not _write_json(console, out, res):
+        return 1
     console.print(f"[dim]saved → {out}[/]")
     return 0
 
@@ -319,9 +340,8 @@ def cmd_macro(args) -> int:
         lines.append(f"[red]{ex['panel_error']}[/]")
     console.print(Panel("\n".join(lines), border_style="blue"))
     if args.json:
-        out = CFG.reports_dir / "macro.json"
-        out.parent.mkdir(exist_ok=True)
-        out.write_text(json.dumps(d, indent=2, default=str))
+        if not _write_json(console, CFG.reports_dir / "macro.json", d):
+            return 1
     return 0
 
 
@@ -374,10 +394,9 @@ def cmd_newsdesk(args) -> int:
         console.print("[red]news host paused after a failure — these readings are "
                       "stale or absent, not a quiet tape[/]")
     if args.json:
-        out = CFG.reports_dir / "newsdesk.json"
-        out.parent.mkdir(exist_ok=True)
-        out.write_text(json.dumps({"desk": st, "readings": readings,
-                                   "unknown": unknown}, indent=2, default=str))
+        d = {"desk": st, "readings": readings, "unknown": unknown}
+        if not _write_json(console, CFG.reports_dir / "newsdesk.json", d):
+            return 1
     return 0
 
 

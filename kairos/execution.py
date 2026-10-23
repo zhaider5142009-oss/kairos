@@ -29,7 +29,7 @@ import numpy as np
 import pandas as pd
 
 from .config import CFG
-from .store import atomic_write
+from .store import atomic_write, dumps_strict
 from . import rules as _R
 
 
@@ -108,7 +108,7 @@ class AuditJournal:
         record = {"ts": datetime.now().isoformat(timespec="seconds"),
                   "event": event, **payload}
         try:
-            line = json.dumps(record, default=str) + "\n"
+            line = dumps_strict(record) + "\n"
         except (TypeError, ValueError) as exc:
             self.last_error = f"{event} not recorded: payload is not serializable ({exc})"
             return False

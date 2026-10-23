@@ -55,7 +55,7 @@ import numpy as np
 
 from .config import CFG
 from .data import _http_get
-from .store import atomic_write
+from .store import atomic_write, dumps_strict
 from .universe import Instrument, universe
 
 # Kept deliberately small and financial. This is not a general English sentiment
@@ -577,8 +577,8 @@ class NewsDesk:
             items = dict(sorted(items.items(), key=lambda kv: -kv[1][0])
                          [:CACHE_MAX_KEYS])
         try:
-            atomic_write(self.path, json.dumps({"saved": time.time(),
-                                               "readings": items}, default=str))
+            atomic_write(self.path, dumps_strict({"saved": time.time(),
+                                                  "readings": items}))
             self.save_error = None
         except Exception as exc:
             self.save_error = f"{type(exc).__name__}: {str(exc)[:160]}"
