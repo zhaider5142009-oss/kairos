@@ -2,13 +2,20 @@
 
 torch on this box is CPU-only (no CUDA, no ROCm, no torch-directml), so the only way to get
 KAIROS' foundation-model forecast onto the RX 560 is ONNX Runtime with the DirectML provider.
-The graph that runs on the GPU is the expensive half — the T5 encoder, the 12-layer decoder and
-the quantile head. The cheap half (instance norm, patching, input MLP, <1% of the FLOPs) stays
-in eager torch on the CPU, which also sidesteps two exporter bugs: torch's legacy tracer
-mis-traces Patch.unfold and dynamo dies on T5's head view.
+The graph runs the whole expensive half — the input MLP, the T5 encoder, the 12-layer decoder
+and the quantile head. Only instance norm and patching stay in eager torch on the CPU, which
+also sidesteps two exporter bugs: torch's legacy tracer mis-traces Patch.unfold and dynamo
+dies on T5's head view.
 
-Numbers are exact, not approximate: the split reproduces the torch CPU model to a mean relative
-error of ~5e-08 (float32 noise) on real KAIROS market data.
+Measured on this box (i5-6400 / 8 GB / RX 560, chronos-bolt-base fp32, batch of 16 rows of
+real closes, 2026-10-23, reproduce with `python tools/gpu_verify.py`):
+    graph on DirectML   0.589 s per batch
+    eager torch on CPU  2.865 s per batch        (so 4.9x, and the card is not the bottleneck
+                                                   the CPU was — it is the half that ran twice)
+    CPU-side prep       0.01 s per batch
+    mean relative error 1.19e-07 vs the eager torch path (max 1.34e-06) — float32 noise, so the
+    forecast the desk shows is the forecast the CPU would have produced, not an approximation
+    of it.
 
 Server (resident, so weights load once and batches can be filled):
     python -m kairos.gpu_dml serve [--port 8611] [--model base] [--batch 16]
@@ -38,17 +45,44 @@ CACHE_DIR = Path(__file__).resolve().parent.parent / "data" / "cache"
 
 # --------------------------------------------------------------------------- split model
 def _preprocess(model, ctx: np.ndarray):
-    """Run the model's own eager encode() so the CPU/GPU split is exact by construction."""
+    """The only work that stays on the CPU: instance norm and patching.
+
+    This mirrors the first half of ChronosBoltModelForForecasting.encode() statement for
+    statement but stops before the input MLP. encode() as written also runs the 12-layer T5
+    encoder and returns its output, which is exactly the work the GPU graph is here to do —
+    calling it as-is meant the CPU ran the encoder and the GPU ran it again. Measured on this
+    box (`tools/gpu_verify.py`, batch of 16): that duplicated encoder pass costs 1.99 s per
+    batch, and what is left here costs 0.01 s. The input MLP goes into the graph with the
+    encoder because it consumes the same patched tensor and is on the way to every layer below.
+    """
     import torch
 
     t = torch.from_numpy(np.ascontiguousarray(ctx, dtype=np.float32))
+    cfg = model.chronos_config
     with torch.no_grad():
-        _hidden, loc_scale, input_embeds, attention_mask = model.encode(context=t, mask=None)
-    return input_embeds, attention_mask, loc_scale
+        mask = torch.isnan(t).logical_not().to(t.dtype)
+        if t.shape[-1] > cfg.context_length:
+            t = t[..., -cfg.context_length:]
+            mask = mask[..., -cfg.context_length:]
+
+        context, loc_scale = model.instance_norm(t)
+        context = context.to(model.dtype)
+        mask = mask.to(model.dtype)
+
+        patched_context = model.patch(context)
+        patched_mask = torch.nan_to_num(model.patch(mask), nan=0.0)
+        patched_context = torch.where(patched_mask > 0.0, patched_context, 0.0)
+        patched_context = torch.cat([patched_context, patched_mask], dim=-1)
+        attention_mask = patched_mask.sum(dim=-1) > 0
+        if cfg.use_reg_token:
+            attention_mask = torch.cat(
+                [attention_mask.to(model.dtype),
+                 torch.ones_like(attention_mask).to(model.dtype)[..., :1]], dim=-1)
+    return patched_context, attention_mask, loc_scale
 
 
 class _Tail:
-    """encoder + decoder + quantile head — the part worth putting on the GPU.
+    """input MLP + encoder + decoder + quantile head — everything that costs compute.
 
     Output stays in instance-norm space; model.forward() unscales afterwards, so the caller must
     apply instance_norm.inverse() to get forecasts in real units.
@@ -64,14 +98,18 @@ class _Tail:
             def __init__(self, m):
                 super().__init__()
                 self.m = m
+                self.reg_embed = m.shared.weight[m.config.reg_token_id].detach().clone()
 
-            def forward(self, input_embeds, attention_mask):
-                hidden = self.m.encoder(attention_mask=attention_mask,
-                                       inputs_embeds=input_embeds)[0]
-                seq = self.m.decode(input_embeds, attention_mask, hidden)
+            def forward(self, patched, attention_mask):
+                ie = self.m.input_patch_embedding(patched)
+                if self.m.chronos_config.use_reg_token:
+                    ie = torch.cat([ie, self.reg_embed.expand(ie.shape[0], 1, -1).to(ie.dtype)],
+                                   dim=-2)
+                hidden = self.m.encoder(attention_mask=attention_mask, inputs_embeds=ie)[0]
+                seq = self.m.decode(ie, attention_mask, hidden)
                 nq = self.m.num_quantiles
                 pl = self.m.chronos_config.prediction_length
-                return self.m.output_patch_embedding(seq).view(input_embeds.shape[0], nq, pl)
+                return self.m.output_patch_embedding(seq).view(ie.shape[0], nq, pl)
 
         self.module = Inner(model)
 
@@ -82,12 +120,12 @@ class _Tail:
         from onnx import TensorProto, numpy_helper
 
         cfg = self.model.chronos_config
-        tokens = cfg.context_length // cfg.input_patch_size + 1
-        d_model = self.model.config.d_model
-        ie = torch.zeros(self.batch, tokens, d_model, dtype=torch.float32)
-        am = torch.ones(self.batch, tokens, dtype=torch.float32)
-        torch.onnx.export(self.module, (ie, am), str(path),
-                          input_names=["input_embeds", "attention_mask"],
+        rng = np.random.RandomState(0)
+        walk = 100 + np.cumsum(rng.randn(cfg.context_length // 5).astype(np.float32))
+        ctx = np.concatenate([np.full(cfg.context_length - walk.size, np.nan, np.float32), walk])
+        patched, am, _ls = _preprocess(self.model, np.stack([ctx] * self.batch, 0))
+        torch.onnx.export(self.module, (patched, am), str(path),
+                          input_names=["patched_context", "attention_mask"],
                           output_names=["quantile_preds"], opset_version=17,
                           do_constant_folding=True, dynamo=False)
 
@@ -150,8 +188,8 @@ class GpuForecaster:
 
         import onnxruntime as ort
 
-        raw = MODEL_DIR / ("chronos_enc_%s%d.onnx" % (model, self.batch))
-        self.onnx_path = raw if raw.exists() else self._build_onnx(raw)
+        raw = MODEL_DIR / ("chronos_graph_%s%d.onnx" % (model, self.batch))
+        self.onnx_path = self._build_onnx(raw)
         so = ort.SessionOptions()
         so.log_severity_level = 3
         self.session = ort.InferenceSession(
@@ -165,9 +203,9 @@ class GpuForecaster:
             return fixed
         if raw.exists():
             return raw
-        tail = _Tail(self.model, self.batch)
-        out = tail.export(raw)
-        raw.unlink(missing_ok=True)
+        out = _Tail(self.model, self.batch).export(raw)
+        if out != raw:
+            raw.unlink(missing_ok=True)
         return out
 
     # ------------------------------------------------------------------ forecast
@@ -176,10 +214,10 @@ class GpuForecaster:
         pad = self._pad_contexts(contexts)
         with self._lock:
             t0 = time.time()
-            input_embeds, attention_mask, loc_scale = _preprocess(self.model, pad)
+            patched, attention_mask, loc_scale = _preprocess(self.model, pad)
             t1 = time.time()
             q = self.session.run(
-                None, {"input_embeds": input_embeds.numpy(),
+                None, {"patched_context": patched.numpy(),
                        "attention_mask": attention_mask.numpy()})[0]
             t2 = time.time()
             out = self._unscale(np.asarray(q, dtype=np.float32), loc_scale)[:len(contexts)]
