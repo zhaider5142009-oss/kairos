@@ -649,7 +649,21 @@ class MarketData:
         if cached is None or cached.empty:
             STORE.save(key, df)
             return df
-        merged = pd.concat([cached, df], ignore_index=True)
+        live = df.copy()
+        # The store is day-grained no matter what a vendor answers with:
+        # `Store.save` stamps every row "%Y-%m-%d" and `load` reads those back at
+        # midnight. Deduplicating at a finer grain than that is how one trading
+        # day ends up with two bars — a source that answers with a 15:30
+        # timestamp keeps it beside the store's 00:00 row for the same date,
+        # `drop_duplicates` sees two different values, and the strategy is handed
+        # a series whose rolling windows each contain that day twice. Worse, the
+        # next `load` dedupes to the first row, which is the stored one, so the
+        # live print is the bar that disappears — the opposite of the rule two
+        # lines below. Normalize first, and copy: the caller's frame is also the
+        # one sitting in `_hist_cache`, and restamping it in place would rewrite
+        # what every other reader of that cache sees.
+        live["date"] = pd.to_datetime(live["date"]).dt.normalize()
+        merged = pd.concat([cached, live], ignore_index=True)
         # The live fetch wins on a duplicate date (`keep="last"` over
         # [store, live]), so today's bar follows the vendor instead of freezing at
         # the intraday price the store happened to catch. The comment here used to
