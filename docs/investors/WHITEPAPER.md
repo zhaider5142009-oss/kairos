@@ -1,7 +1,7 @@
 # KAIROS — technical whitepaper
 **A self-auditing prediction and execution stack for Pakistan and global markets**
 
-Version 2.6.2 · 2026-10-22 · single-operator, publicly verifiable
+Version 2.6.2 · 2026-10-23 · single-operator, publicly verifiable
 
 > **Reading note.** This document describes a system, not a track record. Every quantitative
 > claim is either reproduced from an on-disk journal or explicitly labelled as a backtest.
@@ -144,7 +144,7 @@ exist is a way to lose money faster than the market teaches you.
 - Logs rotate; state persists across restarts; RAM, startup and per-cycle cost were profiled
   on a 2015-era i5 / 8 GB machine, which is a deliberate constraint — if it runs there, the
   infrastructure argument is cheap.
-- 357 regression tests, including the money path and the integrity cases below.
+- 373 regression tests, including the money path and the integrity cases below.
 
 ## 7. What the numbers say, and what they do not
 
@@ -157,13 +157,13 @@ and 9 instruments reported as losses.
 important finding in the project: the edge, if any, is in the global and commodity books,
 and any PSX strategy must be sized against costs before it is sized against conviction.
 
-The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 231
+The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 350
 autopilot cycles) with two fills. That is a system working as designed on a low-conviction
 market, not a strategy proving itself.
 
 ## 8. The integrity bugs, documented because they are the credibility
 
-An investor kit is only worth its willingness to publish its own audit. Forty-seven defects
+An investor kit is only worth its willingness to publish its own audit. Fifty-one defects
 are tabled below, each with what it would have cost had it shipped. Eight of them were in the
 machinery that produces the numbers an investor would read — the scorer that turns a journal
 into a hit rate, the command that regenerates the evidence, the ledger repair meant to keep
@@ -171,7 +171,7 @@ that history honest, and the guardrail built to keep the pack's figures current.
 worth naming first, because nothing about it was flattering: three were in code we had already
 declared finished, two were in numbers we had already printed, and three were inside an earlier
 repair or the guardrail we built for one — which is why the last ones were found at all.
-Twenty-seven more were on the money path, the trail that records it, or a limit that
+Thirty-one more were on the money path, the trail that records it, or a limit that
 read as a control and was not wired to one; nine were a provider or a
 bridge answering in a way the desk then reported as health, and three were credentials — or the
 guard that was supposed to catch them — sitting in tracked files.
@@ -225,12 +225,24 @@ guard that was supposed to catch them — sitting in tracked files.
 | A hole in the account feed read as a flat day | The posture that decides whether any order may go out computed equity, day P&L and exposure with bare float conversions. A feed returning `"n/a"` raised out of the cycle — the same cycle that manages every held stop and target — and a NaN day P&L answered no to the one comparison that asks whether we are past the brake, which is the same fail-open the equity guards had, on the other side of the ledger | the readings that already have a "no usable figure" blocker (equity, peak) coerce to zero, and the ones where zero would be a lie are allowed to stay absent: an unreadable day is its own blocker, the desk prints *unreadable* instead of `+0`, and a held position with no readable price is reported as understated exposure rather than as a free one. The gate refuses the same account outright |
 | A halted print was scaled as if it cost one rupee | The feature engine divided every normalized feature by `float(last_close) or 1.0`. A zero close is not a missing divisor — it is a hole — and the substitution turned MACD, ATR percent, momentum and each candle ratio into numbers a hundred times their size, which a model consumes without asking. The same print inside `np.log` for the Hurst, entropy and regression helpers became `-inf`: enough to make the histogram raise, so one delisted scrip could end the scan loop for every instrument behind it | the denominator is a hole when it is not a positive price, and the features built on it come back as holes — the panel path already did this, the single-instrument path now matches. The log helpers drop non-positive prints before any statistic sees them, so a short series is short data rather than a fabricated collapse |
 | A control that reported a bound it never applied | `resolve_outcomes(lookback_days=90)` accepted a window and ignored it, and `Autopilot._live_pos` copied the venue's position list into instance state that nothing read — a second copy of a live book, free to go stale, and a parameter that made a scan look bounded when it walked the whole journal | both are gone. The journal's unresolved rows are the queue the operator is waiting on regardless of age, so a bound that does not exist should not be offered; and the venue list is the only copy of the venue's answer |
+| The queue that holds a human's real order intent could be lost, and the desk showed it as empty | `data/jsg_pending.json` is where a staged PSX order waits for someone to type the PIN. Every write there rebuilds the whole file from the last read, and that read returned `[]` for anything it could not parse — which a plain whole-file write leaves behind after a crash, a forced power cut or a full disk. From then on the panel printed "no staged orders", the same words an empty queue prints, while the next stage or drop rewrote the file from that empty read and destroyed the tickets still inside it: an order somebody had staged and was waiting on, gone, with nothing on the page and nothing in the trail saying it had existed | the queue is replaced only through an atomic rename; a file that cannot be read is answered as a refusal, not as an empty list, and its bytes are left exactly where they are; staging, dropping and acking all refuse until a human checks that file; and the desk prints a red "order queue unreadable" band naming the path instead of an empty table — sixteen new tests |
+| An ack rewrote the queue from a list that was already stale | the release is completed by rewriting the whole file minus the ticket just sent — from the list read *before* the broker POST, which can sit out there for seconds. Anything staged in that window, by the desk or by an armed autopilot placing on its own, was put back by the overwrite. And the write came before the record, so a disk that refused it also cost the "this order may or may not have reached the broker" line — the one event the trail most needs | the ticket is removed by re-reading the queue under a lock, the unknown-outcome record is written before the queue is touched, and a removal that fails after the order did go out is a warning on the answer and a journalled event: an executed order with a re-ackable ticket still in the queue says so instead of looking clean |
+| A ticket the TTL ate left no trace | staged orders expire after fifteen minutes, and expiry simply filtered them out of the next write with no event behind it, so the ack that later answered "no pending order (stale after 15 min)" described a stage that had stopped existing without ever being closed. A ticket whose timestamp could not be read was neither kept nor recorded either | every ticket the TTL drops is journalled with its own identity and age, a row that cannot be aged is expired loudly rather than silently, and the ISO stamp the desk already prints is the fallback for a missing epoch — so a live ticket is not discarded over a field the queue does not need |
+| A date it could not read was invented as today | `Autopilot._age_days` answered 0.0 for any timestamp it failed to parse, and both callers took the invention: a held entry with an unreadable start date never reached maturity, which is the exit that closes a position at its horizon, and the watchlist read its own corrupt stamp as "rotated seconds ago", so daily PSX rotation stopped for the life of the process. Both looked like a system behaving normally | an unreadable age is no answer at all. The maturity exit stays off — other exits keep working — and the row says so once on the desk and in the trail; the rotation throttle does not fire on a stamp it cannot read, which also lets the next rotation repair it |
 
 Nothing moved money. The journal now says so itself: rebuilt from `data/audit_journal.jsonl`,
 the track record publishes the count of lines carrying the test signature and the count of
 venue acknowledgements with a real order number, which is zero. That history is left in
 place rather than cleaned — a rewritten audit trail cannot prove anything, so the containment
 event was appended instead.
+
+The queue round is the closest this project has come to the sentence above, so it is worth
+stating precisely: no rupee moved, because `js_global.allow_orders` is off and no ticket in
+that file has ever reached a broker. What was exposed is the same shape the last four rounds
+kept finding one level further out — a component that cannot answer a question, answering it
+anyway — in the one file where a human's confirmed intent to spend real money sits between the
+stage and the PIN. A queue that cannot be read is now a refusal with a path in it, not a blank
+table, and a write that does not land is a no rather than a "staged".
 
 One limit we will not paper over: the account-number and PIN literals are gone from the
 current tree, but they remain in the pushed git history, and a release that deleted history
@@ -257,7 +269,7 @@ be mis-sized because of it.
 git clone https://github.com/zhaider5142009-oss/kairos && cd kairos
 cp config.example.yaml config.yaml      # add your own keys; config.yaml is git-ignored
 pip install -r requirements.txt
-python -m pytest tests -q                    # 357 tests
+python -m pytest tests -q                    # 373 tests
 python -m kairos.cli backtest GOLD WTI HBL   # walk-forward sweep, costs modelled
 python -m kairos.cli health                  # subsystem health, dead council seats
 python -m kairos.cli feedback                # realized track record, live from the journal

@@ -434,8 +434,10 @@ class Autopilot:
             return
         st = self.st
         last = st.get("last_rotation")
-        if last and self._age_days(last) < 1.0:
-            return
+        if last:
+            age = self._age_days(last)
+            if age is not None and age < 1.0:
+                return
         try:
             from .engine import ENGINE
             scan = ENGINE.scan(top=15)
@@ -485,11 +487,18 @@ class Autopilot:
             return self.mt5.resolve_symbol(key) or key
         return key
 
-    def _age_days(self, iso: str) -> float:
+    def _age_days(self, iso: str) -> float | None:
+        """Days between now and an ISO stamp, or None when there is no answer.
+
+        Zero here used to mean "brand new", and both callers of an unreadable
+        stamp took it: a held entry whose start date could not be read never
+        reached maturity, and the watchlist stopped rotating for the day — each
+        of which looks exactly like a system working normally.
+        """
         try:
             return (datetime.now() - datetime.fromisoformat(iso)).total_seconds() / 86400
-        except Exception:
-            return 0.0
+        except (TypeError, ValueError):
+            return None
 
     def _act(self, symbol: str, action: str, why: str) -> None:
         self.st["actions"].insert(0, {"ts": _now(), "symbol": symbol,
@@ -742,8 +751,20 @@ class Autopilot:
                     if hp.get("ticket") is not None and self.mt5.connected:
                         self.mt5.modify_sl(int(hp["ticket"]), sl=hb["stop"])
         flip = abs(score) >= st["exit_threshold"] and (score * dirn) < 0
-        mature = hb.get("started") and \
-            self._age_days(hb["started"]) >= st["horizon_days"]
+        started = hb.get("started")
+        age = self._age_days(started) if started else None
+        if started and age is None and not hb.get("age_warned"):
+            # Once for the row, and into the trail: a position with no readable
+            # start date keeps its other exits, and the desk has to say the
+            # maturity exit is off instead of showing an entry that looks
+            # simply not due yet.
+            hb["age_warned"] = True
+            self._act(inst.key, "AGE UNREADABLE",
+                      f"start date {str(started)[:20]!r} is not a date — this "
+                      "entry has no maturity exit until the state file is fixed")
+            JOURNAL.log("AUTOPILOT_AGE_UNREADABLE",
+                        {"symbol": inst.key, "started": str(started)[:40]})
+        mature = age is not None and age >= st["horizon_days"]
         if flip:
             return "FLIP"
         if mature:

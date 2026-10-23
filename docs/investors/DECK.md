@@ -1,5 +1,5 @@
 # KAIROS — investor deck
-*12 slides. Say the true thing on every one of them. Figures dated 2026-10-22; refresh `TRACK_RECORD.md` before presenting.*
+*12 slides. Say the true thing on every one of them. Figures dated 2026-10-23; refresh `TRACK_RECORD.md` before presenting.*
 
 ---
 
@@ -29,12 +29,12 @@ Built by one operator, running 24/7, publishing its own losses.
 
 | | |
 |---|---|
-| Code | 12,809 lines Python · 37 modules · public repo |
+| Code | 12,990 lines Python · 37 modules · public repo |
 | Strategies | 100 voting into the live consensus; the sweep fits one blended signal, not the library |
 | Council | 6 configured LLM seats across 2 providers; a dead seat shrinks the council |
 | Execution | paper + JS Global PSX bridge + MT5 |
 | Uptime | 24/7 daemon, watchdog, token-gated public API |
-| Tests | 357 passing, money path included |
+| Tests | 373 passing, money path included |
 
 Not a fund. No client money. No licence. No AUM.
 
@@ -67,9 +67,9 @@ conviction.
 
 ## 6. What is *not* proven
 
-- **No forward track record.** 1,764 predictions journaled, 140 horizons matured, all 140 were
+- **No forward track record.** 3,076 predictions journaled, 263 horizons matured, all 140 were
   non-trades. A directional hit rate does not yet exist.
-- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 231 cycles, 2 fills.
+- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 350 cycles, 2 fills.
 - Live execution path is built and gated, not exercised at scale.
 - No audit, no team, no third-party capital.
 
@@ -212,7 +212,7 @@ live order doors refuse the trade when the answer is no** — the PSX bridge bef
 exists, the MT5 bridge before an order request is assembled. An order with no record behind it
 cannot be audited, explained or reversed, so it does not go out.
 
-The round before this one asked whether a check could be *fooled*. This one asked whether the
+The round before last asked whether a check could be *fooled*. The last one asked whether the
 checks are bolted to anything, and five of them were not. **One limit had two names and only
 one of them was armed**: `rules.max_daily_loss_pct` is a percentage and feeds the breaker that
 pauses entries, `risk.daily_loss_limit_pct` is a fraction and feeds the gate that refuses the
@@ -238,6 +238,27 @@ is what a model consumes without asking — while the same zero inside `np.log` 
 made a histogram raise, so one delisted scrip could end the scan for every instrument behind
 it. A hole is now a hole: the denominator is absent, the features built on it are absent, and
 the log helpers drop non-positive prints before any statistic touches them.
+
+This round walked to the file in between — the queue where a staged PSX order waits for a human
+to type the PIN. Every write there rebuilds the whole file from the last read, and that read
+answered an empty list to any file it could not parse, which is precisely what a plain
+whole-file write leaves behind after a crash. So the panel printed "no staged orders" — the same
+words an empty queue prints — while the next ticket anybody staged rewrote the file from that
+empty read and destroyed the ones still inside it: an order somebody had staged and was waiting
+on, gone, with nothing on the page saying it had ever been there. An ack had the same shape at a
+shorter range. It removed its ticket by rewriting the list it had read *before* the broker POST,
+so anything staged while the broker was busy came back into the file, and the write came before
+the record, so a full disk also cost the line saying this order may or may not have reached the
+broker — the one event the trail most needs. Fifteen minutes of expiry ate tickets with no event
+behind them at all. A queue that cannot be read is now a refusal with a path in it; the file is
+only ever replaced by an atomic rename; a removal re-reads under a lock; the unknown-outcome
+record is written first; and an order that went out while its staged copy could not be cleared
+says so on the answer instead of leaving a re-ackable ticket quiet. The same rule reached one
+level over: an autopilot timestamp it could not parse was invented as *today*, which froze the
+daily watchlist rotation and left a held entry with no maturity exit, each of them looking
+exactly like a system behaving normally. **A component that cannot answer a question is not
+allowed to answer it** — that is the whole rule, and it now holds all the way down to the file a
+real order waits in.
 
 **A system that audits its own performance numbers is the product.** Everything else is a
 chart.

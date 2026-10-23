@@ -1,7 +1,7 @@
 # KAIROS
 ### Autonomous prediction and execution for Pakistan and global markets
 
-*One page. Every number is reproducible from the repository and dated 2026-10-22 — regenerate the ledger before sending. Nothing here is a promise of return.*
+*One page. Every number is reproducible from the repository and dated 2026-10-23 — regenerate the ledger before sending. Nothing here is a promise of return.*
 
 ---
 
@@ -16,12 +16,12 @@ SECP-licensed as an investment adviser, and has never managed third-party capita
 
 | | |
 |---|---|
-| Codebase | 12,809 lines of Python across 37 modules, public repo |
+| Codebase | 12,990 lines of Python across 37 modules, public repo |
 | Strategy library | 100 strategies in 10 families, voting into the live consensus |
 | Signal council | 6 configured seats across 2 providers, median consensus with named-seat integrity; a blank or dead seat casts no vote |
 | Execution | paper book + JS Global PSX order bridge + MT5 (JS Markets) |
 | Uptime | 24/7 daemon with watchdog and public token-gated API |
-| Tests | 357 passing, money-path and integrity cases included |
+| Tests | 373 passing, money-path and integrity cases included |
 
 ## What has actually been demonstrated
 
@@ -42,7 +42,7 @@ this is published per instrument and never as an average.
 
 ## What has *not* been demonstrated — stated plainly
 
-- **No forward track record yet.** 1,764 predictions journaled, 140 horizons matured, and all
+- **No forward track record yet.** 3,076 predictions journaled, 263 horizons matured, and all
   140 were non-trades. A directional hit rate does not exist until live calls mature.
 - **PSX equities are net-negative out-of-sample.** Local commission and slippage exceeded
   the signal: mean −2.2% across the 5-stock book, versus +10.0% across the global book.

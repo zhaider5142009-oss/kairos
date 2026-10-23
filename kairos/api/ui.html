@@ -823,8 +823,12 @@ async function loadJsg(){
     $('#jopinhint').innerHTML=r.has_pin?'<span class="down">PIN on file: an armed autopilot places real orders unattended</span>'
                                        :'<span class="up">no stored PIN: PSX orders stay human-confirmed tickets</span>';
     JO=r.pending||[];
-    $('#jopending').innerHTML=JO.length?`<table><thead><tr><th>Staged</th><th>Symbol</th><th class="c">Side</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Notional</th><th>Type</th><th>Age</th><th></th></tr></thead><tbody>${JO.map(x=>
-      `<tr><td class="mono">${esc(x.id)}</td><td class="mono">${esc(x.symbol)}</td><td class="c ${x.side==='BUY'?'up':'down'}">${esc(x.side)}</td><td class="r mono">${num(x.qty,0)}</td><td class="r mono">${num(x.price)}</td><td class="r mono">${num(x.qty*x.price,0)}</td><td class="mono">${esc(x.order_type)}</td><td class="dim mono">${jsgAge(x.t)}</td><td style="white-space:nowrap"><button class="btn small" onclick="jAck('${esc(x.id)}')">Ack with PIN</button> <button class="btn ghost small" onclick="jDrop('${esc(x.id)}')">Drop</button></td></tr>`).join('')}</tbody></table>`:'<span class="dim">no staged orders — staging is only enabled when <b>js_global.allow_orders</b> is true</span>';
+    const q=r.queue||{};
+    const qband=(!q||q.ok)?'':`<div class="card" style="border-color:var(--red);background:var(--red-soft);margin:0 0 10px"><b class="down">Order queue unreadable</b><div class="dim mono" style="font-size:12px;margin-top:4px">${esc(q.error||'')}${q.path?` — ${esc(q.path)} is left untouched and staging is refused until it is checked`:''}</div></div>`;
+    $('#jopending').innerHTML=qband+(JO.length?`<table><thead><tr><th>Staged</th><th>Symbol</th><th class="c">Side</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Notional</th><th>Type</th><th>Age</th><th></th></tr></thead><tbody>${JO.map(x=>
+      `<tr><td class="mono">${esc(x.id)}</td><td class="mono">${esc(x.symbol)}</td><td class="c ${x.side==='BUY'?'up':'down'}">${esc(x.side)}</td><td class="r mono">${num(x.qty,0)}</td><td class="r mono">${num(x.price)}</td><td class="r mono">${num(x.qty*x.price,0)}</td><td class="mono">${esc(x.order_type)}</td><td class="dim mono">${jsgAge(x.t)}</td><td style="white-space:nowrap"><button class="btn small" onclick="jAck('${esc(x.id)}')">Ack with PIN</button> <button class="btn ghost small" onclick="jDrop('${esc(x.id)}')">Drop</button></td></tr>`).join('')}</tbody></table>`
+      :((q&&!q.ok)?'<span class="dim">the queue could not be read — the tickets above are not all of them</span>'
+                  :'<span class="dim">no staged orders — staging is only enabled when <b>js_global.allow_orders</b> is true</span>');
   }catch(e){$('#jgsgate').innerHTML=`<span class="down">order desk unreachable: ${esc(e.message)}</span>`}
 }
 function jsgGateHtml(s){

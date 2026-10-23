@@ -28,7 +28,9 @@ move:
 Fail-closed extras: the kill switch blocks every stage/ack/placed/cancel;
 per-order notional cap; broker price band — a stage the band table cannot
 cover is journalled as unchecked rather than passing silently; qty and price
-must be finite numbers; PINs are never logged, never journalled, never
+must be finite numbers; the staged-ticket file is rewritten atomically and a
+queue that cannot be read is refused, not rebuilt from an empty read; a ticket
+the TTL drops is journalled. PINs are never logged, never journalled, never
 returned by any endpoint. PMX is not wired here — PMX flow remains tickets
 only.
 """
@@ -38,6 +40,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import threading
 import time
 import uuid
 from datetime import datetime
@@ -46,6 +49,7 @@ from typing import Any
 from .config import CFG
 from .execution import JOURNAL, KILL
 from .jsgsync import JsGlobalError, _conf, _net, _sess
+from .store import atomic_write
 
 PENDING_PATH = CFG.data_dir / "jsg_pending.json"
 TTL_S = 900.0
@@ -78,42 +82,160 @@ def state() -> dict[str, Any]:
         c = _conf()
     except JsGlobalError as exc:
         return {"configured": False, "error": str(exc), "allow_orders": False,
-                "has_pin": False, "pending": len(pending())}
+                "has_pin": False, "pending": len(pending()),
+                "queue": queue_health()}
     return {"configured": True, "allow_orders": bool(c.get("allow_orders")),
             "has_pin": bool(c.get("trading_pin")),
             "order_account": str(c.get("order_account") or "auto (portal accountNo)"),
             "max_order_notional": c.get("max_order_notional"),
-            "kill_switch": KILL.engaged(), "pending": len(pending())}
+            "kill_switch": KILL.engaged(), "pending": len(pending()),
+            "queue": queue_health()}
 
 
 # ------------------------------------------------------------------ staging
-def _load() -> list[dict[str, Any]]:
+_queue_lock = threading.RLock()
+_last_queue_error: str | None = None
+
+
+def queue_health() -> dict[str, Any]:
+    """Whether the staged-ticket file can actually be answered.
+
+    The desk has to print this beside the ticket list: an unreadable queue and
+    a queue with nothing in it both display as "no staged orders", and the
+    first means a ticket someone is waiting on may exist and simply not be
+    visible.
+    """
+    return {"ok": _last_queue_error is None, "error": _last_queue_error,
+            "path": str(PENDING_PATH)}
+
+
+def _read_rows() -> list[dict[str, Any]] | None:
+    """The tickets on disk, or None when the file could not be answered.
+
+    None is not "no tickets". Every write here rebuilds the whole file from
+    this read, so an unreadable file answered as `[]` would let the next stage
+    or drop replace the queue with a list holding none of the tickets that
+    survived in it — real order intent, gone, with nothing on the page and
+    nothing in the trail to say it was ever there.
+    """
+    global _last_queue_error
+    _last_queue_error = None
     try:
-        return json.loads(PENDING_PATH.read_text(encoding="utf-8"))
-    except Exception:
+        raw = PENDING_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return []
+    except (OSError, UnicodeDecodeError) as exc:
+        _last_queue_error = f"could not be read ({str(exc)[:120]})"
+        return None
+    try:
+        rows = json.loads(raw)
+    except ValueError as exc:
+        _last_queue_error = f"is not valid JSON ({str(exc)[:120]})"
+        return None
+    if not isinstance(rows, list):
+        _last_queue_error = f"holds {type(rows).__name__}, not a list"
+        return None
+    return [r for r in rows if isinstance(r, dict) and r.get("id")]
+
+
+def _load() -> list[dict[str, Any]]:
+    """The tickets, or a refusal — for every path that is about to rewrite them."""
+    rows = _read_rows()
+    if rows is None:
+        raise JsGlobalError(f"pending order queue at {PENDING_PATH} {_last_queue_error} "
+                            f"— the file is left untouched and nothing is "
+                            f"written over it")
+    return rows
 
 
 def _save(rows: list[dict[str, Any]]) -> None:
-    PENDING_PATH.parent.mkdir(parents=True, exist_ok=True)
-    PENDING_PATH.write_text(json.dumps(rows, indent=1), encoding="utf-8")
+    """Replace the queue in one atomic step.
+
+    A plain write_text here used to truncate the file before rewriting it, so a
+    crash, a forced power cut or a full disk left a queue no parser accepted —
+    and the read above turned that into "nothing staged".
+    """
+    with _queue_lock:
+        PENDING_PATH.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            atomic_write(PENDING_PATH, json.dumps(rows, indent=1))
+        except OSError as exc:
+            raise JsGlobalError(f"pending order queue at {PENDING_PATH} could not be "
+                                f"written ({str(exc)[:120]}) — order refused") from exc
 
 
-def _prune() -> list[dict[str, Any]]:
-    return [r for r in _load() if time.time() - float(r.get("t", 0)) < TTL_S]
+def _age_s(row: dict[str, Any], now: float) -> float | None:
+    """Seconds since a ticket was staged, or None if it carries no usable time."""
+    try:
+        return now - float(row.get("t"))
+    except (TypeError, ValueError):
+        pass
+    try:
+        return (datetime.now()
+                - datetime.fromisoformat(str(row.get("ts")))).total_seconds()
+    except (TypeError, ValueError):
+        return None
+
+
+def _journal_gone(gone: list[tuple[dict[str, Any], float | None]],
+                  now: float) -> None:
+    """Record every ticket the TTL took out of the queue.
+
+    An expired ticket used to vanish on the next write with no event behind it:
+    the ack then said "no pending order (stale after 15 min)" and the trail
+    showed a stage that simply stopped existing.
+    """
+    for row, age in gone:
+        JOURNAL.log("JSG_TICKET_EXPIRED",
+                    {"id": row.get("id"), "symbol": row.get("symbol"),
+                     "side": row.get("side"), "qty": row.get("qty"),
+                     "price": row.get("price"), "staged_ts": row.get("ts"),
+                     "age_s": None if age is None else round(age),
+                     "ttl_s": TTL_S})
+
+
+def _prune(rows: list[dict[str, Any]],
+           now: float | None = None) -> list[dict[str, Any]]:
+    """The tickets still inside their TTL; the rest are journalled and dropped."""
+    if not rows:
+        return []
+    now = time.time() if now is None else now
+    live: list[dict[str, Any]] = []
+    gone: list[tuple[dict[str, Any], float | None]] = []
+    for row in rows:
+        age = _age_s(row, now)
+        if age is None or not math.isfinite(age) or age >= TTL_S:
+            gone.append((row, age))
+        else:
+            live.append(row)
+    if gone:
+        _save(live)
+        _journal_gone(gone, now)
+    return live
 
 
 def pending() -> list[dict[str, Any]]:
-    return _prune()
+    """The staged tickets, for display. Never raises — see queue_health()."""
+    global _last_queue_error
+    rows = _read_rows()
+    if rows is None:
+        return []
+    try:
+        return _prune(rows)
+    except JsGlobalError as exc:
+        _last_queue_error = (f"tickets expired but the queue could not be rewritten "
+                             f"({str(exc)[:120]})")
+        return rows
 
 
 def drop(pending_id: str) -> dict[str, Any]:
     """Discard a staged order. No broker call is ever made for it."""
-    rows = _prune()
-    row = next((r for r in rows if r["id"] == pending_id), None)
-    if row is None:
-        raise JsGlobalError(f"no pending order {pending_id}")
-    _save([r for r in rows if r["id"] != pending_id])
+    with _queue_lock:
+        rows = _prune(_load())
+        row = next((r for r in rows if r["id"] == pending_id), None)
+        if row is None:
+            raise JsGlobalError(f"no pending order {pending_id}")
+        _save([r for r in rows if r["id"] != pending_id])
     JOURNAL.log("JSG_DROPPED", {"id": pending_id, "symbol": row["symbol"],
                                 "side": row["side"], "qty": row["qty"],
                                 "price": row["price"]})
@@ -141,6 +263,10 @@ def stage(symbol: str, side: str, qty: float, price: float,
                             "js_global.allow_orders (or JSG_ALLOW_ORDERS)")
     if KILL.engaged():
         raise JsGlobalError("kill switch engaged — order staging blocked")
+    # Refuse before anything else spends a portal login or journalls a band
+    # check for an order that will not be written: a queue this process cannot
+    # read is a queue it must not replace.
+    _load()
 
     sym = symbol.strip().upper()
     bside = SIDES.get(side.strip().upper())
@@ -194,7 +320,10 @@ def stage(symbol: str, side: str, qty: float, price: float,
            "symbol": sym, "side": bside, "side_in": side.strip().upper(),
            "qty": qty, "price": price, "order_type": wire, "market": mkt,
            "note": note[:60]}
-    _save(_prune() + [row])
+    # read-modify-write as one step: an armed autopilot stages while a human is
+    # at the desk, and two unguarded rebuilds of the same file lose one of them
+    with _queue_lock:
+        _save(_prune(_load()) + [row])
     JOURNAL.log("JSG_STAGED", {k: row[k] for k in
                                ("id", "symbol", "side", "qty", "price",
                                 "order_type", "market", "note")})
@@ -202,6 +331,25 @@ def stage(symbol: str, side: str, qty: float, price: float,
 
 
 # ------------------------------------------------------------------ placing
+def _remove(pending_id: str) -> str | None:
+    """Take one ticket out of the queue, from the queue as it is now.
+
+    The list read before the POST is stale by the time the POST returns — an
+    order can sit in the broker for seconds, and a rewrite built from it would
+    put back anything staged meanwhile. Returns what went wrong, if anything:
+    callers must not treat a failed removal as a removal.
+    """
+    with _queue_lock:
+        rows = _read_rows()
+        if rows is None:
+            return f"queue at {PENDING_PATH} {_last_queue_error}"
+        try:
+            _save([r for r in rows if r.get("id") != pending_id])
+        except JsGlobalError as exc:
+            return str(exc)
+    return None
+
+
 def ack(pending_id: str, pin: str | None = None) -> dict[str, Any]:
     """Release the staged order to the broker. This moves real money."""
     c = _conf()
@@ -209,7 +357,7 @@ def ack(pending_id: str, pin: str | None = None) -> dict[str, Any]:
         raise JsGlobalError("order placement disabled")
     if KILL.engaged():
         raise JsGlobalError("kill switch engaged — order blocked")
-    rows = _prune()
+    rows = _prune(_load())
     row = next((r for r in rows if r["id"] == pending_id), None)
     if row is None:
         raise JsGlobalError(f"no pending order {pending_id} (stale after 15 min)")
@@ -220,17 +368,29 @@ def ack(pending_id: str, pin: str | None = None) -> dict[str, Any]:
         out = _post_order(c, row, use_pin)
     except JsGlobalError as exc:
         # A POST that died in transit may still have been executed by the
-        # broker. Drop the staged copy so nobody re-acks it into a duplicate.
-        _save([r for r in rows if r["id"] != pending_id])
+        # broker. The record comes first — if the queue write below then fails,
+        # the trail still says an order went out with an unknown outcome — and
+        # the staged copy is dropped so nobody re-acks it into a duplicate.
         JOURNAL.log("JSG_UNCONFIRMED", {"id": pending_id, "symbol": row["symbol"],
                                         "side": row["side"], "qty": row["qty"],
                                         "price": row["price"],
                                         "error": str(exc)[:200]})
+        stuck = _remove(pending_id)
+        note = "" if stuck is None else (f" — and it is STILL in the staging queue "
+                                         f"({stuck}); do not ack it again")
         raise JsGlobalError(f"{exc} — this order may or may not have reached "
                             "the broker; check your order list before staging "
-                            "it again") from exc
-    _save([r for r in rows if r["id"] != pending_id])
+                            f"it again{note}") from exc
+    stuck = _remove(pending_id)
     _forget_book()
+    if stuck is not None:
+        # The broker has the order. Saying so beats a clean-looking answer that
+        # leaves a re-ackable ticket behind for the same shares.
+        JOURNAL.log("JSG_QUEUE_STUCK", {"id": pending_id, "symbol": row["symbol"],
+                                        "order_no": out.get("order_no"),
+                                        "error": stuck[:200]})
+        out = {**out, "queue_warning": f"order went out but the staged copy could "
+                                       f"not be removed ({stuck}) — do not ack it again"}
     return out
 
 
