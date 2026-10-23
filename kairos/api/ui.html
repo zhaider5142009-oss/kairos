@@ -428,9 +428,18 @@ const dirTag=v=>{const d=dirCode(v);return d>0?'<span class="tag bull">▲ BULLI
 const esc=t=>String(t??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let UNIVERSE=[];
 
-async function api(path,opts){opts=opts||{};const m=(opts.method||'GET').toUpperCase();opts.headers=Object.assign({},opts.headers||{});if(m!=='GET')opts.headers['Content-Type']='application/json';const saved=localStorage.getItem('kairos_token')||'';if(saved)opts.headers['X-KAIROS-Token']=saved;
+// The desk fires ~14 endpoints before it paints, and each 401 used to open its own
+// dialog — with the pollers on top, a first-time operator faced a stack of prompts
+// that never stopped. One prompt per page load, shared by every waiting request.
+let TOKEN_ASK = null;
+function askToken(){if(!TOKEN_ASK)TOKEN_ASK=(async()=>{let t='';try{t=((prompt('KAIROS access token (value of KAIROS_TOKEN on this server):'))||'').trim();}catch(_){}if(t)localStorage.setItem('kairos_token',t);return t;})();return TOKEN_ASK}
+async function api(path,opts){opts=opts||{};const m=(opts.method||'GET').toUpperCase();opts.headers=Object.assign({},opts.headers||{});if(m!=='GET')opts.headers['Content-Type']='application/json';let sent=localStorage.getItem('kairos_token')||'';if(sent)opts.headers['X-KAIROS-Token']=sent;
 let r=await fetch(path,opts);let j=await r.json().catch(()=>({ok:false,error:'bad response'}));
-if(r.status===401){const t=prompt('KAIROS access token (value of KAIROS_TOKEN on this server):');if(t&&t.trim()){opts.headers['X-KAIROS-Token']=t.trim();localStorage.setItem('kairos_token',t.trim());r=await fetch(path,opts);j=await r.json().catch(()=>({ok:false,error:'bad response'}));}if(r.status===401)throw new Error('unauthorized — wrong or missing token');}
+if(r.status===401){const now=localStorage.getItem('kairos_token')||'';
+  if(now&&now!==sent)sent=now;else if(await askToken())sent=localStorage.getItem('kairos_token')||'';
+  if(!sent)throw new Error('unauthorized — no token entered, reload the desk to try again');
+  opts.headers['X-KAIROS-Token']=sent;r=await fetch(path,opts);j=await r.json().catch(()=>({ok:false,error:'bad response'}));
+  if(r.status===401)throw new Error('unauthorized — the token this page sent was refused, reload the desk to enter another');}
 if(!r.ok&&!j.ok)throw new Error(j.error||j.detail||('HTTP '+r.status));return j}
 
 /* ---------- nav ---------- */

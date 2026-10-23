@@ -11,12 +11,27 @@ What follows is a bracket walk, not a JavaScript engine. It knows only what a
 parser has to know about the one thing that matters here: which brackets must
 balance, once strings, comments, template literals and regex literals have
 taken out the brackets that are only text.
+
+The desk asked for its access token once per request, and every endpoint in the
+page — the watchlist, the health strip, the autopilot and live-book pollers — is
+a request. So the first paint of a locked desk stacked ~14 modal dialogs, and
+the timers kept adding more while the operator was still working through the
+ones already on screen: an error path that multiplied itself, and one that hid
+the page behind a dialog nobody had asked for. The last test in this file is not
+a bracket walk. It runs the desk's real token funnel under Node against a stub
+browser and counts the dialogs, because "at most one prompt" is a behaviour and
+no amount of reading the text proves a behaviour.
 """
 
 from __future__ import annotations
 
+import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 UI_PATH = Path(__file__).resolve().parents[1] / "kairos" / "api" / "ui.html"
 
@@ -215,3 +230,175 @@ def test_the_walk_survives_brackets_that_are_only_text():
     const e = 12 / 4; const f = (g) / 2;
     """
     assert _scan(src) == []
+
+
+# ---------------------------------------------------------------- token funnel
+# The desk's request helper, copied out of the page it ships in and run against a
+# stub browser. A test that carried its own retyped copy of `api()` would keep
+# passing after the desk lost the guard, so the slice is taken from markers and
+# both ends are asserted below.
+_FUNNEL_START = "let TOKEN_ASK"
+_FUNNEL_END = ("if(!r.ok&&!j.ok)throw new Error(j.error||j.detail||"
+               "('HTTP '+r.status));return j}")
+
+_HARNESS = r"""
+const fs = require('fs');
+const build = new Function('localStorage', 'fetch', 'prompt',
+  fs.readFileSync(process.argv[2], 'utf8') +
+  " ;return {api, askToken: (typeof askToken === 'function' ? askToken : null)};");
+
+function stubs(good, stored, answer) {
+  const table = new Map(stored ? [['kairos_token', stored]] : []);
+  const localStorage = {
+    getItem: k => (table.has(k) ? table.get(k) : null),
+    setItem: (k, v) => { table.set(k, v); },
+  };
+  let prompts = 0, fetches = 0, refused = 0;
+  const fetch = (path, opts) => {
+    fetches++;
+    const sent = (opts && opts.headers && opts.headers['X-KAIROS-Token']) || '';
+    if (good && sent === good) {
+      return Promise.resolve({status: 200, ok: true,
+                              json: () => Promise.resolve({ok: true})});
+    }
+    refused++;
+    return Promise.resolve({status: 401, ok: false,
+                            json: () => Promise.resolve({ok: false,
+                                                         error: 'unauthorized'})});
+  };
+  const prompt = () => { prompts++; return answer(prompts); };
+  return {localStorage, fetch, prompt,
+          stats: () => ({prompts, fetches, refused})};
+}
+
+async function scenario(good, stored, answer, first, ticks) {
+  const s = stubs(good, stored, answer);
+  const {api} = build(s.localStorage, s.fetch, s.prompt);
+  const batch = k => Promise.allSettled(
+    Array.from({length: k}, (_, i) => api('/api/e' + i)));
+  const all = (await batch(first)).concat(ticks ? await batch(ticks) : []);
+  return Object.assign(s.stats(), {
+    results: all.map(r => r.status === 'fulfilled'
+                       ? 'ok' : String(r.reason.message)),
+  });
+}
+
+const cases = {
+  // 14 endpoints on first paint, then two more poller ticks, answered once
+  storm:          () => scenario('GOOD', null,    () => 'GOOD',  14, 4),
+  dismissed:      () => scenario('GOOD', null,    () => null,    14, 4),
+  wrong_stored:   () => scenario('GOOD', 'WRONG', () => 'GOOD',  6, 0),
+  refused_again:  () => scenario('GOOD', 'WRONG', () => 'WRONG', 3, 0),
+  // a host that refuses to open dialogs at all — automation, embedded webviews
+  no_dialog_host: () => scenario('GOOD', null,
+    () => { throw new TypeError('prompt() is not supported.'); }, 5, 0),
+};
+
+(async () => {
+  const out = {};
+  for (const [name, fn] of Object.entries(cases)) {
+    try { out[name] = await fn(); }
+    catch (e) { out[name] = {crashed: String((e && e.message) || e)}; }
+  }
+  process.stdout.write(JSON.stringify(out));
+})();
+"""
+
+# How the desk shipped: one prompt per request, one per poller tick, forever.
+_BROKEN_FUNNEL = r"""
+let TOKEN_ASK = null;
+async function api(path,opts){opts=opts||{};opts.headers=Object.assign({},opts.headers||{});let sent=localStorage.getItem('kairos_token')||'';if(sent)opts.headers['X-KAIROS-Token']=sent;
+let r=await fetch(path,opts);let j=await r.json().catch(()=>({ok:false,error:'bad response'}));
+if(r.status===401){const t=prompt('KAIROS access token:');if(t&&t.trim()){opts.headers['X-KAIROS-Token']=t.trim();localStorage.setItem('kairos_token',t.trim());r=await fetch(path,opts);j=await r.json().catch(()=>({ok:false,error:'bad response'}));}if(r.status===401)throw new Error('unauthorized — wrong or missing token');}
+if(!r.ok&&!j.ok)throw new Error(j.error||('HTTP '+r.status));return j}
+"""
+
+
+def _token_funnel() -> str:
+    src = UI_PATH.read_text(encoding="utf-8")
+    i = src.find(_FUNNEL_START)
+    assert i >= 0, (f"no {_FUNNEL_START!r} in the desk — the token funnel moved "
+                    "or went away, and this test would be guarding nothing")
+    j = src.find(_FUNNEL_END, i)
+    assert j >= 0, "the desk's api() ended somewhere new — this slice is stale"
+    return src[i:j + len(_FUNNEL_END)]
+
+
+def _run_funnel(tmp_path: Path, code: str) -> dict:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("no node on this box — the funnel's behaviour cannot be "
+                    "watched here, only its text")
+    src = tmp_path / "funnel.js"
+    src.write_text(code, encoding="utf-8")
+    harness = tmp_path / "harness.js"
+    harness.write_text(_HARNESS, encoding="utf-8")
+    r = subprocess.run([node, str(harness), str(src)],
+                       capture_output=True, text=True, timeout=120, check=False)
+    assert r.returncode == 0, f"the stub browser died: {r.stderr[:400]}"
+    return json.loads(r.stdout)
+
+
+def test_the_funnel_under_test_is_the_one_the_desk_ships():
+    """Runs with or without Node: the slice must still be a token funnel, and
+    still only one — a second `prompt(` in here is the defect coming back."""
+    src = _token_funnel()
+    assert "async function api(" in src, "the slice stopped holding the desk's api()"
+    assert "function askToken()" in src, "the desk no longer shares one prompt"
+    assert src.count("prompt(") == 1, (
+        f"{src.count('prompt(')} calls to prompt() in the request helper — "
+        "the desk can open more than one dialog for one page load")
+
+
+def test_one_locked_desk_asks_for_the_token_once_not_once_per_request(tmp_path):
+    out = _run_funnel(tmp_path, _token_funnel())
+    storm = out["storm"]
+    assert "crashed" not in storm, storm
+    # the stub has to actually lock the desk, or "one prompt" means nothing
+    assert storm["refused"] >= 14, (
+        f"only {storm['refused']} requests were refused — the stub answered an "
+        "unauthorized desk, so this test proved nothing")
+    assert storm["prompts"] == 1, (
+        f"first paint plus two poller ticks opened {storm['prompts']} dialogs")
+    assert set(storm["results"]) == {"ok"}, storm["results"]
+
+
+def test_a_dismissed_prompt_is_not_asked_again_by_the_next_poller(tmp_path):
+    out = _run_funnel(tmp_path, _token_funnel())
+    gone = out["dismissed"]
+    assert gone["prompts"] == 1, (
+        f"the operator already said no, and the desk asked {gone['prompts']} times")
+    assert all("no token entered" in m for m in gone["results"]), gone["results"]
+
+
+def test_a_stored_token_the_server_refuses_is_replaced_by_one_prompt(tmp_path):
+    out = _run_funnel(tmp_path, _token_funnel())
+    bad = out["wrong_stored"]
+    assert bad["prompts"] == 1, f"{bad['prompts']} dialogs to fix one bad token"
+    assert set(bad["results"]) == {"ok"}, bad["results"]
+    same = out["refused_again"]
+    assert same["prompts"] == 1, same["prompts"]
+    assert all("was refused" in m for m in same["results"]), same["results"]
+
+
+def test_a_host_with_no_dialogs_says_so_instead_of_showing_an_engine_error(tmp_path):
+    """`prompt()` throws outright under automation and inside embedded webviews.
+    That engine message used to be the only thing the operator ever saw."""
+    out = _run_funnel(tmp_path, _token_funnel())
+    quiet = out["no_dialog_host"]
+    assert "crashed" not in quiet, quiet
+    assert all("no token entered" in m for m in quiet["results"]), quiet["results"]
+
+
+def test_the_guard_bites_on_the_prompt_storm_it_was_written_for(tmp_path):
+    """The shipped-before funnel, replayed: 14 concurrent 401s and two poller
+    ticks opened one dialog each. A test that can only pass on fixed code is a
+    test that cannot see the defect it names."""
+    out = _run_funnel(tmp_path, _BROKEN_FUNNEL)
+    storm = out["storm"]
+    assert storm["prompts"] > 1, (
+        "the old funnel opened fewer than two dialogs — the stub is not "
+        "reproducing a locked desk")
+    assert storm["prompts"] >= storm["refused"] - 1, (
+        "one prompt per refused request is the claim being falsified, and it held "
+        f"only {storm['prompts']} times for {storm['refused']} refusals")
