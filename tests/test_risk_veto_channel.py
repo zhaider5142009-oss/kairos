@@ -129,9 +129,10 @@ def _frame(n=120):
         "volume": [1_000_000.0] * n})
 
 
-def _engine(monkeypatch, votes):
+def _engine(monkeypatch, votes, battery=()):
     eng = E.PredictionEngine(md=_StubMd(_frame()))
-    monkeypatch.setattr(eng, "_battery", lambda inst, df, horizon: [])
+    monkeypatch.setattr(eng, "_battery",
+                        lambda inst, df, horizon: list(battery))
     monkeypatch.setattr(eng, "intermarket", lambda force=False: {})
     monkeypatch.setattr(eng, "factor_row", lambda inst: pd.Series(dtype=float))
     monkeypatch.setattr(eng, "_news_cache", (0.0, []), raising=False)
@@ -141,8 +142,8 @@ def _engine(monkeypatch, votes):
     return eng
 
 
-def _weight_and_notes(monkeypatch, votes):
-    res = _engine(monkeypatch, votes)._predict_uncached(
+def _weight_and_notes(monkeypatch, votes, battery=()):
+    res = _engine(monkeypatch, votes, battery)._predict_uncached(
         "GOLD", 5, use_wsl=False, include_news=False)
     assert res["ok"] is True, res.get("error")
     return res["risk"]["suggested_weight"], res["risk"]["notes"], res
@@ -166,3 +167,21 @@ def test_reduce_size_actually_reduces_size(monkeypatch):
     # And a smaller position has to name the member that asked for it.
     assert "Amihud Illiquidity Cost" in notes_vetoed
     assert "Amihud" not in notes_plain
+
+
+def test_the_journalled_factor_is_the_factor_applied(monkeypatch):
+    """`notes` is prose nobody parses; the journal and the desk read the number.
+
+    Both have to describe the arithmetic that already happened, or a record
+    claims a brake on a weight that was sized without it.
+    """
+    plain, _, res_plain = _weight_and_notes(monkeypatch, [_vote(1, 0.9, "Bull")])
+    braked, _, res_vetoed = _weight_and_notes(
+        monkeypatch, [_vote(1, 0.9, "Bull"), _vote(0, 0.6, "Amihud Illiquidity Cost")])
+    sig = res_vetoed["signal"]
+    assert sig["risk_veto_x"] == pytest.approx(veto_size_multiplier(sig["risk_veto"]))
+    assert sig["risk_veto_name"] == "Amihud Illiquidity Cost"
+    assert braked == pytest.approx(plain * sig["risk_veto_x"], abs=2e-4)
+    # an unbraked thesis must not journal a brake that saved it from itself
+    assert res_plain["signal"]["risk_veto_x"] == 1.0
+    assert res_plain["signal"]["risk_veto_name"] == ""

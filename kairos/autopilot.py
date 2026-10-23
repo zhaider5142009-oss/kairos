@@ -455,6 +455,13 @@ class Autopilot:
                          "news": (res.get("news") or {}).get("score"),
                          "news_source": (res.get("news") or {}).get("source"),
                          "condition": res.get("condition"),
+                         # The brake behind `weight`. A row that shows a third of
+                         # the size the thesis earned, with no reason attached, is
+                         # indistinguishable from a sizing bug, and `position_notes`
+                         # does not reach this table.
+                         "risk_veto": s.get("risk_veto", 0.0),
+                         "veto_by": s.get("risk_veto_name", ""),
+                         "veto_x": s.get("risk_veto_x", 1.0),
                          "action": action, "detail": detail})
 
         rows.sort(key=lambda r: -abs(r.get("score") or 0))

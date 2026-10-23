@@ -491,6 +491,13 @@ class PredictionEngine:
                 # member that raised it. Without the number a shrunken book is
                 # only deniable prose in `notes`.
                 "risk_veto": signal.risk_veto,
+                # The name and the exact factor are journalled with the strength
+                # because the desk reads this block, not `position_notes`: a
+                # weight that is smaller than the thesis earned has to come with
+                # who asked for it and by how much, or the operator is being
+                # handed an unexplained number.
+                "risk_veto_name": signal.details.get("risk_veto_name") or "",
+                "risk_veto_x": round(veto_size_multiplier(signal.risk_veto), 3),
                 "shrinkage": signal.details.get("shrinkage"),
             },
             "targets": {k: round(v, 4) for k, v in targets.items()},
