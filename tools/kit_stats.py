@@ -199,6 +199,28 @@ STAMP_RULES = [
 DECK_PPTX = f"{PACK_DIR}/KAIROS_Investor_Deck.pptx"
 
 
+def _slide_order(z) -> list[str]:
+    """The slide parts of a .pptx, in the order the deck plays them.
+
+    Sorting the part names is not that order. PowerPoint keeps a part's name when
+    its slide moves, so a rearranged deck plays slide7.xml before slide4.xml while
+    the names still count up. The sweep rules pair a percentage with the nearest
+    instrument name *before* it, so reading pages in a sequence no audience sees
+    can charge one page's return to another page's instrument — and a page pushed
+    to the end of that reading can stop owning any figure at all, which the guard
+    then reports as absent rather than wrong.
+    """
+    pres = z.read("ppt/presentation.xml").decode("utf-8", errors="replace")
+    rels = z.read("ppt/_rels/presentation.xml.rels").decode("utf-8", errors="replace")
+    target = {m.group(1): f"ppt/slides/{m.group(2)}" for m in re.finditer(
+        r'Id="(rId\d+)"[^>]*Target="(?:[^"]*?/)?(slide\d+\.xml)"', rels)}
+    order = [target[rid] for rid in
+             re.findall(r'<p:sldId[^>]*r:id="(rId\d+)"', pres) if rid in target]
+    if not order:
+        raise RuntimeError("presentation.xml lists no slides")
+    return order
+
+
 def pptx_text(path: Path) -> str:
     """Every text run in a .pptx, in slide order, flattened so the rules match.
 
@@ -207,13 +229,10 @@ def pptx_text(path: Path) -> str:
     import zipfile
     from html import unescape
     with zipfile.ZipFile(path) as z:
-        slides = [n for n in z.namelist()
-                  if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)]
-        slides.sort(key=lambda n: int(re.search(r"\d+", n.rsplit("/", 1)[-1]).group()))
-        runs = []
-        for name in slides:
-            xml = z.read(name).decode("utf-8", errors="replace")
-            runs.append(" ".join(re.findall(r"<a:t>(.*?)</a:t>", xml)))
+        runs = [" ".join(re.findall(
+                    r"<a:t>(.*?)</a:t>",
+                    z.read(name).decode("utf-8", errors="replace")))
+                for name in _slide_order(z)]
     return re.sub(r"\s+", " ", unescape(" ".join(runs)))
 
 

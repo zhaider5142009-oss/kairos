@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import re
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -174,6 +175,45 @@ def test_a_deck_figure_in_a_prose_sentence_is_reachable(figures):
         assert body.count(good) >= 2, f"{good!r} is quoted in one place only"
         assert _stale_figures(body.replace(good, wrong, 1), figures), \
             f"corrupting {good!r} left the deck guard green"
+
+
+def test_the_deck_is_flattened_in_play_order_not_part_order(tmp_path):
+    """A moved slide keeps its part name, and the sweep rules read what came before.
+
+    `pptx_text` used to sort `ppt/slides/slideN.xml` by N, which is the order the
+    parts were written in, not the order the deck plays them: PowerPoint reuses a
+    part name when a slide is dragged elsewhere, so a reordered deck flattens into
+    a sequence no audience ever sees. That matters here because a figure is
+    attributed to the nearest instrument name *before* it — a rearrangement can put
+    "+43.5%" ahead of its own SILVER and leave the return compared by no rule, and
+    the guard calls an unattributed figure absent rather than wrong. So the order
+    is resolved through presentation.xml, and this is the case where the two orders
+    disagree.
+    """
+    def slide(*runs: str) -> str:
+        body = "".join(f"<a:t>{r}</a:t>" for r in runs)
+        return f'<?xml version="1.0"?><p:sld><p:cSld><p:spTree>{body}</p:spTree></p:cSld></p:sld>'
+
+    # part 1 is the return and part 2 the instrument, but the deck plays part 2 first
+    deck = tmp_path / "reordered.pptx"
+    with zipfile.ZipFile(deck, "w") as z:
+        z.writestr("ppt/presentation.xml",
+                   '<p:presentation><p:sldIdLst>'
+                   '<p:sldId id="256" r:id="rId9"/>'
+                   '<p:sldId id="257" r:id="rId7"/></p:sldIdLst></p:presentation>')
+        z.writestr("ppt/_rels/presentation.xml.rels",
+                   '<Relationships>'
+                   '<Relationship Id="rId7" Target="slides/slide1.xml"/>'
+                   '<Relationship Id="rId9" Target="slides/slide2.xml"/>'
+                   '</Relationships>')
+        z.writestr("ppt/slides/slide1.xml", slide("+43.5%"))
+        z.writestr("ppt/slides/slide2.xml", slide("SILVER"))
+    body = kit_stats.pptx_text(deck)
+    assert body.index("SILVER") < body.index("+43.5%"), \
+        f"the deck was read in part-name order, so its return precedes its instrument: {body!r}"
+    sym = kit_stats._attributed(body, sorted(kit_stats.sweep(), key=len, reverse=True),
+                                body.index("+43.5%"))
+    assert sym == "SILVER", f"the sweep guard reads {body!r} as {sym!r}, not SILVER"
 
 
 @pytest.mark.parametrize("path", LINTED, ids=lambda p: p.name)
@@ -358,6 +398,40 @@ def test_a_venue_mean_is_checked_against_the_book_it_names():
     stale = {"x.md": f"{means['Global']}% mean across the global book, against "
                      f"13.6% across the equity book.\n"}
     assert kit_stats.stale_sweep_quotes(stale), stale
+
+
+def test_every_sweep_figure_the_deck_prints_can_be_named():
+    """A deck percentage the sweep guard cannot attribute is one that goes stale green.
+
+    The instrument returns and the two book means are hand-copied into the slides,
+    and the guard finds their owner either from the nearest instrument name in a
+    window or from the book word beside the number. Both are properties of the
+    layout, not of the file, and the sweep test above only asks the guard to find
+    nothing — so a slide that printed "+43.5%" in one text box and SILVER in
+    another, in the other order or past the window, would leave that return
+    compared by no rule while the run stayed green. That is the same failure slide
+    5's repository triple had, and here nothing but the layout keeps it from
+    happening. So corrupt each signed percentage where it sits and require the
+    guard to name it.
+    """
+    if not DECK_PPTX.is_file():
+        pytest.skip("no pptx in this checkout")
+    # normalized the way `stale_sweep_quotes` normalizes, so these offsets are the
+    # text the guard reads and a corrupted copy needs no second treatment
+    body = re.sub(r"\s+", " ",
+                  kit_stats.pptx_text(DECK_PPTX).replace("\n>", " ").replace("**", " "))
+    name = DECK_PPTX.relative_to(ROOT).as_posix()
+    sites = [(kit_stats._attributed(body, sorted(kit_stats.sweep(), key=len, reverse=True),
+                                    m.start()), m) for m in kit_stats.PCT.finditer(body)]
+    assert sites, "the deck prints no signed percentages, so this checks nothing"
+    for sym, m in sites:
+        bad = body[:m.start()] + "+77.7%" + body[m.end():]
+        hits = kit_stats.stale_sweep_quotes({name: bad})
+        assert any("+77.7%" in h for h in hits), \
+            (f"{sym or 'unattributed'} figure {m.group(0)!r} corrupted at {m.start()} "
+             f"and the guard reported nothing: the deck prints a sweep figure in a "
+             f"shape no rule can reach")
+    assert kit_stats.stale_sweep_quotes({name: body}) == []
 
 
 def test_a_sweep_ratio_is_checked_wherever_its_word_sits():
