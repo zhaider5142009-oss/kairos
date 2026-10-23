@@ -169,8 +169,8 @@ def test_reduce_size_actually_reduces_size(monkeypatch):
     assert "Amihud" not in notes_plain
 
 
-def test_the_journalled_factor_is_the_factor_applied(monkeypatch):
-    """`notes` is prose nobody parses; the journal and the desk read the number.
+def test_the_published_factor_is_the_factor_applied(monkeypatch):
+    """`notes` is prose nobody parses: the desk and the forward record read the number.
 
     Both have to describe the arithmetic that already happened, or a record
     claims a brake on a weight that was sized without it.

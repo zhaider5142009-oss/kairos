@@ -53,6 +53,15 @@ class Snapshot:
     # macro axis" from "this row is missing data" cannot do either reliably.
     condition: str | None = None
     strategies: dict[str, int] | None = None
+    # The size half of the same argument. A position that matured at a third
+    # below its own conviction is a data point about the brake, and the brake
+    # was the one thing this row did not keep: the strength and the member that
+    # raised it lived only in the desk's in-memory table, which the next cycle
+    # overwrites. Stored as the strength, not the multiplier, because the
+    # multiplier is a pure function of it — journalling both would create a
+    # second number that a later change to that function could contradict.
+    veto: float | None = None
+    veto_by: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {"ts": self.ts, "symbol": self.symbol, "horizon": self.horizon,
@@ -60,7 +69,9 @@ class Snapshot:
                 "expected_return": self.expected_return, "price": self.price,
                 "direction": self.direction, "regime": self.regime,
                 "condition": self.condition,
-                "strategies": self.strategies, "resolved": False}
+                "strategies": self.strategies,
+                "veto": self.veto, "veto_by": self.veto_by,
+                "resolved": False}
 
 
 def record(res: dict[str, Any]) -> None:
@@ -83,6 +94,9 @@ def record(res: dict[str, Any]) -> None:
         price=res["price"], direction=sig["direction"],
         regime=str(regime)[:40] if regime else None,
         condition=(str(res.get("condition"))[:40] if res.get("condition") else None),
+        veto=(round(float(sig["risk_veto"]), 3) if sig.get("risk_veto") else None),
+        veto_by=(str(sig.get("risk_veto_name"))[:60]
+                 if sig.get("risk_veto_name") else None),
         strategies=spoke or None)
     JOURNAL.parent.mkdir(parents=True, exist_ok=True)
     with _WRITE_LOCK, JOURNAL.open("a", encoding="utf-8") as fh:

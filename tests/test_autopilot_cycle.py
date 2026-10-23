@@ -130,6 +130,78 @@ def test_the_brake_reaches_the_order_not_only_the_display(monkeypatch, tmp_path)
     assert pres["risk"]["suggested_weight"] != bres["risk"]["suggested_weight"]
 
 
+# -------------------------------------------------------------------- the record
+def _journalled(monkeypatch, tmp_path, votes, name):
+    """Run one prediction through `feedback.record` into a journal of our own."""
+    import json
+
+    import kairos.feedback as FB
+    res = _weight_and_notes(monkeypatch, votes)[2]
+    path = tmp_path / f"{name}.journal.jsonl"
+    monkeypatch.setattr(FB, "JOURNAL", path)
+    FB.record(res)
+    rows = [json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines()
+            if ln.strip()]
+    assert len(rows) == 1
+    return rows[0], FB, path, res
+
+
+def test_the_brake_survives_into_the_forward_record(monkeypatch, tmp_path):
+    """The desk row is overwritten by the next cycle; the journal is the record
+    an auditor reopens a year later, and it had no veto field at all."""
+    row, _fb, _p, res = _journalled(monkeypatch, tmp_path, _WARN, "jb")
+    assert row["veto"] == pytest.approx(res["signal"]["risk_veto"])
+    assert row["veto_by"] == "Amihud Illiquidity Cost"
+    # stored as the strength, because the factor is a function of it
+    assert row["veto"] == 0.6
+
+
+def test_an_unbraked_prediction_journalls_no_brake(monkeypatch, tmp_path):
+    row, _fb, _p, _res = _journalled(monkeypatch, tmp_path, _BULL, "jn")
+    assert row["veto"] is None and row["veto_by"] is None
+
+
+def test_the_record_keeps_the_brake_through_a_resolve_pass(monkeypatch, tmp_path):
+    """`resolve_outcomes` rewrites the whole file from the rows it parsed. A
+    writer that rebuilt each row through the snapshot class would have dropped
+    any field the resolver does not know about — which is how a durable record
+    loses the one column nobody reads yet."""
+    import json
+
+    import kairos.feedback as FB
+    from test_risk_veto_channel import _StubMd, _frame
+    row, _fb, path, _res = _journalled(monkeypatch, tmp_path, _WARN, "jr")
+    row["ts"] = "2024-01-05T00:00:00"          # matured against the stub tape
+    path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    monkeypatch.setattr(FB, "_direction_threshold", lambda: 0.18)
+    FB.resolve_outcomes(_StubMd(_frame()))
+    after = [json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines()
+             if ln.strip()]
+    assert after[0]["veto"] == 0.6, "the resolve pass dropped the brake"
+    assert after[0]["veto_by"] == "Amihud Illiquidity Cost"
+    assert after[0]["resolved"] is True, "nothing was rewritten, so this proved nothing"
+
+
+def test_a_row_written_before_the_field_existed_still_resolves(monkeypatch, tmp_path):
+    """The journal has 3,700-odd lines with no veto key, and the resolver reads
+    all of them, so absence is the normal state and must stay legal."""
+    import json
+
+    import kairos.feedback as FB
+    from test_risk_veto_channel import _StubMd, _frame
+    legacy = {"ts": "2024-01-05T00:00:00", "symbol": "GOLD", "horizon": 5,
+              "score": 0.4, "confidence": 0.6, "expected_return": 0.03,
+              "price": 100.0, "direction": "BUY", "strategies": None,
+              "resolved": False}
+    path = tmp_path / "legacy.journal.jsonl"
+    monkeypatch.setattr(FB, "JOURNAL", path)
+    path.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
+    monkeypatch.setattr(FB, "_direction_threshold", lambda: 0.18)
+    assert FB.resolve_outcomes(_StubMd(_frame())) == 1
+    got = json.loads(path.read_text(encoding="utf-8"))
+    assert got["resolved"] is True and "veto" not in got
+
+
 # ------------------------------------------------------------------- the render
 def _weight_cell() -> str:
     html = UI.read_text(encoding="utf-8")
