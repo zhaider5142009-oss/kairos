@@ -29,12 +29,12 @@ Built by one operator, running 24/7, publishing its own losses.
 
 | | |
 |---|---|
-| Code | 13,112 lines Python · 37 modules · public repo |
+| Code | 13,654 lines Python · 38 modules · public repo |
 | Strategies | 100 voting into the live consensus; the sweep fits one blended signal, not the library |
 | Council | 6 configured LLM seats across 2 providers; a dead seat shrinks the council |
 | Execution | paper + JS Global PSX bridge + MT5 |
 | Uptime | 24/7 daemon, watchdog, token-gated public API |
-| Tests | 395 passing, money path included |
+| Tests | 405 passing, money path included |
 
 Not a fund. No client money. No licence. No AUM.
 
@@ -67,9 +67,9 @@ conviction.
 
 ## 6. What is *not* proven
 
-- **No forward track record.** 3,175 predictions journaled, 263 horizons matured, all 140 were
+- **No forward track record.** 3,197 predictions journaled, 263 horizons matured, all 140 were
   non-trades. A directional hit rate does not yet exist.
-- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 359 cycles, 2 fills.
+- Paper book flat: −Rs 13.05 realized on Rs 1,000,000 across 361 cycles, 2 fills.
 - Live execution path is built and gated, not exercised at scale.
 - No audit, no team, no third-party capital.
 
@@ -317,7 +317,9 @@ chart.
    excess over the base rate of its bucket — same instrument, horizon and regime — measured
    out-of-sample, and the engine refuses the weights and runs a flat poll if the evidence is
    stale, incomplete, or measured against a library of a different size.
-5. Venue-agnostic risk layer — PSX today, MT5 now, PMX scaffolded.
+5. Venue-agnostic risk layer — PSX cash, MT5 commodities and FX, PMEX futures. The
+   bridge attaches only to the account it was configured for, and its link cost is a
+   measured number (`tools/mt5_probe.py`), not an adjective.
 6. Secrets handling: broker PIN storable in git-ignored config only, never logged or echoed,
    one-click disarm.
 

@@ -176,9 +176,8 @@ class Autopilot:
             if not (mt5_up or psx_up):
                 return {"ok": False,
                         "error": "no live venue reachable — MT5: "
-                                 f"{self.mt5.last_error or 'not attached'} (open "
-                                 "MetaTrader 5, sign in to JS Markets, enable Algo "
-                                 "Trading) | JS Global: needs autopilot.auto_place "
+                                 f"{self.mt5.last_error or 'not attached'} | "
+                                 "JS Global: needs autopilot.auto_place "
                                  "+ js_global.allow_orders + the trading PIN"}
             venues = " + ".join(n for n, ok in (("MT5", mt5_up),
                                                 ("JS Global PSX", psx_up)) if ok)

@@ -197,10 +197,18 @@ backtest:
 # never here. The terminal must be installed; leave login empty to simply
 # attach to an already-signed-in terminal.
 mt5:
+  # Attach-only bridge to the desktop terminal. KAIROS reads `account_info()` and
+  # refuses the link if the signed-in account is not the one below, so two MT5
+  # installs on one machine cannot be confused for each other.
+  venue: "your MT5 broker"          # PMEX, JS Markets, … — only used in messages
   login: 0
   password: ""
-  server: "JS-Markets-Demo"
+  server: ""                        # leave blank to attach to whatever is signed in
   terminal_path: "C:/Program Files/MetaTrader 5/terminal64.exe"
+  # Let KAIROS start this terminal again if nobody opened it (a 24/7 loop cannot
+  # depend on a GUI app). It launches the app only, never with credentials: the
+  # account has to be saved inside the terminal itself. Off by default.
+  spawn: false
 
 # Trading doctrine overrides (see kairos/rules.py for the full parameter set;
 # runtime overrides also possible via data/rules.json)

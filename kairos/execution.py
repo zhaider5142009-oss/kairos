@@ -446,7 +446,7 @@ class PaperBroker:
 
 
 # ---------------------------------------------------------------------------
-# MT5 live bridge (JS Markets / any MT5 broker)
+# MT5 live bridge (PMEX futures, JS Markets, any MT5 broker)
 # ---------------------------------------------------------------------------
 MT5_SYMBOL_MAP = {
     "GOLD": "XAUUSD", "SILVER": "XAGUSD", "WTI": "USOIL", "BRENT": "UKOIL",
@@ -457,42 +457,130 @@ MT5_SYMBOL_MAP = {
 
 
 class Mt5Bridge:
-    """Live MetaTrader 5 bridge with ATTACH-ONLY semantics.
+    """Live MetaTrader 5 bridge with ATTACH-ONLY semantics by default.
 
-    KAIROS never launches the terminal — the desktop MetaTrader 5 app is the
+    KAIROS does not launch the terminal — the desktop MetaTrader 5 app is the
     operator's own process. We attach to it only while `terminal64.exe` is
     already running and signed in; otherwise every call fails closed with a
-    clear instruction. Reconnection is automatic but throttled, and a dead
-    link degrades state instead of crashing anything.
-    Every failure fails CLOSED (no order is placed)."""
+    clear instruction. `mt5.spawn: true` is the operator's explicit permission to
+    start the configured terminal again, and even then it never passes
+    credentials on a command line. Reconnection is automatic but throttled, and
+    a dead link degrades state instead of crashing anything.
+    Attaching is refused if the running terminal is signed into a different
+    account than the configured one. Every failure fails CLOSED (no order is
+    placed)."""
 
     _ATTACH_COOLDOWN_S = 20.0
+    _SPAWN_WAIT_S = 30.0
     _last_attach_try = 0.0          # class-level: shared across instances
 
     def __init__(self) -> None:
         self._mt5: Any = None
         self.connected = False
         self.last_error = ""
+        self.attached_account: dict[str, Any] = {}
         self.last_order_latency_ms: float | None = None
 
     @staticmethod
     def _terminal_running() -> bool:
+        return bool(Mt5Bridge._running_terminal_path(cached_only=True))
+
+    @staticmethod
+    def _running_terminal_path(cached_only: bool = False) -> str:
+        """Executable path of the running terminal64, or "" if none is running.
+
+        Two MT5 installs is now a real situation rather than a corner case — the
+        operator has a broker terminal and a PMEX terminal — and "some terminal is
+        open" is not the same fact as "the terminal we mean is open". Asking the
+        process itself is the only way to tell them apart without launching one.
+        """
         if sys.platform != "win32":
+            return ""
+        key = "_terminal_path_cache"
+        now = time.time()
+        if cached_only:
+            return getattr(Mt5Bridge, key, ("", 0.0))[0]
+        path, stamp = getattr(Mt5Bridge, key, ("", 0.0))
+        if now - stamp < 20.0:
+            return path
+        found = ""
+        try:
+            import subprocess
+            out = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq terminal64.exe", "/FO", "CSV", "/NH"],
+                capture_output=True, text=True, timeout=10, check=False)
+            if "terminal64.exe" in out.stdout.lower():
+                try:
+                    ps = subprocess.run(
+                        ["powershell", "-NoProfile", "-Command",
+                         "(Get-Process terminal64 -ErrorAction SilentlyContinue)."
+                         "Path -join '|'"],
+                        capture_output=True, text=True, timeout=10, check=False)
+                    found = (ps.stdout or "").strip()
+                except Exception:
+                    found = ""
+        except Exception:
+            found = ""
+        Mt5Bridge._terminal_path_cache = (found, now)
+        return found
+
+    def _hint(self) -> str:
+        m = CFG.section("mt5") or {}
+        venue = str(m.get("venue") or "your MT5 broker").strip()
+        server = str(m.get("server") or "").strip()
+        where = f" on {server}" if server else ""
+        how = ("mt5.spawn is armed, so KAIROS may start it again on its own"
+               if m.get("spawn") else
+               "KAIROS attaches automatically once it is open; it does not launch "
+               "the terminal unless mt5.spawn is armed")
+        return (f"open MetaTrader 5, sign in to {venue}{where} and enable Algo "
+                f"Trading. {how}.")
+
+    @staticmethod
+    def _spawn_armed() -> bool:
+        return bool((CFG.section("mt5") or {}).get("spawn"))
+
+    def _maybe_spawn(self, want_path: str) -> bool:
+        """Start the operator's own terminal when — and only when — they armed it.
+
+        A 24/7 loop that depends on a GUI app somebody opened once is not
+        institutional: the terminal closes, an update reboots the machine, and the
+        system silently stops seeing the market while its journals keep filling
+        with "not attached". `mt5.spawn` is the operator's word for "you may open
+        it again". It is off by default, and it is deliberately *not* given the
+        credentials: the account has to be one the terminal saves for itself,
+        because a password passed on a command line is readable by every other
+        process on the box, including ours in a crash dump.
+        """
+        m = CFG.section("mt5") or {}
+        if not m.get("spawn"):
+            return False
+        if not want_path or not os.path.isfile(want_path):
+            self.last_error = ("mt5.spawn is armed but the configured terminal_path is "
+                               "not a file, so there is nothing to start")
             return False
         try:
             import subprocess
-            # not check=True: tasklist exits 0 with "no tasks" in stdout, and
-            # the answer is the string test below, not the return code
-            out = subprocess.run(
-                ["tasklist", "/FI", "IMAGENAME eq terminal64.exe"],
-                capture_output=True, text=True, timeout=10, check=False)
-            return "terminal64.exe" in out.stdout.lower()
-        except Exception:
+            subprocess.Popen([want_path], cwd=os.path.dirname(want_path))
+        except Exception as exc:
+            self.last_error = f"mt5.spawn could not start the terminal: {exc}"
             return False
+        deadline = time.time() + Mt5Bridge._SPAWN_WAIT_S
+        while time.time() < deadline:
+            if self._running_terminal_path():
+                JOURNAL.log("MT5_TERMINAL_SPAWNED",
+                            {"path": want_path, "waited_s":
+                             round(Mt5Bridge._SPAWN_WAIT_S - (deadline - time.time()), 1)})
+                return True
+            time.sleep(1.0)
+        self.last_error = (f"started {want_path} but no terminal64 appeared within "
+                           f"{Mt5Bridge._SPAWN_WAIT_S:.0f}s — an account that is not "
+                           "saved in the terminal cannot be signed in from here")
+        return False
 
     def attach(self, login: int | None = None, password: str | None = None,
                server: str | None = None, terminal_path: str | None = None) -> bool:
-        """Join an ALREADY-RUNNING terminal. Never spawns one."""
+        """Join an ALREADY-RUNNING terminal, unless the operator armed a respawn."""
         import time as _t
         if _t.time() - Mt5Bridge._last_attach_try < Mt5Bridge._ATTACH_COOLDOWN_S:
             return self.connected
@@ -504,13 +592,39 @@ class Mt5Bridge:
             self.connected = False
             return False
         self._mt5 = mt5
-        if not self._terminal_running():
+        want_path = str(terminal_path or "").strip().rstrip('"')
+        running = self._running_terminal_path()
+        spawn_tried = False
+        if not running and self._spawn_armed():
+            spawn_tried = True
+            if self._maybe_spawn(want_path):
+                running = self._running_terminal_path()
+        if not running:
             self.connected = False
-            self.last_error = ("MT5 terminal is not running — open MetaTrader 5, sign in "
-                               "to JS Markets and enable Algo Trading. KAIROS will attach "
-                               "automatically; it never launches the terminal itself.")
+            if spawn_tried and self.last_error:
+                # The specific reason — "that path is not a file", "no terminal
+                # appeared within 30s" — must survive. Replacing it with the
+                # generic instruction is how a supervisor tells an operator to
+                # open an app that is already trying to open.
+                return False
+            self.last_error = f"MT5 terminal is not running — {self._hint()}"
             return False
         kwargs: dict[str, Any] = {}
+        if want_path:
+            # `initialize(path=...)` launches the terminal when that path is not
+            # the one already open, which is exactly the thing this bridge
+            # promises never to do. So the path is only forwarded when the
+            # running process really is that install.
+            seen = [p.strip() for p in running.split("|")]
+            norm = os.path.normcase(os.path.abspath(want_path))
+            if not any(os.path.normcase(os.path.abspath(p)) == norm for p in seen if p):
+                self.connected = False
+                self.last_error = (
+                    f"the running MT5 terminal is {seen[0] if seen else 'unknown'}, not the "
+                    f"configured {want_path} — attach refused rather than sign in to a "
+                    "second terminal behind the operator's back")
+                return False
+            kwargs["path"] = want_path
         if login and password and server:
             kwargs.update({"login": int(login), "password": password, "server": server})
         try:
@@ -518,11 +632,33 @@ class Mt5Bridge:
                 self.last_error = f"MT5 attach failed: {mt5.last_error()}"
                 self.connected = False
                 return False
-            if mt5.account_info() is None:
+            info = mt5.account_info()
+            if info is None:
                 self.last_error = ("MT5 terminal is running but NOT signed in — "
-                                   "log in to your JS Markets account in the terminal.")
+                                   + self._hint())
                 self.connected = False
                 return False
+            self.attached_account = {"login": int(getattr(info, "login", 0) or 0),
+                                     "server": str(getattr(info, "server", "") or "")}
+            if login:
+                # The bridge used to attach to whichever terminal happened to be
+                # open and then trade it. With a broker account and a PMEX account
+                # both reachable from one machine, "an MT5 account" is not enough
+                # of an answer: sizing, positions and the kill switch all divide
+                # by the equity of whatever `account_info()` returns.
+                if self.attached_account["login"] != int(login):
+                    self.last_error = (
+                        f"terminal is signed into account "
+                        f"{self.attached_account['login'] or '?'} on "
+                        f"{self.attached_account['server'] or '?'}, not the configured "
+                        f"account {int(login)} — attach refused rather than trade the "
+                        "wrong account")
+                    self.connected = False
+                    try:
+                        mt5.shutdown()   # closes our IPC link only, never the app
+                    except Exception:
+                        pass
+                    return False
             first = not self.connected
             self.connected = True
             if first:

@@ -140,6 +140,19 @@ exist is a way to lose money faster than the market teaches you.
 deserved the weight. The strategy library was a flat poll and the journal stored only the fused
 composite, so no component of the system could ever be credited or demoted from evidence — the
 three calibrations above grade the *answer*, never the *voter*.
+**The link is measured, not promised.** KAIROS reaches a broker through the desktop
+terminal's inter-process pipe, not a socket of its own: a strategy call is answered by
+`terminal64.exe` on this machine, and that process is what holds the connection to the trade
+server. The distinction matters commercially, because the number a strategy loop pays is the
+first one and the number a broker's marketing quotes is the second. `tools/mt5_probe.py` prints
+both — median and p95 for `account_info`, `positions_get`, `orders_get`, per-symbol tick reads
+and a history fetch, plus the terminal's own reported server ping — and refuses to publish an
+estimate when the terminal is not reachable. Two consequences are designed in rather than
+discovered later. A tick-to-order path that depends on a GUI application must be supervised, so
+`mt5.spawn` exists as an explicitly armed, credential-free restart. And with more than one MT5
+account on one machine, "a terminal is open" is not an answer: the bridge attaches only when the
+signed-in login equals the configured one.
+
 `tools/strategy_attribution.py` walks history the way the library is asked to use it: every
 fifth bar it re-derives the features from the bars available *then*, takes each strategy's vote,
 and grades it once that horizon's bars exist. `kairos/attribution.py` turns those counts into
@@ -174,7 +187,7 @@ one they vote in, and the reader of the weights is told so.
 - Logs rotate; state persists across restarts; RAM, startup and per-cycle cost were profiled
   on a 2015-era i5 / 8 GB machine, which is a deliberate constraint — if it runs there, the
   infrastructure argument is cheap.
-- 395 regression tests, including the money path and the integrity cases below.
+- 405 regression tests, including the money path and the integrity cases below.
 
 ## 7. What the numbers say, and what they do not
 
@@ -187,13 +200,13 @@ and 9 instruments reported as losses.
 important finding in the project: the edge, if any, is in the global and commodity books,
 and any PSX strategy must be sized against costs before it is sized against conviction.
 
-The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 359
+The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 361
 autopilot cycles) with two fills. That is a system working as designed on a low-conviction
 market, not a strategy proving itself.
 
 ## 8. The integrity bugs, documented because they are the credibility
 
-An investor kit is only worth its willingness to publish its own audit. Fifty-three defects
+An investor kit is only worth its willingness to publish its own audit. Fifty-four defects
 are tabled below, each with what it would have cost had it shipped. Eight of them were in the
 machinery that produces the numbers an investor would read — the scorer that turns a journal
 into a hit rate, the command that regenerates the evidence, the ledger repair meant to keep
@@ -264,6 +277,7 @@ a working one. Neither was caught by a click, because nobody clicks in a test su
 | A date it could not read was invented as today | `Autopilot._age_days` answered 0.0 for any timestamp it failed to parse, and both callers took the invention: a held entry with an unreadable start date never reached maturity, which is the exit that closes a position at its horizon, and the watchlist read its own corrupt stamp as "rotated seconds ago", so daily PSX rotation stopped for the life of the process. Both looked like a system behaving normally | an unreadable age is no answer at all. The maturity exit stays off — other exits keep working — and the row says so once on the desk and in the trail; the rotation throttle does not fire on a stamp it cannot read, which also lets the next rotation repair it |
 | A regime flag changed meaning on its way through a disk | `high_volatility` was `percentile > 0.7 or vol20 > 1.6 * vol60`, and both operands are numpy floats, so `or` handed back a `numpy.bool_` whenever the percentile branch was false — which is the ordinary case for an ordinary tape, putting the leak on the main path, not in an edge. Every reader had its own excuse for missing it: the desk survived by accident because its endpoint coerces the whole payload, and a bare `json.dumps` of the dict raised `TypeError`. The CLI dossier writes with `default=str`, so a quiet market was saved as the *string* "False" — and anything asking `if regime["high_volatility"]` of that file read True out of a report that had recorded False, and False out of the live object that had never been written. Same market, two answers, depending on whether it had been through a disk, in a field whose whole job is to say whether the market is calm | the value is a Python bool where it is produced. The test counts how many of its walks actually reach the fall-through branch before it claims to cover it, and asks the dossier's own question — that a saved regime says the same thing as a live one. Removing the four-character guard fails all three tests, which is the difference between a regression test and a comment |
 | The desk answered nothing, and looked exactly like it was answering | the JS Global order panel closed its ternary one bracket short, so the entire inline `<script>` failed to parse. Nav, health, the watchlist, the prediction form and every tab went inert while the API kept answering and the page kept rendering — a classic script that dies on a syntax error leaves no trace but a window with no functions on it. The install instructions end with *open the desk*, and the desk was a poster: the shipped product's only interface had no test, because nothing in the suite had ever read the HTML, and nothing in the suite could tell a working page from a picture of one | the bracket is closed, and `tests/test_desk_script.py` walks the script's brackets now, ignoring the ones that are only text inside strings, comments, template literals and regexes, and fails with the offending HTML line rather than a parse error with no context. It replays the defect it was written for instead of describing it, and pins the cases a naive counter would cry wolf about — because a guard that only ever passes on good code is the same untested component it exists to catch |
+| The MT5 bridge attached to whichever terminal happened to be open | the account is read from `account_info()` of whatever `terminal64.exe` is running, so with a broker terminal and a PMEX terminal both reachable, sizing, free margin and the daily loss break would divide by the equity of an account nobody chose — while `terminal_path`, the one setting that could pin the install, was accepted by `attach()` and dropped on the floor, and the instruction it printed told a PMEX operator to sign in to JS Markets | the signed-in login must equal the configured one or the link is refused and the IPC handle closed, leaving the app alone; `path` is forwarded only once the running process is confirmed to *be* that install, because `initialize(path=…)` launches a terminal that is not running, which is the one thing this bridge promises it does not do; the message names the configured venue; `mt5.spawn` is the operator's explicit word to restart the app, and it never puts a credential on a command line, where every local process could read it — 6 tests |
 
 Nothing moved money. The journal now says so itself: rebuilt from `data/audit_journal.jsonl`,
 the track record publishes the count of lines carrying the test signature and the count of
@@ -304,11 +318,12 @@ be mis-sized because of it.
 git clone https://github.com/zhaider5142009-oss/kairos && cd kairos
 cp config.example.yaml config.yaml      # add your own keys; config.yaml is git-ignored
 pip install -r requirements.txt
-python -m pytest tests -q                    # 395 tests
+python -m pytest tests -q                    # 405 tests
 python -m kairos.cli backtest GOLD WTI HBL   # walk-forward sweep, costs modelled
 python -m kairos.cli health                  # subsystem health, dead council seats
 python -m kairos.cli feedback                # realized track record, live from the journal
 python tools/strategy_attribution.py         # re-measures every strategy, writes the weights
+python tools/mt5_probe.py                    # measures the live MT5 link (read-only)
                                              # the engine refuses to use if they are stale
 python tools/make_track_record.py            # rebuilds docs/investors/TRACK_RECORD.md
 python tools/kit_stats.py                    # the only figures this pack may quote
