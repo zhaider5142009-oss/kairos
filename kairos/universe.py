@@ -268,14 +268,21 @@ def _registered_path():
 
 
 def _save_registered() -> None:
+    # through the atomic writer, not `write_text`: this file is the only memory
+    # of a scan-admitted ticker, and a truncated one is read back as "nothing
+    # was ever admitted". A held position in that scrip then has no instrument
+    # to price it, so the desk cannot value or exit it — the write that loses
+    # it is not a cache miss, it is a position going blind.
+    from .store import atomic_write
+
     path = _registered_path()
     if path is None:
         return
+    rows = [{"symbol": i.key, "name": i.name, "sector": i.sector}
+            for i in ALL if i.key.upper() not in _SEED_KEYS]
     try:
-        rows = [{"symbol": i.key, "name": i.name, "sector": i.sector}
-                for i in ALL if i.key.upper() not in _SEED_KEYS]
         # bounded: daily rotation would otherwise admit forever
-        path.write_text(json.dumps(rows[-40:], indent=1), encoding="utf-8")
+        atomic_write(path, json.dumps(rows[-40:], indent=1))
     except OSError:
         pass  # losing the cache costs re-admission, never a trade
 

@@ -8,6 +8,7 @@ deliberately cheap: they never hit Yahoo, OpenRouter, MT5 or WSL.
 from __future__ import annotations
 
 import json
+import pathlib
 
 import pytest
 
@@ -201,6 +202,27 @@ def test_registered_cache_is_bounded(isolated_registry):
     for i in range(60):
         universe.register_psx(f"ZZB{i}", name=f"Bound {i}")
     assert len(json.loads(isolated_registry.read_text(encoding="utf-8"))) == 40
+
+
+def test_a_failed_registry_write_leaves_the_last_good_file_intact(
+        isolated_registry, monkeypatch):
+    """This file is the only memory of a scan-admitted ticker. A plain
+    `write_text` on a full disk truncates it, and the next boot reads the
+    truncation as "nothing was ever admitted" — a held line in that scrip then
+    has no instrument to price it, so the desk can neither value nor exit it."""
+    path = isolated_registry
+    universe.register_psx("ZZATOMIC", name="Atomic Mills", sector="Test")
+    before = path.read_text(encoding="utf-8")
+    real = pathlib.Path.write_text
+
+    def half_then_fail(self, text, **kw):
+        real(self, text[: len(text) // 2], **kw)
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(pathlib.Path, "write_text", half_then_fail)
+    universe.register_psx("ZZATOMIC2", name="Second Mill")
+    assert path.read_text(encoding="utf-8") == before
+    assert not list(path.parent.glob(".*.tmp"))
 
 
 def test_a_missing_cell_never_becomes_a_company_name(isolated_registry):
