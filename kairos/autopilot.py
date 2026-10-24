@@ -173,6 +173,9 @@ class Autopilot:
         # this cycle's live venue snapshots — never persisted, the real book
         # carries account numbers
         self._live_acct: dict[str, Any] | None = None
+        # ... and split by venue, because the size of an order belongs to the
+        # book that funds it, in that book's currency
+        self._venue_accts: dict[str, dict[str, Any]] = {}
         self._psx_live: dict[str, Any] | None = None
         self._psx_down = False
         self.st = self._load()
@@ -356,7 +359,12 @@ class Autopilot:
         # live sizing/braking is REAL money only: never fall back to the
         # paper book (Rs 1,000,000 of simulated equity would justify orders
         # the funded account could not settle)
-        acct = self._live_account(mt5_up, psx_book, bn_armed) if live else broker.account()
+        # Each venue's own equity is collected once, beside the snapshot the desk
+        # and the breakers read, so an order is sized on the book that has to fund
+        # it rather than on every book added together.
+        parts = self._venue_accounts(mt5_up, psx_book, bn_armed) if live else {}
+        self._venue_accts = parts
+        acct = self._merge_account(parts) if live else broker.account()
         pos_list = self._venue_positions(mt5_up, psx_book, bn_armed) if live \
             else broker.open_positions()
         self._live_acct = acct if live else None
@@ -506,7 +514,25 @@ class Autopilot:
                             action = "FUGU-PASS"
                             detail = "; ".join(verdict["reasons"][:2])
                         else:
-                            eq = float(acct["equity"] or 0)
+                            # The venue is chosen before the money is counted: an
+                            # order is a fraction of the book that has to fund it,
+                            # and that book keeps its own currency.
+                            venue = self._venue_for(inst, live, is_psx)
+                            eq = self._venue_equity(venue, acct)
+                            if eq is None:
+                                # The routing named a venue with no usable equity
+                                # behind it. Nothing is sent, and the two reasons
+                                # are told apart: a silent venue needs a connection,
+                                # an empty book needs funding.
+                                action = "NO-EQUITY"
+                                detail = (
+                                    f"no {venue} account to size against"
+                                    if venue not in self._venue_accts else
+                                    f"the {venue} account reported no usable equity")
+                                JOURNAL.log("AUTOPILOT_NO_EQUITY",
+                                            {"symbol": inst.key, "venue": venue,
+                                             "read": venue in self._venue_accts})
+                                eq = 0.0
                             notional = min((rk["suggested_weight"] or 0) * eq,
                                            0.15 * eq)
                             bands = res.get("confidence_band") or {}
@@ -529,11 +555,9 @@ class Autopilot:
                                     detail = guard["reason"] or "cluster cap"
                                 else:
                                     notional = guard["allowed_notional"]
-                                    # The venue decides the unit, so the venue has
-                                    # to be known before the size is — and the
-                                    # unit is the broker's own, not an assumption
-                                    # about lots.
-                                    venue = self._venue_for(inst, live, is_psx)
+                                    # The venue decides the unit, so the unit is
+                                    # the broker's own, not an assumption about
+                                    # lots.
                                     spec = self._venue_spec(venue, inst)
                                     qty = _size_for(venue, notional, price, spec)
                                     if qty <= 0:
@@ -877,6 +901,70 @@ class Autopilot:
                 "equity": book["equity"], "day_pnl": self._psx_day_pnl(book),
                 "open_positions": len(book["holdings"])}
 
+    def _venue_accounts(self, mt5_up: bool, book: dict[str, Any] | None,
+                        bn_up: bool = False) -> dict[str, dict[str, Any]]:
+        """Each reachable venue's own account, keyed by the venue it belongs to.
+
+        Every figure here is in the currency that venue keeps its money in: MT5
+        reports USD, the PSX portal PKR, a spot account USDT. This is the only
+        form an order can be sized from. A position's size is a fraction of the
+        equity that has to fund it, and 15% of a rupee book spent at a dollar
+        price is not a smaller trade — it is the same trade in the wrong unit.
+        """
+        out: dict[str, dict[str, Any]] = {}
+        if mt5_up:
+            a = self.mt5.account()
+            if a:
+                out["MT5"] = a
+        if book:
+            out["JS_GLOBAL"] = self._psx_part(book)
+        if bn_up:
+            from . import binance as _BN
+            a = _BN.BINANCE.account()
+            if a:
+                out["BINANCE"] = a
+        return out
+
+    def _venue_equity(self, venue: str, acct: dict | None) -> float | None:
+        """The equity an order on this venue is sized against, or None.
+
+        The desk and the circuit breakers read one snapshot, and a live snapshot
+        from more than one venue adds currencies together: a million-rupee PSX
+        book next to a hundred-thousand-dollar CFD account sums to 1,100,000. As
+        an upper bound on total exposure that is acceptable because it overstates
+        and every breaker errs toward refusing. As a base for one CFD it is a
+        sevenfold over-order, and the rupees keep arriving as the book grows.
+        Paper and a single live venue have one book, so the snapshot is already
+        the right number. None is a veto: either the routed venue never reported
+        an account, or it reported one whose equity is not a number. Zero here
+        would size the order at nothing and read on the desk as a small book,
+        which is a different fact and a different fix.
+        """
+        if not self._venue_accts:
+            return _figure((acct or {}).get("equity"))
+        part = self._venue_accts.get(venue)
+        if part is None:
+            return None
+        eq = _figure(part.get("equity"))
+        return eq if eq > 0 else None
+
+    def _merge_account(self, parts: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+        """One venue, or the whole desk in one snapshot."""
+        rows = list(parts.values())
+        if not rows:
+            return None
+        if len(rows) == 1:
+            return rows[0]
+        counts = [p.get("open_positions") for p in rows]
+        return {"venue": "+".join(str(p.get("venue")) for p in rows),
+                "balance": round(sum(float(p.get("balance") or 0) for p in rows), 2),
+                "equity": round(sum(float(p.get("equity") or 0) for p in rows), 2),
+                "day_pnl": round(sum(float(p.get("day_pnl") or 0) for p in rows), 2),
+                # one venue that could not count its positions makes the total
+                # unknown; summing it as zero would print a flat account
+                "open_positions": (None if any(c is None for c in counts)
+                                   else sum(int(c or 0) for c in counts))}
+
     def _live_account(self, mt5_up: bool, book: dict[str, Any] | None,
                       bn_up: bool = False) -> dict[str, Any] | None:
         """Real-currency account snapshot across whichever live venues are up.
@@ -887,34 +975,10 @@ class Autopilot:
         The sum below mixes currencies (MT5/Binance quote USD, JS Global quotes
         PKR) and is therefore only an upper bound in rupee terms — it overstates
         a PKR-heavy book against a USD one, which errs toward refusing, never
-        toward sizing up. `_execute` never sizes from this: each venue branch
-        reads its own account, in its own currency.
+        toward sizing up. It is never used to size: `_venue_equity` reads the
+        venue's own account for that.
         """
-        parts: list[dict[str, Any]] = []
-        if mt5_up:
-            a = self.mt5.account()
-            if a:
-                parts.append(a)
-        if book:
-            parts.append(self._psx_part(book))
-        if bn_up:
-            from . import binance as _BN
-            a = _BN.BINANCE.account()
-            if a:
-                parts.append(a)
-        if not parts:
-            return None
-        if len(parts) == 1:
-            return parts[0]
-        counts = [p.get("open_positions") for p in parts]
-        return {"venue": "+".join(str(p.get("venue")) for p in parts),
-                "balance": round(sum(float(p.get("balance") or 0) for p in parts), 2),
-                "equity": round(sum(float(p.get("equity") or 0) for p in parts), 2),
-                "day_pnl": round(sum(float(p.get("day_pnl") or 0) for p in parts), 2),
-                # one venue that could not count its positions makes the total
-                # unknown; summing it as zero would print a flat account
-                "open_positions": (None if any(c is None for c in counts)
-                                   else sum(int(c or 0) for c in counts))}
+        return self._merge_account(self._venue_accounts(mt5_up, book, bn_up))
 
     def _venue_positions(self, mt5_up: bool,
                          book: dict[str, Any] | None,
@@ -1575,6 +1639,11 @@ class Autopilot:
                              "book_this_cycle": self._psx_live is not None},
                 "binance": _BN.BINANCE.state(),
                 "live_account": self._live_acct,
+                # the number each venue's orders were sized against. The merged
+                # snapshot above adds currencies together, so on its own it names
+                # a total that no single account holds.
+                "live_equity": {v: _figure(p.get("equity"))
+                                for v, p in self._venue_accts.items()},
                 "paper_account": acct,
                 "paper_positions": pos}
 
