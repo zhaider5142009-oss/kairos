@@ -1,7 +1,7 @@
 """The macro axis: a condition the instrument's own bars cannot see, and the
 vocabulary that lets attribution charge for it.
 
-Seven things these tests hold shut, most of them the same shape — a state that
+Eight things these tests hold shut, most of them the same shape — a state that
 could be reported as something it is not:
 1. An absent print reading as a neutral one. If the VIX feed is down, a score
    that averages "no opinion" in with the six opinions it does have lands near
@@ -20,17 +20,27 @@ could be reported as something it is not:
    tag the measurement could never have reproduced.
 6. The size multiplier being allowed to lever the book on a heuristic: Risk-On
    lifts by 10%, an unclassifiable panel cuts.
-7. And the one that makes the other six worth having — a state that is computed
+7. And the one that makes the six above it worth having — a state that is computed
    and then never shown. The endpoint, the dossier, the CLI and the desk each
    have to carry the prints behind the multiplier, because an `x0.75` nobody
    can trace to a VIX percentile is an instruction, not a finding.
+8. A number that is not a number being read as an opinion. An empty print from a
+   dead vendor is *finite*, so it survives the filter that drops the NaN bars,
+   and then does what the component's arithmetic does with it: an infinity under
+   a division, a negative infinity inside a log, a -100% move across twenty days
+   — and a clamp that throws away whichever argument it cannot compare caps the
+   lot at the loudest score the panel can make. So an abstention is the only
+   honest answer here, and it has to reach the desk as JSON `null`, never as
+   `Infinity`, which is not JSON and stops the page that reads it.
 """
 
 from __future__ import annotations
 
 import inspect
+import json
 import math
 import time
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -41,7 +51,8 @@ from kairos.ensemble import StrategyVote, fuse
 from kairos.feedback import Snapshot
 from kairos.macro import (MIN_COMPONENTS, MIN_COVERAGE, NEUTRAL, RISK_OFF,
                           RISK_ON, SIZE_MULTIPLIER, TAG_BAND, TAGS, UNKNOWN,
-                          Component, condition_label, macro_state, psx_breadth,
+                          Component, _c_equity, _clip, _dead, _num, _positive,
+                          condition_label, macro_state, psx_breadth,
                           split_condition)
 from kairos.models_stat import ModelForecast
 
@@ -251,6 +262,138 @@ def test_a_series_that_never_moves_has_no_percentile_opinion():
     vix = next(c for c in st.components if c.key == "VIX")
     assert vix.present is False
     assert "meaningless" in vix.why
+
+
+# ---------------------------------------------- an empty print is not an extreme
+def _kill_last_bar(panel: dict[str, pd.DataFrame], key: str) -> dict[str, pd.DataFrame]:
+    """Same panel, one vendor answering with the print a dead feed serves: 0.0."""
+    out = {}
+    for k, df in panel.items():
+        if k != key:
+            out[k] = df
+            continue
+        closes = df["close"].to_numpy(dtype=float).copy()
+        closes[-1] = 0.0
+        out[k] = pd.DataFrame({"date": df["date"], "close": closes})
+    return out
+
+
+def test_an_unreadable_number_abstains_instead_of_becoming_the_loudest_print():
+    """`min(1.0, nan)` keeps 1.0 and `max(-1.0, 1.0)` keeps 1.0 — both drop the
+    argument that cannot be compared. Read as total, the clamp therefore turned a
+    print that answered nothing into maximum risk appetite, and `present`, which
+    asks only that the score be finite, could not see it: the laundering happened
+    first, and the desk printed the invention as the finding."""
+    nan = float("nan")
+    assert float(max(-1.0, min(1.0, nan))) == 1.0        # the shipped-before clamp
+    assert _clip(nan) is None
+    assert _clip(float("inf")) is None
+    assert _clip(float("-inf")) is None
+    assert _clip(2.5) == 1.0 and _clip(-2.5) == -1.0     # still a clamp
+    assert _clip(-0.25) == pytest.approx(-0.25)
+
+
+@pytest.mark.parametrize("key", KEYS)
+def test_one_empty_print_costs_its_component_its_seat_never_a_direction(key):
+    """Zero is finite, so it survives the filter that drops the NaN bars and then
+    does whatever the component's own arithmetic does with it: under a division
+    it is an infinity, inside a log a negative infinity, and in a 20-day return a
+    -100% move — which for the dollar and the rupee the panel *negates*, so one
+    empty bar became +1.0, the loudest risk-on reading available, next to a
+    reason string reading "DXY 20d -100.00%". A hole must cost the seat."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        st = macro_state(_kill_last_bar(_panel_on(), key))
+    comp_key = "COPPER/GOLD" if key in ("COPPER", "GOLD") else key
+    c = next(x for x in st.components if x.key == comp_key)
+    assert c.present is False
+    assert c.score is None
+    # three wordings, one rule: the print itself, the window it sits in, or the
+    # fact that a volatility index cannot be zero. All of them say "no reading".
+    assert any(p in c.why for p in ("zero print", "not a volatility",
+                                   "is no data")), c.why
+
+
+def test_a_dead_dollar_bar_does_not_quietly_take_the_panel_with_it():
+    """The abstention has to be one seat wide: the other six prints are still
+    there, and a panel that reads six out of seven is a finding, not a failure."""
+    st = macro_state(_kill_last_bar(_panel_on(), "DXY"))
+    assert st.n_present == 6
+    assert math.isfinite(st.score) and abs(st.score) <= 1.0
+    assert st.coverage == pytest.approx(1.0 - 0.18)
+    assert "DXY" in st.label()
+
+
+def test_a_dead_feed_composes_without_emitting_a_single_numpy_warning():
+    """A RuntimeWarning is not a cosmetic cost here: the daemon that trades runs
+    with warnings recorded, and `divide by zero encountered in divide` in the log
+    of a system that is sizing positions is the sound of an extreme being made
+    out of nothing. This is the panel that made the suite warn."""
+    flat = pd.DataFrame({"date": pd.date_range("2024-01-01", periods=60),
+                         "close": [0.0] * 60})
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        st = macro_state({k: flat for k in KEYS})
+    assert st.n_present == 0
+    assert st.tag == UNKNOWN
+
+
+def test_the_spx_reason_names_only_the_legs_that_answered():
+    """The trend leg can abstain on its own — `_clip` now answers None, and the
+    window can have no positive mean — while momentum carries the blend. The
+    sentence beside it used to format `trend` unconditionally, which was safe
+    only while `_clip` could not abstain, and a None reaching that format raised
+    out of `macro_state`, which wraps no component in a try, and took the desk
+    endpoint with it."""
+    assert "trend is None" in inspect.getsource(_c_equity)
+    closes = [50.0] * 60
+    closes[0] = -3000.0                       # a corrupt bar: the mean is not positive
+    comp = _c_equity(pd.DataFrame({"date": pd.date_range("2024-01-01", periods=60),
+                                   "close": np.asarray(closes, dtype=float)}))
+    assert comp.present is False
+    assert "zero print" in comp.why
+
+
+def test_a_score_of_exactly_zero_is_still_a_score():
+    """`_num` nulls what cannot be JSON, and 0.0 is neither. A guard that tests
+    truthiness would drop the one reading the sizing layer most needs."""
+    assert _num(0.0, 3) == 0.0
+    assert _num(0.0, 3) is not None
+    assert _num(float("1e-9"), 3) == 0.0
+
+
+def test_as_dict_publishes_null_never_a_number_the_desk_cannot_parse():
+    """`json.dumps` writes a non-finite float as `Infinity` / `NaN`, and neither
+    is JSON — so one of them in the payload is a page that stops parsing, the
+    same dead white screen a missing bracket produced. Null is also the honest
+    answer: an operator cannot tell an empty print from an unreadable one."""
+    c = Component("VIX", "fear premium", 0.22, float("nan"), float("inf"),
+                  why="laundered upstream")
+    assert c.present is False
+    d = c.as_dict()
+    assert d["score"] is None and d["value"] is None
+    st = macro_state(_panel_on())
+    st.score = float("nan")
+    st.components[0].value = float("-inf")
+    text = json.dumps(st.as_dict(), allow_nan=False)
+    assert json.loads(text)["score"] is None
+    assert "Infinity" not in text and "NaN" not in text
+
+
+def test_the_guard_bites_on_the_extreme_it_was_written_for():
+    """Replayed, not described: the same window with one empty last bar, through
+    the two lines that used to read it. The dollar's own arithmetic answers a
+    -100% move, the panel negates it, and the clamp caps it at +1.0 — which is
+    the whole defect, in three lines, on the side of the `if` this increment put
+    in front of it."""
+    closes = [100.0 + i * 0.1 for i in range(60)]
+    closes[-1] = 0.0
+    x = np.asarray(closes, dtype=float)
+    base = float(x[-1 - 20])
+    fabricated = float(max(-1.0, min(1.0, -(x[-1] / base - 1.0) / 0.03)))
+    assert fabricated == 1.0
+    assert not _positive(x[-21:])
+    assert _dead(Component("DXY", "dollar pressure", 0.18, 0.5, 100.0)).score is None
 
 
 def test_component_weight_table_sums_to_one_so_coverage_means_what_it_says():

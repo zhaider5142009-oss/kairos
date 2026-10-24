@@ -86,8 +86,8 @@ class Component:
     def as_dict(self) -> dict[str, Any]:
         return {"key": self.key, "what": self.what, "weight": round(self.weight, 3),
                 "present": self.present,
-                "score": None if self.score is None else round(float(self.score), 3),
-                "value": None if self.value is None else round(float(self.value), 4),
+                "score": None if self.score is None else _num(self.score, 3),
+                "value": None if self.value is None else _num(self.value, 4),
                 "why": self.why}
 
 
@@ -116,9 +116,9 @@ class MacroState:
         return line
 
     def as_dict(self) -> dict[str, Any]:
-        return {"tag": self.tag, "score": round(float(self.score), 3),
-                "coverage": round(float(self.coverage), 3),
-                "size_multiplier": round(float(self.size_multiplier), 3),
+        return {"tag": self.tag, "score": _num(self.score, 3),
+                "coverage": _num(self.coverage, 3),
+                "size_multiplier": _num(self.size_multiplier, 3),
                 "n_present": self.n_present, "n_components": len(self.components),
                 "as_of": self.as_of, "label": self.label(),
                 "components": [c.as_dict() for c in self.components],
@@ -126,8 +126,66 @@ class MacroState:
 
 
 # ------------------------------------------------------------------- helpers
-def _clip(x: float) -> float:
+def _clip(x: float) -> float | None:
+    """Clamp a score into [-1, 1] — and refuse to invent one.
+
+    `min(1.0, nan)` keeps 1.0 and `max(-1.0, 1.0)` keeps 1.0, because both
+    helpers drop the argument that cannot be compared. So this clamp, read as
+    total, turned a NaN into the loudest possible macro reading: a print that
+    answered nothing became "maximum risk appetite", and `present` — which asks
+    only that the score be finite — could never see it, because the laundering
+    happened first. An unreadable number abstains, which is the other thing the
+    panel already does with a feed that did not answer.
+    """
+    x = float(x)
+    if not np.isfinite(x):
+        return None
     return float(max(-1.0, min(1.0, x)))
+
+
+def _positive(c: np.ndarray) -> bool:
+    """True when every bar is a number a ratio or a log can be built on.
+
+    A dead vendor serves 0.0, and 0.0 is finite, so it survives the filter in
+    `_closes` and lands underneath a division (an infinite price ratio) or a
+    logarithm (negative infinity), where it stops being a hole in the data and
+    becomes an extreme in the answer.
+    """
+    return bool(np.all(c > 0.0))
+
+
+def _dead(c: Component) -> Component:
+    """Return the component as an abstention: the window it reads has a hole in it.
+
+    The arithmetic downstream would rather have the hole than lose the print. One
+    empty last bar on the dollar turns a 20-day return into -100%, which this
+    panel negates and clips into **+1.0 — maximum risk appetite** — while the
+    `why` string reports "DXY 20d -100.00%" to an operator as though the dollar
+    had collapsed. A zero at the base of the ten-year's difference invents a 4.5
+    point yield move out of two prints, one of which is nothing. So the bar that
+    cannot be a price costs the component its seat, and the desk is told which.
+    """
+    c.score, c.value = None, None
+    c.why = f"{c.key} window has a zero print"
+    return c
+
+
+def _w(k: float, x: float | None) -> float | None:
+    """Scale one leg of a blend, or carry its abstention through the arithmetic."""
+    return None if x is None else k * float(x)
+
+
+def _num(v: Any, nd: int) -> float | None:
+    """A JSON number, or null.
+
+    `json.dumps` writes a non-finite float as `Infinity` / `NaN`, and neither is
+    JSON — so one of them in the payload is a desk page that stops parsing, the
+    same dead white screen a missing bracket produced. Null is also the honest
+    answer: an operator reading `value: 0.0` cannot tell an empty print from an
+    unreadable one, and the panel already has a word for "did not answer".
+    """
+    f = float(v)
+    return None if not np.isfinite(f) else round(f, nd)
 
 
 def _closes(df: Any, min_bars: int) -> np.ndarray | None:
@@ -178,6 +236,11 @@ def _c_vix(df: Any) -> Component:
     # Percentile against its own trailing year where there is one: what counts
     # as frightened is a property of the era, not of an absolute number.
     win = x[-250:]
+    if not _positive(win):
+        # An empty print inside the year counts as "at or below today" when the
+        # percentile is asked, so a dead bar inflates the fear reading: the hole
+        # in the tape arrives at the desk as volatility.
+        return _dead(c)
     if win.size >= 120 and float(np.std(win)) < 1e-12:
         # A perfectly flat window makes "how often was it at or below this?"
         # equal 1.0 by construction, which would read a dead feed as the most
@@ -192,11 +255,12 @@ def _c_vix(df: Any) -> Component:
         score = _clip((20.0 - level) / 15.0)
         c.why = f"VIX {level:.1f} (short history, absolute scale)"
     d20 = _ret(x, 20)
-    if d20 is not None:
+    spike = _clip(-d20 / 0.50) if d20 is not None else None
+    if score is not None and spike is not None:
         # A vol *spike* carries information the level has not priced yet.
-        score = 0.65 * score + 0.35 * _clip(-d20 / 0.50)
+        score = 0.65 * score + 0.35 * spike
         c.why += f", 20d {d20:+.0%}"
-    c.score, c.value = _clip(score), level
+    c.score, c.value = (_clip(score) if score is not None else None), level
     return c
 
 
@@ -206,6 +270,13 @@ def _c_dxy(df: Any) -> Component:
     if x is None:
         c.why = "no DXY series"
         return c
+    if not _positive(x[-21:]):
+        # Before the return is computed: a zero at either end of the two prints
+        # the move is taken between answers -100% — which the sign flip below
+        # turns into the loudest risk-on reading the panel can make — and a zero
+        # at the base makes `_ret` abstain for a reason this line would report
+        # wrongly as "history too short".
+        return _dead(c)
     r = _ret(x, 20)
     if r is None:
         c.why = "DXY history too short for a 20-day move"
@@ -237,6 +308,12 @@ def _c_rates(df: Any) -> Component:
         # opinion about policy rates.
         c.why = f"US10Y printed {x[-1]:g}, which is no data"
         return c
+    # The other end of the difference needs the same check, and only for zero:
+    # a *negative* yield is a rare finding the vendor is entitled to report, but
+    # an empty base makes `x[-1] - 0` read as a 4.5 point policy move that never
+    # happened, and the component then says so on the desk.
+    if np.any(x[-21:] == 0.0):
+        return _dead(c)
     c.score, c.value = _clip(-delta / 0.40), float(x[-1])
     c.why = f"10y {delta:+.2f}pp over 20d (yield {x[-1]:.2f}%)"
     return c
@@ -248,19 +325,32 @@ def _c_equity(df: Any) -> Component:
     if x is None:
         c.why = "no SPX series"
         return c
+    if not _positive(x[-60:]):
+        # An empty print inside the window drags the 60-bar mean down, so the
+        # trend leg reads the hole as the price standing far above its own
+        # average — the direction depends on which bar died, and both extremes
+        # are score, not abstention.
+        return _dead(c)
     sma = float(np.mean(x[-60:]))
     trend = _clip((float(x[-1]) / sma - 1.0) / 0.05) if sma > 0 else None
     r20 = _ret(x, 20)
-    parts = [p for p in (0.6 * trend if trend is not None else None,
-                         0.4 * _clip(r20 / 0.06) if r20 is not None else None)
-             if p is not None]
+    mom = _clip(r20 / 0.06) if r20 is not None else None
+    parts = [p for p in (_w(0.6, trend), _w(0.4, mom)) if p is not None]
     if not parts:
         c.why = "SPX history too short"
         return c
     c.score = _clip(sum(parts))
     c.value = float(x[-1])
-    c.why = (f"SPX {trend:+.2f} vs 60d mean" if r20 is None else
-             f"SPX {trend:+.2f} vs 60d mean, 20d {r20:+.1%}")
+    # The sentence is built from whichever legs actually answered. It used to name
+    # the trend leg unconditionally, which was only ever safe while `_clip` could
+    # not abstain — and it cannot, since this increment, only *because* of the
+    # window guard above: an all-positive 60-bar window has a mean of at least
+    # one-sixtieth of its largest bar, so the ratio cannot blow up. That is an
+    # accident of arithmetic three lines away, not a contract, and a `None`
+    # reaching this format raised out of `macro_state`, which wraps no component
+    # in a try, and took the desk endpoint down with it.
+    head = "SPX trend unreadable" if trend is None else f"SPX {trend:+.2f} vs 60d mean"
+    c.why = head if r20 is None else f"{head}, 20d {r20:+.1%}"
     return c
 
 
@@ -274,6 +364,14 @@ def _c_growth(cu: Any, au: Any) -> Component:
     if n < 25:
         c.why = "copper/gold overlap too short"
         return c
+    if not (_positive(x) and _positive(y)):
+        # The guard further down only ever looks at one entry of this window, and
+        # the division below reads all of it. A zero gold print answers the ratio
+        # with an infinity; a zero *copper* print answers it with exactly zero —
+        # and zero ratio, divided by a healthy base, is `-1.0`: the most risk-off
+        # growth read the panel can make, produced by a feed that served nothing.
+        # A hole in either leg is a hole in the pair.
+        return _dead(c)
     ratio = x[-n:] / y[-n:]
     base = float(ratio[-21])
     if not np.isfinite(base) or abs(base) < 1e-12:
@@ -291,6 +389,12 @@ def _c_btc(df: Any) -> Component:
     if x is None:
         c.why = "no BTC series"
         return c
+    if not _positive(x[-60:]):
+        # Checked before the return is computed, not after: `log(0)` is negative
+        # infinity, and a zero sitting at the base of the 20-day move makes
+        # `_ret` abstain for a reason this line would report wrongly as "history
+        # too short" to an operator reading the desk.
+        return _dead(c)
     r = _ret(x, 20)
     if r is None:
         c.why = "BTC history too short"
@@ -313,6 +417,8 @@ def _c_pkr(df: Any) -> Component:
     if x is None:
         c.why = "no USDPKR series"
         return c
+    if not _positive(x[-21:]):
+        return _dead(c)
     r = _ret(x, 20)
     if r is None:
         c.why = "USDPKR history too short"
