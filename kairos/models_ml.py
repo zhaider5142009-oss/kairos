@@ -41,13 +41,45 @@ def _walk_forward_splits(n: int, n_splits: int = 4, embargo: int = 5):
         yield 0, end - test_size - embargo, end - test_size, end
 
 
-def _ic(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+def _ic(y_true: np.ndarray, y_pred: np.ndarray) -> float | None:
+    """Validation information coefficient, or nothing when it cannot be read.
+
+    A zero here used to mean three different things — a window too short to
+    score, a target that never moved, and a model that predicted one constant —
+    and the caller turned all three into a measured-looking `val_IC=+0.000`.
+    See `_neural_confidence` for what the sign is worth.
+    """
     if len(y_true) < 8:
-        return 0.0
+        return None
     sy, sp = np.std(y_true), np.std(y_pred)
     if sy == 0 or sp == 0:
-        return 0.0
+        return None
     return float(np.corrcoef(y_true, y_pred)[0, 1])
+
+
+def _neural_confidence(ic: float | None) -> float:
+    """Confidence from validation IC, one-sided, and floor when unmeasured.
+
+    This was `clip(0.28 + abs(ic) * 1.5, 0.10, 0.90)`, and the absolute value is
+    the defect: IC is signed, so a model whose predictions ran *opposite* to the
+    outcomes it was validated on was paid the same as one that tracked them.
+    Measured across 26 neural members on the cached universe, 13 had negative
+    validation IC — the strongest, OGDC's GRU at -0.215, was handed 0.603, and
+    LUCK's GRU at -0.205 was handed 0.587, against 0.634 for the best positive
+    member (LUCK's LSTM at +0.236). That is not a tie between skill and
+    anti-skill; it is anti-skill outbidding most of the battery with an opinion
+    its own validation says is backwards. No evidence is the floor, not the
+    prior, because 0.28 is what a model that was measured at zero is worth.
+    """
+    if ic is None:
+        return 0.10
+    return float(np.clip(0.28 + max(0.0, ic) * 1.5, 0.10, 0.90))
+
+
+def _ic_text(ic: float | None) -> str:
+    if ic is None:
+        return "unmeasured"
+    return f"{ic:+.3f}" + (" inverse" if ic < 0 else "")
 
 
 def _hit_rate(y_true: np.ndarray, y_pred_sign: np.ndarray) -> float | None:
@@ -251,15 +283,14 @@ def _neural_forecast(df: pd.DataFrame, horizon: int, kind: str = "lstm") -> Mode
             total += nxt
             seq_np = np.append(seq_np[1:], nxt)
     exp_ret = float(total)
-    val_ic = 0.0
     with torch.no_grad():
         pv = net(xs_t[n_train:]).flatten().numpy() * sd
         tv = ys_t[n_train:].flatten().numpy() * sd
         val_ic = _ic(tv, pv)
-    conf = float(np.clip(0.28 + abs(val_ic) * 1.5, 0.10, 0.90))
+    conf = _neural_confidence(val_ic)
     label = "Neural-LSTM" if kind == "lstm" else "Neural-GRU"
     return ModelForecast(label, _direction(exp_ret), exp_ret, horizon, conf,
-                         f"lookback=30 val_IC={val_ic:+.3f} val_loss={best_val:.5f}")
+                         f"lookback=30 val_IC={_ic_text(val_ic)} val_loss={best_val:.5f}")
 
 
 def neural_battery(df: pd.DataFrame, horizon: int = 5) -> list[ModelForecast]:
