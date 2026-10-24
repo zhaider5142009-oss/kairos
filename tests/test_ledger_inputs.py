@@ -11,6 +11,7 @@ failure mode this file is supposed to make impossible.
 
 from __future__ import annotations
 
+import datetime as _dt
 import os
 import sys
 from pathlib import Path
@@ -122,3 +123,30 @@ def test_a_log_the_sweep_did_not_finish_is_not_widest(reports):
     os.utime(reports / LATER, (1_700_000_000,) * 2)
     rows, _summary, _run = gen._spectrum()
     assert len(rows) == 3
+
+
+def test_a_five_bar_horizon_on_a_five_day_tape_is_seven_calendar_days():
+    """The ledger published a Sunday as the day it could show a hit rate.
+
+    The queue's date was `ts + horizon days`: five calendar days after a Monday
+    is a Saturday, while `feedback.resolve_outcomes` waits for five *bars* and a
+    five-day tape prints none at the weekend. Five sessions from Monday
+    2026-10-20 is Monday 2026-10-27; five from a Saturday snapshot is the Friday a
+    week out. A seven-day tape counts calendar days, because crypto prints on the
+    weekend.
+    """
+    assert gen._maturity_day(_dt.date(2026, 10, 20), 5, seven_day=False) == \
+        _dt.date(2026, 10, 27)
+    assert gen._maturity_day(_dt.date(2026, 10, 24), 5, seven_day=False) == \
+        _dt.date(2026, 10, 30)
+    assert gen._maturity_day(_dt.date(2026, 10, 23), 5, seven_day=False) == \
+        _dt.date(2026, 10, 30)
+    assert gen._maturity_day(_dt.date(2026, 10, 20), 5, seven_day=True) == \
+        _dt.date(2026, 10, 25)
+
+
+def test_a_weekend_date_is_never_published_as_a_maturity():
+    """Every lower bound must fall on a day a five-day tape can print a bar."""
+    for day in range(19, 26):
+        got = gen._maturity_day(_dt.date(2026, 10, day), 5, seven_day=False)
+        assert got.weekday() < 5, f"{got} came out of a snapshot on the {day}th"

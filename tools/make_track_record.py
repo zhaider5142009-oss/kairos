@@ -14,8 +14,10 @@ import json
 import re
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
+
+import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -105,21 +107,68 @@ def _live_book() -> dict:
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
 
 
-def _pending_calls() -> tuple[int, str]:
-    """Directional snapshots whose horizon has not printed yet, and the first
-    date the tenth of them could resolve.
+_SEVEN_DAY: dict[str, bool] = {}
+
+
+def _prints_at_the_weekend(symbol: str) -> bool:
+    """Whether this instrument's tape prints on Saturday and Sunday.
+
+    Read off the instrument's own bars rather than a registry flag: the store
+    holds crypto on a seven-day calendar and PSX, futures and FX on five (a
+    Sunday FX stamp does appear). Cached — the queue asks once per journal row.
+    """
+    key = str(symbol).upper()
+    if key not in _SEVEN_DAY:
+        from kairos.data import STORE
+        from kairos.universe import resolve
+
+        inst = resolve(key)
+        df = STORE.load(inst.key) if inst is not None else None
+        _SEVEN_DAY[key] = bool(
+            df is not None and len(df)
+            and (pd.to_datetime(df["date"]).dt.dayofweek.tail(10) >= 5).any())
+    return _SEVEN_DAY[key]
+
+
+def _maturity_day(written: date, horizon: int, seven_day: bool) -> date:
+    """The first calendar day on which a horizon of `horizon` bars can exist.
+
+    This used to be `written + horizon days`, and it published 2026-10-25 — a
+    Sunday — as the day the record would print a hit rate: five calendar days
+    after a Monday is a Saturday, while `feedback.resolve_outcomes` waits for five
+    *bars* and a five-day tape prints none at the weekend. Five sessions from
+    Monday is the following Monday, and five from a Saturday snapshot is the
+    Friday a week out. Holidays are in neither calendar, so this is a lower bound.
+    """
+    if seven_day:
+        return written + timedelta(days=horizon)
+    d, left = written, horizon
+    while left:
+        d += timedelta(days=1)
+        if d.weekday() < 5:
+            left -= 1
+    return d
+
+
+def _pending_calls() -> tuple[int, int, str]:
+    """Calls whose horizon has not printed yet, the instruments behind them, and
+    the first date the tenth row could resolve.
 
     The record's central sentence — "no hit rate yet" — is only honest if the
     reader can see the queue behind it. A journal with zero pending calls and
     zero matured ones is a system that is not calling; a journal with hundreds
-    pending is a system that is calling and has not been graded yet. The date is
-    a lower bound, not a promise: `feedback.resolve_outcomes` waits for five
-    *bars*, and PSX prints none on a weekend or a market holiday.
+    pending is a system that is calling and has not been graded yet. The
+    instrument count is published beside the row count because the desk
+    snapshots the same tape every ten minutes: thousands of rows can rest on a
+    handful of instruments whose five-day windows overlap almost completely, and
+    either number alone can be read as the other. The date is a lower bound, not
+    a promise.
     """
     p = ROOT / "data" / "prediction_journal.jsonl"
     if not p.exists():
-        return 0, ""
-    out = []
+        return 0, 0, ""
+    out: list[date] = []
+    syms: set[str] = set()
     for ln in p.read_text(encoding="utf-8").splitlines():
         if not ln.strip():
             continue
@@ -128,12 +177,15 @@ def _pending_calls() -> tuple[int, str]:
                 "", "HOLD", "NEUTRAL", "FLAT"):
             continue
         try:
-            out.append(datetime.fromisoformat(e["ts"])
-                       + timedelta(days=int(e["horizon"])))
+            out.append(_maturity_day(datetime.fromisoformat(e["ts"]).date(),
+                                     int(e["horizon"]),
+                                     _prints_at_the_weekend(str(e["symbol"]))))
         except (KeyError, TypeError, ValueError):
             continue
+        syms.add(str(e["symbol"]).upper())
     out.sort()
-    return len(out), (out[9].strftime("%Y-%m-%d") if len(out) >= 10 else "")
+    return (len(out), len(syms),
+            out[9].strftime("%Y-%m-%d") if len(out) >= 10 else "")
 
 
 TEST_WINDOW_S = 30.0
@@ -241,7 +293,7 @@ def main() -> int:
     hr = tr.get("hit_rate")
     w(f"| directional hit rate | {'not yet measurable' if hr is None else f'{hr:.1%}'} |")
     w("")
-    pend, tenth_day = _pending_calls()
+    pend, pend_syms, tenth_day = _pending_calls()
     if hr is None:
         w("**There is no directional hit rate yet.** Every matured snapshot was a "
           "non-trade, and a non-trade cannot be a correct prediction — the scorer "
@@ -254,11 +306,12 @@ def main() -> int:
         # sentence with the queue in front of the reader, and a date they can come
         # back on — which is also what makes a stalled record visible.
         w("")
-        w(f"{pend} directional calls are journaled and still waiting out their "
-          f"horizon"
-          + (f", and the tenth of them cannot resolve before **{tenth_day}**, five "
-             f"bars after it was written. This table publishes a hit rate the day it "
-             f"can." if tenth_day else
+        w(f"{pend} directional calls from {pend_syms} instrument"
+          f"{'' if pend_syms == 1 else 's'} are journaled and still waiting out "
+          f"their horizon"
+          + (f", and the tenth row cannot resolve before **{tenth_day}** — five "
+             f"sessions after it was written, not five calendar days. This table "
+             f"publishes a hit rate the day it can." if tenth_day else
              ", fewer than ten so far, so no hit rate is definable yet."))
         if ap.get("feedback_error"):
             # The queue's dates are only a promise while the resolver runs. It
