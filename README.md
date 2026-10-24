@@ -112,6 +112,35 @@ python -m kairos serve
 - **News** — seven-feed macro/Pakistan radar
 - **System** — health, MT5 bridge, tradable universe browser
 
+### Inbound TradingView alerts (optional)
+
+The scanner in the data layer is TradingView read *outward*. The webhook is the
+way *in*: a chart alert can POST its own event so an outside opinion is recorded
+next to what the engine called.
+
+```yaml
+data:
+  tradingview_webhook:
+    enabled: true
+    secret: "a-long-random-value-of-its-own"   # never KAIROS_TOKEN
+    journal: "data/tv_alerts.jsonl"
+```
+
+Point the alert's webhook URL at `https://<host>/api/tv/alert?secret=<secret>`
+and send JSON: `{"symbol": "WHEAT", "side": "buy", "price": 581.5, "timeframe": "1D"}`.
+`symbol` must be an instrument the universe can price; `side` is `buy`/`long` or
+`sell`/`short`; `price` must be a positive finite number. Each accepted alert is
+appended to `data/tv_alerts.jsonl` with its receipt time and a digest.
+
+Three limits are deliberate: the route answers **404 while disabled** and
+**refuses everyone while the secret is empty** (unset is not open); it requires
+its own secret rather than the master token, because TradingView would otherwise
+hold the token that also unlocks the real-book reads; and it cannot place an
+order — an alert is evidence to be compared, not an instruction.
+
+`/api/health` remains the only other unauthenticated route. The master token
+still gates everything else, reads included.
+
 ## Foundation models via WSL (optional, ~4 GB)
 
 ```bash
@@ -342,7 +371,7 @@ python -m kairos.cli feedback       # realized record, live
 ```
 
 [docs/investors/](docs/investors/) holds the ledger, a one-pager, the whitepaper and the
-deck. Read the ledger first: there is **no forward track record yet** — 4,482 predictions
+deck. Read the ledger first: there is **no forward track record yet** — 4,515 predictions
 journaled, 429 horizons matured, all 429 non-trades — and 10 of 14 instruments in the
 walk-forward sweep lost money. That is the honest state of the project, and it is the reason
 the risk layer exists.

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import os
 import secrets
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -69,15 +70,21 @@ BOOT_TS = time.time()
 
 # ------------------------------------------------------------ remote deploy auth
 # When KAIROS_TOKEN is set, the whole API locks (reads too — the live book
-# carries real holdings) except /api/health. KAIROS_AUTH=writes relaxes GETs
-# to public. Locally, leave the token unset for a fully open desk.
+# carries real holdings) except /api/health and the webhook, which holds its own
+# secret so the token never has to leave the operator's machine. KAIROS_AUTH=writes
+# relaxes GETs to public. Locally, leave the token unset for a fully open desk.
 AUTH_TOKEN = os.environ.get("KAIROS_TOKEN", "")
 AUTH_MODE = os.environ.get("KAIROS_AUTH", "all").lower()
 
 
 @app.middleware("http")
 async def _token_gate(request, call_next):
-    if AUTH_TOKEN and request.url.path != "/api/health":
+    # The webhook is the one route the master token does not cover, because the
+    # caller is TradingView's cloud: handing it the token that also unlocks the
+    # desk's real-book reads would buy the ability to append one journal line at
+    # the price of everything. It carries its own scoped secret instead, and it
+    # is dead unless an operator enables it with that secret set.
+    if AUTH_TOKEN and request.url.path not in ("/api/health", "/api/tv/alert"):
         mutating = request.method in ("POST", "PUT", "DELETE", "PATCH")
         gated_read = (AUTH_MODE == "all"
                       and request.url.path.startswith("/api/"))
@@ -212,6 +219,46 @@ def newsdesk(symbols: str = "", refresh: bool = False):
                       "unknown": unknown})
     except Exception as exc:  # pragma: no cover - desk must answer
         return {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+
+
+# ---------------------------------------------------------------- inbound alerts
+@app.post("/api/tv/alert")
+async def tradingview_alert(request: Request):
+    """Record a TradingView alert. It appends a line; it cannot reach an order.
+
+    Disabled by default, and 404 when disabled rather than 403: the route is not
+    meant to advertise itself to a scanner. A blank secret refuses every caller,
+    because "unset" must never mean "open". The secret rides in the query string
+    only because TradingView webhooks can configure nothing else.
+    """
+    from kairos import tvalerts
+
+    cfg = tvalerts.settings()
+    if not cfg["enabled"]:
+        raise HTTPException(404, "not found")
+    if not cfg["secret"]:
+        return JSONResponse(status_code=503,
+                            content={"ok": False, "error": "webhook secret not configured"})
+    given = (request.query_params.get("secret")
+             or request.headers.get("x-tv-secret") or "")
+    if not tvalerts.secret_matches(given, cfg["secret"]):
+        return JSONResponse(status_code=403, content={"ok": False, "error": "forbidden"})
+
+    body = await request.body()
+    if len(body) > cfg["max_bytes"]:
+        return JSONResponse(status_code=413, content={"ok": False, "error": "body too large"})
+    try:
+        alert = tvalerts.parse(json.loads(body.decode("utf-8")))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return JSONResponse(status_code=400, content={"ok": False, "error": "body is not JSON"})
+    except tvalerts.AlertError as exc:
+        return JSONResponse(status_code=422, content={"ok": False, "error": str(exc)})
+    try:
+        path = tvalerts.record(alert, cfg["journal"])
+    except RuntimeError as exc:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+    return {"ok": True, "symbol": alert.symbol, "side": alert.side,
+            "digest": alert.digest, "journal": str(path)}
 
 
 # ---------------------------------------------------------------- portfolio

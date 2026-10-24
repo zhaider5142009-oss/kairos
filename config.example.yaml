@@ -165,6 +165,19 @@ data:
     global_scanner_url: "https://scanner.tradingview.com/global/scan"
     timeout_s: 25
 
+  # Inbound TradingView alerts. Off until an operator turns it on, and it
+  # refuses every caller until `secret` is a non-empty value of its own —
+  # never reuse KAIROS_TOKEN here. Point the alert webhook at
+  #   https://<your-host>/api/tv/alert?secret=<secret>
+  # with a JSON body such as
+  #   {"symbol": "WHEAT", "side": "buy", "price": 581.5, "timeframe": "1D"}
+  # Alerts are appended to data/tv_alerts.jsonl and can never place an order.
+  tradingview_webhook:
+    enabled: false
+    secret: ""
+    journal: "data/tv_alerts.jsonl"
+    max_bytes: 4096
+
 news:
   enabled: true
   feeds:
