@@ -51,6 +51,10 @@ class _Terminal:
     def tick(self, symbol: str) -> dict:
         return {"bid": 100.0, "ask": 100.1, "spread": 0.1}
 
+    def spec(self, symbol: str | None) -> dict | None:
+        # Unknown spec: the size falls back to the bridge's own lot assumption.
+        return None
+
     def modify_sl(self, ticket: int, sl=None, tp=None) -> bool:
         return True
 

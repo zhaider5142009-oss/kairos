@@ -70,6 +70,32 @@ def _binance_live_ready() -> bool:
         return False
 
 
+def _size_for(venue: str, notional: float, price: float,
+              spec: dict[str, float] | None = None) -> float:
+    """The largest position in the venue's own unit that still fits the cap.
+
+    Every venue trades a different thing: MT5 a CFD lot whose units, step and
+    minimum the broker owns (a 1,000-oz silver lot is not a 100-oz gold lot); PSX
+    whole shares; spot and paper fractional units of the asset itself. Each one
+    rounds *down*, because an approved notional is a ceiling and rounding to the
+    lot step used to spend past it. Zero means the name cannot be traded at this
+    size — less than the venue's minimum volume, or less than one share — and the
+    caller vetoes instead of forcing the floor, which is how a position too small
+    for the broker became one far larger than the account's risk per trade.
+    """
+    if not (notional > 0) or not (price > 0) or not math.isfinite(notional + price):
+        return 0.0
+    if venue == "MT5":
+        step = float((spec or {}).get("volume_step") or 0.01)
+        minimum = float((spec or {}).get("volume_min") or step)
+        units = float((spec or {}).get("contract_size") or 100.0)
+        lots = math.floor(notional / price / units / step + 1e-9) * step
+        return round(lots, 8) if lots >= minimum else 0.0
+    if venue == "JS_GLOBAL":
+        return float(math.floor(notional / price))        # whole shares
+    return notional / price                               # spot units
+
+
 def _figure(raw: Any) -> float:
     """A risk reading as a number, or zero when it is not one.
 
@@ -487,45 +513,53 @@ class Autopilot:
                                 else:
                                     notional = guard["allowed_notional"]
                                     # The venue decides the unit, so the venue has
-                                    # to be known before the size is. An MT5 CFD is
-                                    # bought in 100-unit lots and has a 0.01-lot
-                                    # floor; a Binance spot order is the asset
-                                    # itself, where that floor would inflate a
-                                    # small notional past what the risk layer
-                                    # approved and a lot division would send an
-                                    # order a hundred times too small.
+                                    # to be known before the size is — and the
+                                    # unit is the broker's own, not an assumption
+                                    # about lots.
                                     venue = self._venue_for(inst, live, is_psx)
-                                    if venue == "MT5":
-                                        qty = round(max(0.01,
-                                                        notional / price / 100), 2)
-                                    elif venue == "JS_GLOBAL":
-                                        qty = int(notional // price)   # PSX shares
+                                    spec = (self.mt5.spec(self.mt5.resolve_symbol(
+                                        inst.key)) if venue == "MT5" else None)
+                                    qty = _size_for(venue, notional, price, spec)
+                                    if qty <= 0:
+                                        # Nothing tradeable fits the cap. Sending
+                                        # the venue's minimum anyway would place an
+                                        # order the risk layer never approved; the
+                                        # desk gets the veto instead.
+                                        action = "MIN-LOT"
+                                        detail = (f"{venue} minimum is bigger than "
+                                                  f"the {notional:,.0f} "
+                                                  f"{inst.currency} cap at "
+                                                  f"{price:,.4f}")
+                                        JOURNAL.log("AUTOPILOT_MIN_LOT",
+                                                    {"symbol": inst.key, "venue": venue,
+                                                     "cap": round(notional, 2),
+                                                     "price": price})
                                     else:
-                                        qty = notional / price
-                                    act, detail, struck = self._execute(
-                                        inst, side, qty, price,
-                                        res, broker, live, close=False)
-                                    action = act
-                                    trades += 1
-                                    if act in ("OPENED", "TICKET", "PLACED",
-                                               "LIVE-FILLED", "LIVE-UNVERIFIED",
-                                               "LIVE-UNCONFIRMED"):
-                                        # A live fill is a position, not a
-                                        # footnote. Without this row the venue
-                                        # holds a trade the loop never managed:
-                                        # no stop, no target, no trailing
-                                        # ratchet, no maturity exit — only a
-                                        # signal flip could get out. `_reconcile`
-                                        # drops the row if the venue turns out
-                                        # not to hold it after all.
-                                        st["held"][inst.key] = {
-                                            "started": _now(), "side": side,
-                                            # the size the venue traded, not the
-                                            # size that was asked for
-                                            "qty": (struck if struck and struck > 0
-                                                    else qty),
-                                            "entry": price,
-                                            "stop": sl0, "stop0": sl0, "target": tgt0}
+                                        act, detail, struck = self._execute(
+                                            inst, side, qty, price,
+                                            res, broker, live, close=False)
+                                        action = act
+                                        trades += 1
+                                        if act in ("OPENED", "TICKET", "PLACED",
+                                                   "LIVE-FILLED", "LIVE-UNVERIFIED",
+                                                   "LIVE-UNCONFIRMED"):
+                                            # A live fill is a position, not a
+                                            # footnote. Without this row the venue
+                                            # holds a trade the loop never managed:
+                                            # no stop, no target, no trailing
+                                            # ratchet, no maturity exit — only a
+                                            # signal flip could get out. `_reconcile`
+                                            # drops the row if the venue turns out
+                                            # not to hold it after all.
+                                            st["held"][inst.key] = {
+                                                "started": _now(), "side": side,
+                                                # the size the venue traded, not the
+                                                # size that was asked for
+                                                "qty": (struck if struck and struck > 0
+                                                        else qty),
+                                                "entry": price,
+                                                "stop": sl0, "stop0": sl0,
+                                                "target": tgt0}
 
             rows.append({"symbol": res["symbol"], "name": res["name"],
                          "price": price, "direction": s["direction"],

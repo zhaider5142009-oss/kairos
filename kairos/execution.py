@@ -762,6 +762,31 @@ class Mt5Bridge:
         except Exception:
             return None
 
+    def spec(self, symbol: str) -> dict[str, float] | None:
+        """The terminal's own trading rules for one symbol.
+
+        A lot is not a fixed thing: contract size, the smallest order and the step
+        between them are per-symbol settings the broker owns, and they differ
+        across a book (a 100-oz gold CFD and a 1,000-barrel oil CFD are not the
+        same hundred dollars). Sizing from an assumption instead of the spec puts
+        every order on that symbol out by the ratio between the two — and it puts
+        it out in whichever direction the broker chose.
+        """
+        if not self.connected or not symbol:
+            return None
+        try:
+            info = self._mt5.symbol_info(symbol)
+        except Exception:
+            return None
+        if info is None:
+            return None
+        out = {"contract_size": float(info.trade_contract_size),
+               "volume_min": float(info.volume_min),
+               "volume_step": float(info.volume_step)}
+        # A zero in any of the three is not a rule, it is a half-filled struct,
+        # and each one would either divide by zero or floor the order to nothing.
+        return out if all(v > 0 and math.isfinite(v) for v in out.values()) else None
+
     def place_order(self, intent: OrderIntent, deviation: int = 20) -> Fill | None:
         if not self.connected:
             JOURNAL.log("MT5_REJECT", {"reason": "not connected", "coid": intent.client_order_id})

@@ -126,8 +126,10 @@ def test_a_cfd_entry_is_still_sized_in_lots(monkeypatch, tmp_path):
 
     assert len(term.deals) == 1, ap.st["signals"][0]
     lots = float(term.deals[0].quantity)
-    assert lots == pytest.approx(round(max(0.01, cleared[0] / price / 100), 2),
-                                 abs=1e-12)
+    # the largest whole lot that fits, stated as an invariant rather than a
+    # formula: this size fits the cap, the next step up does not
+    assert lots * price * 100 <= cleared[0] + 1e-9
+    assert (lots + 0.01) * price * 100 > cleared[0]
 
 
 # -------------------------------------------------------------------- the routing
