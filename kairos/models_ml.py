@@ -23,13 +23,22 @@ def _prepare_xy(df: pd.DataFrame, horizon: int) -> tuple[np.ndarray, np.ndarray,
 
 
 def _walk_forward_splits(n: int, n_splits: int = 4, embargo: int = 5):
+    """Train on everything up to a gap, then test on the block after the gap.
+
+    `test_size` is the length of the held-out block and `embargo` is the dead
+    zone between them, so a horizon-`h` label cannot reach from the training end
+    into the test start. Both numbers were computed here and only one was ever
+    used: the test window used to begin at `end - embargo`, which made the block
+    scored `embargo` bars long and the gap `test_size`. Nothing noticed, because
+    the scorer that received those five bars answered 0.5 — see `_hit_rate`.
+    """
     n = max(n, 40)
     test_size = max(15, n // (n_splits + 2))
     for i in range(n_splits):
         end = n - (n_splits - i) * test_size
         if end - test_size - embargo < 30:
             continue
-        yield 0, end - test_size - embargo, end - embargo, end
+        yield 0, end - test_size - embargo, end - test_size, end
 
 
 def _ic(y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -41,9 +50,16 @@ def _ic(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(np.corrcoef(y_true, y_pred)[0, 1])
 
 
-def _hit_rate(y_true: np.ndarray, y_pred_sign: np.ndarray) -> float:
+def _hit_rate(y_true: np.ndarray, y_pred_sign: np.ndarray) -> float | None:
+    """The share of the window whose sign was right, or nothing at all.
+
+    The `None` is the point. This answered 0.5 for any window under eight bars,
+    and 0.5 is exactly what `edge = hit - 0.5` is built to be blind to: a floor
+    that returns chance does not report "unknown", it reports "measured, and
+    worth nothing" — and every fold in the battery used to sit under it.
+    """
     if len(y_true) < 8:
-        return 0.5
+        return None
     return float(np.mean(np.sign(y_true) == np.sign(y_pred_sign)))
 
 
@@ -107,16 +123,22 @@ def tree_stack_forecast(df: pd.DataFrame, horizon: int = 5) -> list[ModelForecas
     for name, model in models.items():
         try:
             hits, mags = [], []
-            for tr_s, tr_e, te_s, te_e in _walk_forward_splits(len(X)):
+            for tr_s, tr_e, te_s, te_e in _walk_forward_splits(len(X),
+                                                               embargo=max(horizon, 5)):
                 ytr = y_sign[tr_s:tr_e]
                 if len(np.unique(ytr)) < 2:
                     continue
                 model.fit(X[tr_s:tr_e], ytr)
                 p = model.predict(X[te_s:te_e])
-                hits.append(_hit_rate(y[te_s:te_e], p))
+                # The magnitudes belong to the training window, so a fold whose
+                # test block is too short to score still contributes them.
                 up_mask = y[tr_s:tr_e] > 0
                 mags.append((float(np.mean(np.abs(y[tr_s:tr_e][up_mask]))) if up_mask.any() else 0.0,
                              float(np.mean(np.abs(y[tr_s:tr_e][~up_mask]))) if (~up_mask).any() else 0.0))
+                h = _hit_rate(y[te_s:te_e], p)
+                if h is None:
+                    continue
+                hits.append(h)
             if not hits:
                 continue
             model.fit(X[:-horizon], y_sign[:-horizon])
@@ -128,11 +150,14 @@ def tree_stack_forecast(df: pd.DataFrame, horizon: int = 5) -> list[ModelForecas
             down_mag = float(np.mean([m[1] for m in mags])) if mags else 0.0
             # expected return = P(up)*E|up| - P(down)*E|down|
             exp_ret = float((2 * p_up - 1) * (up_mag + down_mag) / 2)
-            edge = abs(hit - 0.5) * 2                       # 0..1 skill
+            # Below chance is not skill of the opposite kind: the vote this
+            # number rides on still points wherever `p_up` says it does, so a
+            # member that is consistently wrong has to be trusted less, not more.
+            edge = max(0.0, hit - 0.5) * 2                  # 0..1 skill
             conf = float(np.clip(0.25 + edge * 0.9, 0.10, 0.90))
             forecasts.append(ModelForecast(
                 f"ML-{name}", _direction(exp_ret), exp_ret, horizon, conf,
-                f"walk-forward hit-rate={hit:.1%} P(up)={p_up:.2f} "
+                f"walk-forward hit-rate={hit:.1%} on {len(hits)} folds P(up)={p_up:.2f} "
                 f"E|up|={up_mag:.4f} E|down|={down_mag:.4f}"))
         except Exception:
             continue
