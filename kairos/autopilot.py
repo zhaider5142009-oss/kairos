@@ -80,17 +80,23 @@ def _size_for(venue: str, notional: float, price: float,
     minimum order and minimum value the exchange publishes. Each one rounds
     *down*, because an approved notional is a ceiling and rounding to the lot
     step used to spend past it. Zero means the name cannot be traded at this
-    size — less than the venue's minimum volume, less than its smallest order, or
-    less than one share — and the caller vetoes instead of forcing the floor,
-    which is how a position too small for the broker became one far larger than
-    the account's risk per trade.
+    size — less than the venue's minimum volume, less than its smallest order,
+    less than one share, or a lot the broker would not state — and the caller
+    vetoes instead of forcing the floor, which is how a position too small for
+    the broker became one far larger than the account's risk per trade.
     """
     if not (notional > 0) or not (price > 0) or not math.isfinite(notional + price):
         return 0.0
     if venue == "MT5":
-        step = float((spec or {}).get("volume_step") or 0.01)
-        minimum = float((spec or {}).get("volume_min") or step)
-        units = float((spec or {}).get("contract_size") or 100.0)
+        # No fallback here. The number goes out as the order's volume, so an
+        # assumed hundred units is not a guess that gets corrected downstream —
+        # on a 1,000-unit lot it is a position ten times the approved cap, the
+        # same ceiling blown in the same direction the minimum lot blew it.
+        units = float((spec or {}).get("contract_size") or 0)
+        step = float((spec or {}).get("volume_step") or 0)
+        minimum = float((spec or {}).get("volume_min") or 0)
+        if not (units > 0 and step > 0 and minimum > 0):
+            return 0.0
         lots = math.floor(notional / price / units / step + 1e-9) * step
         return round(lots, 8) if lots >= minimum else 0.0
     if venue == "JS_GLOBAL":
@@ -528,22 +534,29 @@ class Autopilot:
                                     # unit is the broker's own, not an assumption
                                     # about lots.
                                     venue = self._venue_for(inst, live, is_psx)
-                                    qty = _size_for(venue, notional, price,
-                                                    self._venue_spec(venue, inst))
+                                    spec = self._venue_spec(venue, inst)
+                                    qty = _size_for(venue, notional, price, spec)
                                     if qty <= 0:
                                         # Nothing tradeable fits the cap. Sending
                                         # the venue's minimum anyway would place an
                                         # order the risk layer never approved; the
-                                        # desk gets the veto instead.
+                                        # desk gets the veto instead. MT5 with no
+                                        # spec is a different veto: the lot was
+                                        # never stated, not refused for size, and
+                                        # the two need different fixes.
                                         action = "MIN-LOT"
-                                        detail = (f"{venue} minimum is bigger than "
-                                                  f"the {notional:,.0f} "
-                                                  f"{inst.currency} cap at "
-                                                  f"{price:,.4f}")
+                                        detail = (
+                                            f"{venue} would not state the lot size "
+                                            f"for {inst.key}"
+                                            if venue == "MT5" and not spec else
+                                            f"{venue} minimum is bigger than the "
+                                            f"{notional:,.0f} {inst.currency} cap "
+                                            f"at {price:,.4f}")
                                         JOURNAL.log("AUTOPILOT_MIN_LOT",
                                                     {"symbol": inst.key, "venue": venue,
                                                      "cap": round(notional, 2),
-                                                     "price": price})
+                                                     "price": price,
+                                                     "spec": bool(spec)})
                                     else:
                                         act, detail, struck = self._execute(
                                             inst, side, qty, price,
@@ -1204,10 +1217,13 @@ class Autopilot:
         The unit belongs to the broker or the exchange, not to the code, so it has
         to be asked before a size can be computed: MT5 gives a contract size, a
         minimum lot and a lot step; a spot pair gives the quantity ladder, its
-        smallest order and the least it is worth. Either can be unreadable — then
-        the size falls back to the venue's own convention instead of vetoing a
-        trade nobody checked. Cached per pair by the bridge, so a 10-minute loop
-        pays one settings read per pair per hour, not one per entry.
+        smallest order and the least it is worth. Unreadable answers are not
+        symmetric. A spot bridge re-reads the exchange's own filters and puts the
+        quantity on that grid before it signs anything, so a plain-units size is
+        still checked; the MT5 bridge sends the number it is given as the order's
+        volume, so a missing lot has nothing downstream to catch it and is a veto.
+        The spot settings are cached by the bridge — a 10-minute loop pays one
+        settings read per pair per hour, not one per entry.
         """
         if venue == "MT5":
             return self.mt5.spec(self.mt5.resolve_symbol(inst.key))

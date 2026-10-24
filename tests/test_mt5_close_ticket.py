@@ -52,8 +52,9 @@ class _Terminal:
         return {"bid": 100.0, "ask": 100.1, "spread": 0.1}
 
     def spec(self, symbol: str | None) -> dict | None:
-        # Unknown spec: the size falls back to the bridge's own lot assumption.
-        return None
+        # The lot is stated, in the broker's own three numbers. A terminal that
+        # would not answer is the other test: nothing gets sized from a guess.
+        return {"contract_size": 100.0, "volume_min": 0.01, "volume_step": 0.01}
 
     def modify_sl(self, ticket: int, sl=None, tp=None) -> bool:
         return True

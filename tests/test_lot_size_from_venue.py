@@ -15,6 +15,13 @@ A spot pair has the same two settings under other names — a quantity ladder, a
 minimum order and a minimum order value — and the sizing layer has to know them
 before it chooses a size, or the desk computes a trade the exchange declines to
 accept and spends a signed request to find out.
+
+The third assumption was the friendliest-looking one: read the settings when the
+terminal gives them, fall back to a hundred-unit lot when it does not. The MT5
+bridge sends the size it is handed as the order's volume, so there is no second
+check to catch the guess — a silent terminal and a 1,000-unit lot together put
+ten times the approved notional on the market. No answer from the broker is no
+order.
 """
 
 from __future__ import annotations
@@ -49,10 +56,26 @@ def test_a_cfd_size_is_the_largest_whole_step_that_fits_the_cap():
 
 def test_the_contract_size_comes_from_the_terminal_not_from_the_code():
     """Same notional, same price, a broker whose lot is a thousand units: the
-    size changes by ten, because it was read rather than assumed."""
+    size changes by ten, because it was read rather than assumed. A terminal
+    that gives no answer gives no size either — the ten-times error is exactly
+    what the read was there to prevent, so falling back to a hundred units on
+    silence would keep it."""
     wide = {**GOLD_SPEC, "contract_size": 1000.0}
     assert _size_for("MT5", 18_000.0, 120.0, wide) == pytest.approx(0.15)
-    assert _size_for("MT5", 18_000.0, 120.0, None) == 1.5      # assumed fallback
+    assert _size_for("MT5", 18_000.0, 120.0, None) == 0.0
+
+
+def test_a_spec_with_one_number_missing_is_no_spec():
+    """The three settings are one answer, not three. A dict that names a lot and
+    a minimum but no step would be read as "step of zero" and the order floored
+    onto a ladder that does not exist; a partial read is a terminal that has not
+    answered."""
+    for partial in [{}, {"contract_size": 100.0},
+                    {"contract_size": 100.0, "volume_min": 0.01},
+                    {"volume_step": 0.01, "volume_min": 0.01},
+                    {"contract_size": 100.0, "volume_min": 0.01,
+                     "volume_step": 0.0}]:
+        assert _size_for("MT5", 18_000.0, 120.0, partial) == 0.0
 
 
 def test_a_step_of_five_hundredths_is_not_rounded_to_a_hundredth():
@@ -153,6 +176,33 @@ def test_a_name_the_venue_can_trade_still_goes_out(monkeypatch, tmp_path):
     assert len(term.deals) == 1
     lots = float(term.deals[0].quantity)
     assert lots * price * 100.0 <= cleared[0] + 1e-9
+
+
+def test_a_terminal_that_will_not_name_the_lot_trades_nothing(monkeypatch, tmp_path):
+    """The cap here is generous — the name is tradeable. What is missing is the
+    broker's answer to "how big is a lot", and the number this path sends is the
+    size itself, as the order's volume. Guess a hundred units on a 1,000-unit lot
+    and the trade is ten times what the risk layer approved, with nothing further
+    down the line to notice. So an unreadable lot is a veto, and it is reported as
+    the terminal's silence rather than as a cap the name failed."""
+    res = _prediction(monkeypatch, battery=_AGREE)
+    monkeypatch.setattr(AP, "_binance_live_ready", lambda: False)
+    term = _Terminal([])
+    term.spec = lambda symbol: None                        # type: ignore[method-assign]
+    journal = _Journal()
+    ap = _autopilot(monkeypatch, tmp_path, term, journal, res, managed=False)
+    cleared = _cleared(monkeypatch, ap)
+
+    out = ap.cycle()
+
+    assert out["trades"] == 0, ap.st["signals"][0]
+    assert term.deals == [], "an order was placed on an assumed contract size"
+    assert cleared and cleared[0] > 100.0, "the fixture no longer clears a lot"
+    signal = ap.st["signals"][0]
+    assert signal["action"] == "MIN-LOT"
+    assert "would not state" in signal["detail"], signal["detail"]
+    assert journal.count("AUTOPILOT_MIN_LOT") == 1
+    assert "GOLD" not in ap.st["held"]
 
 
 # ---------------------------------------------------------------- the spot ladder
