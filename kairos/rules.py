@@ -38,6 +38,7 @@ DEFAULT_RULES: dict[str, Any] = {
     "trend_sma_period": 50,
     "require_above_sma50": True,         # longs only above trend
     "max_correlation": 0.7,              # portfolio correlation cap
+    "max_cluster_pct": 30.0,             # one correlated cluster's share of equity
     "min_market_cap_pkr": 5_000_000_000, # PSX: skip micro caps
     "min_avg_volume": 50_000,            # PSX: liquidity floor
     "earnings_blackout_days": 3,         # stand aside around prints
@@ -78,11 +79,6 @@ NOT_ENFORCED: dict[str, str] = {
     "min_market_cap_pkr":
         "no fundamentals source: `universe.Instrument` carries no market cap, so "
         "the floor cannot be evaluated for any name",
-    "max_correlation":
-        "a portfolio cap needs a return matrix across every held name plus the "
-        "candidate at gate time; the cycle would pay that in history reads per "
-        "candidate, so it is wired next as a cached cross-section rather than "
-        "pretended to here",
     "earnings_blackout_days":
         "`calendar.py` holds macro event windows only (no company print dates), "
         "so a per-symbol blackout cannot be computed",
@@ -106,6 +102,8 @@ ENFORCED: dict[str, tuple[str, ...]] = {
     "max_hold_days": ("rules.py",),
     "max_daily_loss_pct": ("rules.py",),
     "max_total_exposure_pct": ("autopilot.py",),
+    "max_correlation": ("autopilot.py",),
+    "max_cluster_pct": ("autopilot.py",),
     "max_consecutive_losses": ("autopilot.py",),
     "min_model_agreement": ("autopilot.py", "fugu.py"),
     "max_spread_pct": ("autopilot.py",),
@@ -562,6 +560,9 @@ def describe() -> str:
             f"{r['min_confidence']}%, breakers at {r['max_daily_loss_pct']}% day "
             f"loss, {r['max_total_exposure_pct']}% gross exposure and "
             f"{r['max_consecutive_losses']} consecutive losses. "
+            f"Same-side names whose return correlation is at least "
+            f"{r['max_correlation']} share one {r['max_cluster_pct']:g}% equity "
+            f"cluster cap. "
             + _filter_sentence(r))
 
 

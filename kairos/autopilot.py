@@ -290,6 +290,9 @@ class Autopilot:
         from .universe import resolve
 
         st = self.st
+        # Correlation history is per-cycle state: one read per symbol, compared
+        # against every entry candidate in the loop.
+        self._ret_cache = {}
         broker = PaperBroker()
         want_live = st["mode"] == "live"
         mt5_up = bool(self.mt5.ensure()) if want_live else False
@@ -366,6 +369,7 @@ class Autopilot:
             is_psx = inst.market.upper() in ("PSX", "KSE")
             action = "hold"
             detail = ""
+            guard: dict | None = None
 
             # ---- manage an existing position: stops/targets/trail/flip/age.
             # Risk reduction is never rate-limited by max_trades_per_cycle.
@@ -424,25 +428,36 @@ class Autopilot:
                                 if ps.get("position_value"):
                                     notional = min(notional, float(ps["position_value"]))
                             if notional > 10:
-                                if live and not is_psx:
-                                    # MT5 quotes CFDs in lots, not shares
-                                    qty = round(max(0.01,
-                                                    notional / price / 100), 2)
-                                elif live:
-                                    qty = int(notional // price)   # PSX shares
-                                else:
-                                    qty = notional / price
                                 side = "BUY" if score > 0 else "SELL"
-                                act, detail = self._execute(inst, side, qty, price,
-                                                            res, broker, live,
-                                                            close=False)
-                                action = act
-                                trades += 1
-                                if act in ("OPENED", "TICKET", "PLACED"):
-                                    st["held"][inst.key] = {
-                                        "started": _now(), "side": side,
-                                        "qty": qty, "entry": price,
-                                        "stop": sl0, "stop0": sl0, "target": tgt0}
+                                # One correlated cluster cannot own the book.
+                                # Every name used to be sized on its own
+                                # conviction, so a single macro shock could stop
+                                # eight overlapping five-day windows at once.
+                                guard = self._cluster_guard(inst, side, notional,
+                                                            eq, pos_list)
+                                if guard["allowed_notional"] <= 10:
+                                    action = "CLUSTER"
+                                    detail = guard["reason"] or "cluster cap"
+                                else:
+                                    notional = guard["allowed_notional"]
+                                    if live and not is_psx:
+                                        # MT5 quotes CFDs in lots, not shares
+                                        qty = round(max(0.01,
+                                                        notional / price / 100), 2)
+                                    elif live:
+                                        qty = int(notional // price)   # PSX shares
+                                    else:
+                                        qty = notional / price
+                                    act, detail = self._execute(inst, side, qty, price,
+                                                                res, broker, live,
+                                                                close=False)
+                                    action = act
+                                    trades += 1
+                                    if act in ("OPENED", "TICKET", "PLACED"):
+                                        st["held"][inst.key] = {
+                                            "started": _now(), "side": side,
+                                            "qty": qty, "entry": price,
+                                            "stop": sl0, "stop0": sl0, "target": tgt0}
 
             rows.append({"symbol": res["symbol"], "name": res["name"],
                          "price": price, "direction": s["direction"],
@@ -462,6 +477,13 @@ class Autopilot:
                          "risk_veto": s.get("risk_veto", 0.0),
                          "veto_by": s.get("risk_veto_name", ""),
                          "veto_x": s.get("risk_veto_x", 1.0),
+                         # A position cut by the cluster cap has to be traceable
+                         # to the names that filled it, or the smaller size reads
+                         # as a sizing bug rather than the portfolio brake firing.
+                         **({"cluster_rho": guard["rho_max"],
+                             "cluster_pct": guard["cluster_pct"],
+                             "cluster_with": guard["members"][:4]}
+                            if guard and guard.get("members") else {}),
                          "action": action, "detail": detail})
 
         rows.sort(key=lambda r: -abs(r.get("score") or 0))
@@ -869,6 +891,69 @@ class Autopilot:
                 "equity_peak": round(max(peak, eq), 2),
                 "dd_from_peak_pct": round(dd_pct, 2),
                 "block_entries": bool(blockers), "blockers": blockers}
+
+    # -------------------------------------------------------- portfolio cluster
+    def _returns_for(self, key: str):
+        """Daily returns for one symbol, read from the store once per cycle.
+
+        The candidate and every holding would otherwise reload the same file:
+        a cycle asks this question once per entry candidate against the whole
+        book, so the cache is what keeps a portfolio brake off the hot path.
+        """
+        cache = getattr(self, "_ret_cache", None)
+        if cache is None:
+            cache = self._ret_cache = {}
+        if key not in cache:
+            from . import risk as _K
+            from .data import STORE
+            try:
+                df = STORE.load(key)
+            except Exception:
+                df = None
+            cache[key] = _K.returns_from_bars(df)
+        return cache[key]
+
+    def _cluster_book(self, pos_list: list | None, skip_key: str) -> list[dict]:
+        """The open book in the shapes the cluster budget compares.
+
+        `skip_key` drops the candidate itself: an entry path that sees its own
+        name in the book is sizing against a position it is about to manage,
+        not one that competes with it for the cluster's budget.
+        """
+        from .universe import resolve
+        out: list[dict] = []
+        for p in pos_list or []:
+            sym = str(p.get("symbol") or p.get("key") or "").strip()
+            if not sym:
+                continue
+            inst = resolve(sym)
+            key = inst.key if inst is not None else sym.upper()
+            if key == skip_key:
+                continue
+            try:
+                qty = abs(float(p.get("qty") or 0))
+                px = float(p.get("last") or p.get("entry") or 0)
+            except (TypeError, ValueError):
+                qty, px = 0.0, 0.0
+            out.append({"symbol": key,
+                        "market": inst.market if inst is not None else "",
+                        "side": str(p.get("side") or "").upper(),
+                        "notional": qty * px,
+                        "returns": self._returns_for(key)})
+        return out
+
+    def _cluster_guard(self, inst, side: str, notional: float, equity: float,
+                       pos_list: list | None) -> dict:
+        """How much of this entry one correlated cluster can still absorb."""
+        from . import risk as _K
+        from . import rules as _R
+        cand = {"symbol": inst.key, "market": getattr(inst, "market", ""),
+                "side": side, "notional": notional,
+                "returns": self._returns_for(inst.key)}
+        return _K.cluster_budget(
+            cand, self._cluster_book(pos_list, inst.key), equity,
+            float(_R.get_rule("max_correlation", 0.7)),
+            float(_R.get_rule("max_cluster_pct", 30.0)))
 
     # ------------------------------------------------------ position management
     def _manage_exit(self, inst, hp: dict, hb: dict, price: float,

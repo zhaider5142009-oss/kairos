@@ -140,3 +140,145 @@ def position_size(capital: float, price: float, stop_distance_pct: float,
     risk_amount = capital * risk_budget_pct
     units = int(risk_amount / (price * stop_distance_pct))
     return {"units": units, "notional": units * price, "risk_amount": risk_amount}
+
+
+# -------------------------------------------------------------- cluster budget
+# `rules.max_correlation` was declared as a portfolio correlation cap and read by
+# nothing: every entry was sized on its own conviction, so one cycle could put
+# eight PSX scrips on the book whose five-day windows overlap and whose returns
+# move together — one macro shock, eight stops. This is what the key means now.
+#
+# A pair whose histories do not overlap is not evidence of independence. Two
+# same-market names with a short store are assumed 0.75, which is inside the
+# cluster; a cross-market pair gets 0.40, which is not. Refusing on unknown would
+# freeze a fresh deploy, and treating unknown as zero is how a correlation cap
+# becomes decoration.
+UNKNOWN_RHO_SAME_MARKET = 0.75
+UNKNOWN_RHO_CROSS_MARKET = 0.40
+MIN_RETURNS = 15
+
+
+def daily_returns(close: pd.Series, n: int = 90) -> pd.Series | None:
+    """Simple daily returns for correlation, or None when too few are printed."""
+    try:
+        s = pd.to_numeric(pd.Series(close), errors="coerce").dropna().astype(float)
+    except (TypeError, ValueError):
+        return None
+    if len(s) < MIN_RETURNS + 1:
+        return None
+    r = s.tail(n + 1).pct_change().dropna()
+    return r if len(r) >= MIN_RETURNS else None
+
+
+def returns_from_bars(df: pd.DataFrame | None, n: int = 90) -> pd.Series | None:
+    """Daily returns from a stored bar frame, indexed by date.
+
+    The index is deduplicated and sorted before the returns are taken: a store
+    that has ever written the same session twice would otherwise align two
+    series into a cartesian pair, and a correlation computed on that is noise
+    wearing a number.
+    """
+    if df is None or len(df) < 2 or "close" not in getattr(df, "columns", []):
+        return None
+    try:
+        idx = (pd.to_datetime(df["date"], errors="coerce") if "date" in df.columns
+               else pd.RangeIndex(len(df)))
+        close = pd.Series(
+            pd.to_numeric(df["close"], errors="coerce").to_numpy(dtype=float),
+            index=idx)
+        close = close[~close.index.duplicated(keep="last")].sort_index()
+    except (TypeError, ValueError):
+        return None
+    return daily_returns(close, n)
+
+
+def correlation(a: pd.Series | None, b: pd.Series | None) -> float | None:
+    """Pearson correlation on the dates both series share, or None.
+
+    None means "not enough common history to answer", not zero: the caller
+    decides what an unknown pair is assumed to be.
+    """
+    if a is None or b is None:
+        return None
+    joined = pd.concat({"a": a, "b": b}, axis=1, join="inner").dropna()
+    if len(joined) < MIN_RETURNS:
+        return None
+    if joined["a"].std() == 0 or joined["b"].std() == 0:
+        return None
+    rho = float(joined["a"].corr(joined["b"]))
+    return None if rho != rho else rho
+
+
+def cluster_budget(candidate: dict, book: list[dict], equity: float,
+                   rho_cap: float = 0.7,
+                   cluster_cap_pct: float = 30.0) -> dict:
+    """How much of `candidate['notional']` one correlated cluster can still take.
+
+    Membership is the declared `max_correlation`: a same-side holding joins the
+    cluster when the return correlation is at or above the cap. Opposite sides
+    are not summed — a long and a short that move together offset rather than
+    compound — and a holding whose notional cannot be read is treated as having
+    spent the whole cluster cap, because "unreadable" is the conservative
+    answer and not the free one.
+
+    Returns `allowed_notional` (never more than the candidate asked for), the
+    cluster's share of equity after the add, and a reason when nothing fits.
+    """
+    out = {"allowed_notional": 0.0, "rho_max": None, "cluster_pct": 0.0,
+           "members": [], "scaled": False, "reason": ""}
+    try:
+        eq = float(equity)
+    except (TypeError, ValueError):
+        eq = 0.0
+    try:
+        want = max(0.0, float(candidate.get("notional") or 0.0))
+    except (TypeError, ValueError):
+        want = 0.0
+    if eq <= 0:
+        out["reason"] = "no usable equity figure — cluster cap not evaluated"
+        return out
+    if want <= 0:
+        out["reason"] = "no notional to size"
+        return out
+    try:
+        cap = eq * max(0.0, float(cluster_cap_pct)) / 100.0
+    except (TypeError, ValueError):
+        cap = 0.0
+    if cap <= 0:
+        out["reason"] = "cluster cap is not a usable percentage"
+        return out
+
+    side = str(candidate.get("side", "")).upper()
+    market = str(candidate.get("market", "")).upper()
+    held, rho_max, unreadable = 0.0, None, False
+    for pos in book or []:
+        if str(pos.get("side", "")).upper() != side:
+            continue
+        rho = correlation(candidate.get("returns"), pos.get("returns"))
+        if rho is None:
+            rho = (UNKNOWN_RHO_SAME_MARKET
+                   if market and market == str(pos.get("market", "")).upper()
+                   else UNKNOWN_RHO_CROSS_MARKET)
+        rho_max = rho if rho_max is None else max(rho_max, rho)
+        if rho < rho_cap:
+            continue
+        name = str(pos.get("symbol") or pos.get("key") or "?")
+        out["members"].append(name)
+        try:
+            held += max(0.0, float(pos.get("notional") or 0.0))
+        except (TypeError, ValueError):
+            unreadable = True
+    if unreadable:
+        held = cap
+
+    allowed = max(0.0, min(want, cap - held))
+    out.update(allowed_notional=round(allowed, 2),
+               rho_max=None if rho_max is None else round(rho_max, 3),
+               cluster_pct=round((held + allowed) / eq * 100, 1),
+               scaled=allowed + 1e-9 < want)
+    if allowed <= 0 and out["members"]:
+        shown = ", ".join(out["members"][:3]) + ("…" if len(out["members"]) > 3 else "")
+        out["reason"] = (f"correlated cluster ({shown}) already at "
+                         f"{held / eq * 100:.0f}% of equity, at its "
+                         f"{cluster_cap_pct:g}% cap")
+    return out
