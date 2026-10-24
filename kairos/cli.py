@@ -246,6 +246,36 @@ def cmd_serve(args) -> int:
     return 0
 
 
+def cmd_lean(args) -> int:
+    from pathlib import Path
+    from rich.table import Table
+    from . import lean
+    console = _console()
+    st = lean.status()
+    tbl = Table(title="LEAN CROSS-CHECK SEAM", box=box.ROUNDED)
+    tbl.add_column("piece")
+    tbl.add_column("state")
+    tbl.add_row("lean CLI", st["cli"] or "[dim]absent[/]")
+    tbl.add_row("docker client", st["docker"] or "[dim]absent[/]")
+    tbl.add_row("docker engine", st["engine"] or "[dim]not answering[/]")
+    tbl.add_row("engine image", "[green]present[/]" if st["image"]
+                else f"[dim]{lean.LEAN_IMAGE} absent[/]")
+    tbl.add_row("quote export", st["data_dir"])
+    tbl.add_row("backtest", "[green]can run[/]" if st["ready"]
+                else "[yellow]cannot run: " + ", ".join(st["missing"]) + "[/]")
+    console.print(tbl)
+    for symbol in args.export or []:
+        try:
+            out = lean.export_bars(
+                symbol, data_dir=Path(args.data_dir) if args.data_dir else None)
+        except lean.LeanError as exc:
+            console.print(f"[red]{symbol}: {exc}[/]")
+            return 1
+        console.print(f"[green]{out['symbol']}[/] {out['rows']} bars "
+                      f"{out['first']}..{out['last']} -> {out['csv']}")
+    return 0
+
+
 def cmd_symbols(args) -> int:
     from rich.table import Table
     from .universe import universe
@@ -1005,6 +1035,14 @@ def main(argv: list[str] | None = None) -> int:
 
     sp = sub.add_parser("health", help="subsystem health check")
     sp.set_defaults(fn=cmd_health)
+
+    sp = sub.add_parser("lean", help="LEAN cross-check seam: what the engine is "
+                                     "missing, and the bars it would read")
+    sp.add_argument("--export", nargs="+", metavar="SYMBOL",
+                    help="write LEAN-readable bars + manifest for each symbol")
+    sp.add_argument("--data-dir", default=None,
+                    help="where to write the export (default data/lean)")
+    sp.set_defaults(fn=cmd_lean)
 
     sp = sub.add_parser("macro", help="cross-asset risk-appetite condition and "
                                       "the prints (or absences) behind it")

@@ -141,8 +141,28 @@ order — an alert is evidence to be compared, not an instruction.
 `/api/health` remains the only other unauthenticated route. The master token
 still gates everything else, reads included.
 
-## Foundation models via WSL (optional, ~4 GB)
+### LEAN cross-check (optional, engine not bundled)
 
+QuantConnect LEAN is a .NET engine that runs behind Docker; it is not vendored
+here, and the box that carries the paper loop should not also carry a
+multi-gigabyte image unless the operator decides to. What KAIROS owns is the
+honest half of the cross-check:
+
+```bash
+python -m kairos.cli lean                        # which piece of the engine is missing
+python -m kairos.cli lean --export GOLD OGDC     # write bars LEAN can read
+```
+
+`lean` prints the state of the CLI, the Docker client, the Docker engine and the
+`quantconnect/lean:latest` image, and says **cannot run** unless the engine
+actually answers — a Docker binary on PATH while the engine is stopped is not a
+capability. The export writes `data/lean/<KEY>.csv` (`date,open,high,low,close,volume`)
+plus a manifest holding rows, first/last date, the bar source and a SHA-256 of the
+file as written, so a cross-check can prove which dataset it read. The manifest
+also says in words that bars are not a backtest: an export never stands in for a
+result, and KAIROS publishes no LEAN figure until the engine has actually run one.
+
+## Foundation models via WSL (optional, ~4 GB)
 ```bash
 python -m kairos setup-wsl     # installs Chronos-Bolt, TimesFM-2.5, qlib into WSL
 ```
@@ -371,7 +391,7 @@ python -m kairos.cli feedback       # realized record, live
 ```
 
 [docs/investors/](docs/investors/) holds the ledger, a one-pager, the whitepaper and the
-deck. Read the ledger first: there is **no forward track record yet** — 4,515 predictions
+deck. Read the ledger first: there is **no forward track record yet** — 4,537 predictions
 journaled, 429 horizons matured, all 429 non-trades — and 10 of 14 instruments in the
 walk-forward sweep lost money. That is the honest state of the project, and it is the reason
 the risk layer exists.
