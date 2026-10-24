@@ -27,6 +27,12 @@ from .store import atomic_write, dumps_strict
 
 DEFAULT_WATCHLIST = ["GOLD", "WTI", "EURUSD", "BTC", "SPX"]
 MAX_ACTIONS_KEPT = 80
+# An acknowledgement is not a position, so both live paths re-read the venue's
+# position list to confirm a fill. Attempts x poll is the entire budget: the
+# flat second this replaced was paid by every clean fill, and a terminal slower
+# than it still came back as unknown after a single read.
+FILL_CONFIRM_ATTEMPTS = 6
+FILL_CONFIRM_POLL_S = 0.2
 
 
 def _now() -> str:
@@ -482,7 +488,17 @@ class Autopilot:
                                                                 close=False)
                                     action = act
                                     trades += 1
-                                    if act in ("OPENED", "TICKET", "PLACED"):
+                                    if act in ("OPENED", "TICKET", "PLACED",
+                                               "LIVE-FILLED", "LIVE-UNVERIFIED",
+                                               "LIVE-UNCONFIRMED"):
+                                        # A live fill is a position, not a
+                                        # footnote. Without this row the venue
+                                        # holds a trade the loop never managed:
+                                        # no stop, no target, no trailing
+                                        # ratchet, no maturity exit — only a
+                                        # signal flip could get out. `_reconcile`
+                                        # drops the row if the venue turns out
+                                        # not to hold it after all.
                                         st["held"][inst.key] = {
                                             "started": _now(), "side": side,
                                             "qty": qty, "entry": price,
@@ -1063,6 +1079,25 @@ class Autopilot:
                     {"symbol": key, "reason": reason, "pnl_est": round(pnl, 2),
                      "consec_losses": st["consec_losses"]})
 
+    def _fill_confirmed(self, symbol: str, positions) -> bool:
+        """True as soon as the venue's own position list shows this fill.
+
+        The confirmation itself is not optional — an acknowledgement is not a
+        position — but the order path used to sleep a fixed second and read once,
+        so every clean fill paid the whole wait and a merely slow venue was
+        reported as unknown. Polling returns on the first read that sees the
+        position and gives up inside the same budget. An unreadable list reads as
+        unconfirmed, which is the fail-closed direction.
+        """
+        want = str(symbol).upper()
+        for attempt in range(FILL_CONFIRM_ATTEMPTS):
+            if want in {str(p.get("symbol", "")).upper()
+                        for p in (positions() or [])}:
+                return True
+            if attempt + 1 < FILL_CONFIRM_ATTEMPTS:
+                time.sleep(FILL_CONFIRM_POLL_S)
+        return False
+
     def _execute(self, inst, side: str, qty: float, price: float,
                  res: dict[str, Any], broker: PaperBroker, live: bool,
                  close: bool, ticket: int | None = None) -> tuple[str, str]:
@@ -1189,16 +1224,12 @@ class Autopilot:
                     return "SPREAD", why
                 fill = self.mt5.place_order(intent)
                 act = "LIVE-FILLED" if fill else "LIVE-REJECT"
-                if fill:
-                    # never trust the ack — confirm the position exists venue-side
-                    time.sleep(1.0)
-                    syms = [str(p.get("symbol", "")).upper()
-                            for p in (self.mt5.positions() or [])]
-                    if fill.symbol.upper() not in syms:
-                        act = "LIVE-UNVERIFIED"
-                        JOURNAL.log("AUTOPILOT_UNVERIFIED",
-                                    {"coid": intent.client_order_id,
-                                     "symbol": fill.symbol})
+                if fill and not self._fill_confirmed(fill.symbol,
+                                                     self.mt5.positions):
+                    act = "LIVE-UNVERIFIED"
+                    JOURNAL.log("AUTOPILOT_UNVERIFIED",
+                                {"coid": intent.client_order_id,
+                                 "symbol": fill.symbol})
         elif venue == "BINANCE":
             if not close:
                 # A 24/7 tape moves while the daily bar the call was made on does
@@ -1234,12 +1265,11 @@ class Autopilot:
             else:
                 act = "LIVE-FILLED" if fill else "LIVE-REJECT"
             if fill and not close:
-                # spot has no position object to close — the sell IS the exit — so
-                # the acknowledgement is checked against the balance instead.
-                time.sleep(1.0)
-                syms = [str(p.get("symbol", "")).upper()
-                        for p in (_BN.BINANCE.positions() or [])]
-                if fill.symbol.upper() not in syms:
+                # Spot has no position object to close — the sell IS the exit — so
+                # an entry is checked against the balance instead. Same rule as
+                # MT5: the acknowledgement gets confirmed venue-side, or the fill
+                # is not trusted.
+                if not self._fill_confirmed(fill.symbol, _BN.BINANCE.positions):
                     act = "LIVE-UNVERIFIED"
                     JOURNAL.log("AUTOPILOT_UNVERIFIED",
                                 {"coid": intent.client_order_id,
