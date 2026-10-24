@@ -394,9 +394,27 @@ class Autopilot:
                     act, _d = self._execute(inst, side, qty, price, res,
                                             broker, live, close=True)
                     action, trades = act, trades + 1
-                    if act in ("CLOSED", "LIVE-FILLED", "PLACED"):
+                    if act in ("CLOSED", "LIVE-FILLED"):
                         self._book_close(inst.key, hp, hb, price, reason)
                         detail = f"{reason} exit"
+                    elif act == "PLACED":
+                        # `PLACED` is an accepted order, not a fill: JS Global
+                        # takes a LIMIT that rests until the tape comes to it.
+                        # Booking the close here dropped the stop, target and
+                        # entry date of a position the venue still holds, and
+                        # counted a loss nobody had taken. The metadata stays
+                        # until reconciliation sees the venue flat, and the
+                        # resting quantity is what keeps the next cycle from
+                        # offering the same shares again.
+                        action = "EXIT-WORKING"
+                        hb["exit_working"] = {"ts": _now(), "qty": qty,
+                                              "reason": reason, "order": _d}
+                        self._act(inst.key, "EXIT-WORKING",
+                                  f"{reason} exit resting at the broker: {_d}")
+                        JOURNAL.log("AUTOPILOT_EXIT_WORKING",
+                                    {"symbol": inst.key, "reason": reason,
+                                     "qty": qty, "order": _d})
+                        detail = f"{reason} exit working at the broker"
 
             # ---- open a fresh position on a strong call ----
             elif abs(score) >= st["entry_threshold"] and hp is None and \
@@ -824,6 +842,9 @@ class Autopilot:
             out.append({"symbol": h["symbol"], "side": "BUY", "qty": h["qty"],
                         "entry": h["avg"], "last": h["mtm"],
                         "pnl": round((h["mtm"] - h["avg"]) * h["qty"], 2),
+                        # the quantity already offered at the broker: the exit
+                        # path reads it so a resting sell is not sent twice
+                        "pending_sell": float(h.get("pending_sell") or 0),
                         "venue": "JS_GLOBAL"})
         if bn_up:
             from . import binance as _BN
@@ -973,6 +994,13 @@ class Autopilot:
         Priority: hard stop > target > trailing ratchet > signal flip > maturity."""
         from . import rules as _R
         st = self.st
+        # A quantity already offered at the broker is an exit in flight. Sending
+        # the same shares again would be refused for overselling (a cash account
+        # cannot sell what a resting order already covers) or, at a venue that
+        # does not net, would offer the position twice. The next cycle reads the
+        # venue again: once the order fills or is cancelled this falls through.
+        if float(hp.get("pending_sell") or 0) > 0:
+            return None
         dirn = 1 if hp["side"] == "BUY" else -1
         entry = float(hb.get("entry") or hp.get("entry") or 0)
         stop, tp = hb.get("stop"), hb.get("target")
