@@ -11,10 +11,15 @@ Pipeline per instrument:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -42,6 +47,84 @@ from .wsl_bridge import WSL
 
 INTERMARKET_KEYS = ("DXY", "US10Y", "VIX", "SPX", "WTI", "GOLD", "COPPER", "BTC",
                     "USDPKR", "WHEAT")
+
+# The battery memo was per-process, so every restart paid the whole refit again
+# (~150s for the 11-name watchlist on this class of CPU) even when the bars were
+# byte-identical — which, on a weekend or between intraday prints, they are. The
+# store is keyed on the same bar set as the memory cache *and* on the code that
+# turns bars into forecasts, so a deploy that changes a model cannot serve the
+# old fit. Only the fits are stored: fusion, strategies, news and macro are
+# recomputed fresh, so a restarted process makes a live decision from them, not
+# a replay of the old one.
+_BATTERY_SOURCES = ("models_stat.py", "models_ml.py", "features.py")
+_BATTERY_VERSION = 1
+_battery_fp: str | None = None
+
+
+def _battery_fingerprint() -> str:
+    global _battery_fp
+    if _battery_fp is None:
+        h = hashlib.sha1()
+        here = Path(__file__).resolve().parent
+        for name in _BATTERY_SOURCES:
+            try:
+                st = (here / name).stat()
+                h.update(f"{name}:{st.st_size}:{int(st.st_mtime)}".encode())
+            except OSError:
+                h.update(f"{name}:missing".encode())
+        _battery_fp = h.hexdigest()[:16]
+    return _battery_fp
+
+
+def _battery_models() -> list[bool]:
+    return [bool(CFG.engine.get("use_stat", True)),
+            bool(CFG.engine.get("use_ml", True)),
+            bool(CFG.engine.get("use_neural", True))]
+
+
+def _plain(value: Any) -> Any:
+    """JSON-safe scalars; numpy ints are not `int` and would silently lose the
+    whole write, which would look exactly like the cache never being enabled."""
+    if isinstance(value, dict):
+        return {str(k): _plain(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(v) for v in value]
+    if isinstance(value, (np.floating, np.integer)):
+        return value.item()
+    return value
+
+
+def _battery_path(key: tuple, symbol: str) -> Path:
+    safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in symbol.upper())
+    return CFG.cache_dir / "battery" / f"{safe}-{int(key[1])}.json"
+
+
+def _read_battery(key: tuple) -> list[ModelForecast] | None:
+    try:
+        rec = json.loads(_battery_path(key, str(key[0])).read_text(encoding="utf-8"))
+        if (rec.get("v") != _BATTERY_VERSION
+                or rec.get("fingerprint") != _battery_fingerprint()
+                or list(rec.get("key") or []) != list(key)
+                or rec.get("models") != _battery_models()):
+            return None
+        return [ModelForecast(**row) for row in rec["forecasts"]]
+    except (OSError, ValueError, TypeError, AttributeError, KeyError):
+        # A cache that cannot be read is slower, never wrong.
+        return None
+
+
+def _write_battery(key: tuple, forecasts: list[ModelForecast]) -> None:
+    try:
+        path = _battery_path(key, str(key[0]))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        rec = {"v": _BATTERY_VERSION, "fingerprint": _battery_fingerprint(),
+               "key": list(key), "models": _battery_models(),
+               "forecasts": [_plain(asdict(fc)) for fc in forecasts]}
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(rec, allow_nan=False), encoding="utf-8")
+        os.replace(tmp, path)
+    except (OSError, ValueError, TypeError):
+        pass
 
 
 def _trend_period() -> Any:
@@ -281,15 +364,26 @@ class PredictionEngine:
             record(res)
         return res
 
+    def _remember_battery(self, key: tuple,
+                          forecasts: list[ModelForecast]) -> None:
+        while len(self._battery_cache) >= 64:      # first-in, first-out: old bars
+            self._battery_cache.pop(next(iter(self._battery_cache)))
+        self._battery_cache[key] = list(forecasts)
+
     def _battery(self, instrument: Instrument, df: pd.DataFrame,
                  horizon: int) -> list[ModelForecast]:
-        """stat + ML + neural refits, memoised on the exact bar set they ran on.
+        """stat + ML + neural refits, memoised on the exact bar set they ran on,
+        in memory for the process and on disk for the next one.
         Forecasts are read-only inputs to fuse(), so sharing objects is safe."""
         close = df["close"]
         key = (instrument.key.upper(), int(horizon), len(df), str(df.index[-1]),
                round(float(close.iloc[-1]), 6))
         hit = self._battery_cache.get(key)
         if hit is not None:
+            return list(hit)
+        hit = _read_battery(key)
+        if hit is not None:
+            self._remember_battery(key, hit)
             return list(hit)
 
         forecasts: list[ModelForecast] = []
@@ -300,9 +394,9 @@ class PredictionEngine:
         if CFG.engine.get("use_neural", True):
             forecasts += neural_battery(df, horizon)
 
-        while len(self._battery_cache) >= 64:      # first-in, first-out: old bars
-            self._battery_cache.pop(next(iter(self._battery_cache)))
-        self._battery_cache[key] = list(forecasts)
+        self._remember_battery(key, forecasts)
+        if forecasts:
+            _write_battery(key, forecasts)
         return list(forecasts)
 
     def _predict_uncached(self, symbol: str, horizon: int = 5, use_llm: bool = False,
