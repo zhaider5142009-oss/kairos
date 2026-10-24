@@ -392,7 +392,8 @@ class Autopilot:
                     side = "SELL" if hp["side"] == "BUY" else "BUY"
                     qty = float(hp["qty"])
                     act, _d = self._execute(inst, side, qty, price, res,
-                                            broker, live, close=True)
+                                            broker, live, close=True,
+                                            ticket=hp.get("ticket"))
                     action, trades = act, trades + 1
                     if act in ("CLOSED", "LIVE-FILLED"):
                         self._book_close(inst.key, hp, hb, price, reason)
@@ -1064,7 +1065,7 @@ class Autopilot:
 
     def _execute(self, inst, side: str, qty: float, price: float,
                  res: dict[str, Any], broker: PaperBroker, live: bool,
-                 close: bool) -> tuple[str, str]:
+                 close: bool, ticket: int | None = None) -> tuple[str, str]:
         from . import binance as _BN
         if KILL.engaged():
             self.st["actions"].insert(0, {"ts": _now(), "symbol": inst.key,
@@ -1149,8 +1150,36 @@ class Autopilot:
             return "GATED", why
 
         if venue == "MT5":
-            # live entry spread guard: never pay an absurd crossing cost
-            if not close:
+            if close:
+                # An exit closes a ticket; it is not a fresh opposite deal.
+                # On a hedging account a DEAL without `position=` opens a second
+                # position, and the sweep that used to follow it flattened EVERY
+                # ticket in the symbol — a manual trade the autopilot never
+                # managed included. One request, one ticket, one spread.
+                if ticket is None:
+                    why = (f"{inst.key}: the terminal reported no position "
+                           "ticket, so there is nothing safe to close — an "
+                           "opposite deal could open a new position instead")
+                    self._act(inst.key, "CLOSE-UNVERIFIED", why)
+                    JOURNAL.log("AUTOPILOT_CLOSE_UNVERIFIED",
+                                {"symbol": inst.key, "why": why})
+                    return "CLOSE-UNVERIFIED", why
+                fill = None
+                try:
+                    closed = bool(self.mt5.close_position(int(ticket)))
+                except Exception as exc:
+                    closed = False
+                    JOURNAL.log("AUTOPILOT_CLOSE_FAIL",
+                                {"symbol": inst.key, "ticket": ticket,
+                                 "error": str(exc)[:200]})
+                act = "LIVE-FILLED" if closed else "LIVE-REJECT"
+                if not closed:
+                    self._act(inst.key, "CLOSE-FAILED",
+                              f"terminal close for {inst.key} ticket {ticket} "
+                              "did not come back DONE — the position may still "
+                              "be live")
+            else:
+                # live entry spread guard: never pay an absurd crossing cost
                 t = self.mt5.tick(self.mt5.resolve_symbol(inst.key) or inst.key)
                 msp = float(_R.get_rule("max_spread_pct", 0.6))
                 if t and price > 0 and t["spread"] / price * 100 > msp:
@@ -1158,20 +1187,18 @@ class Autopilot:
                     self._act(inst.key, "SPREAD", why)
                     JOURNAL.log("AUTOPILOT_SPREAD", {"symbol": inst.key, "why": why})
                     return "SPREAD", why
-            fill = self.mt5.place_order(intent)
-            act = "LIVE-FILLED" if fill else "LIVE-REJECT"
-            if fill and close:
-                self._mt5_close_one(fill.symbol)
-            if fill and not close:
-                # never trust the ack — confirm the position exists venue-side
-                time.sleep(1.0)
-                syms = [str(p.get("symbol", "")).upper()
-                        for p in (self.mt5.positions() or [])]
-                if fill.symbol.upper() not in syms:
-                    act = "LIVE-UNVERIFIED"
-                    JOURNAL.log("AUTOPILOT_UNVERIFIED",
-                                {"coid": intent.client_order_id,
-                                 "symbol": fill.symbol})
+                fill = self.mt5.place_order(intent)
+                act = "LIVE-FILLED" if fill else "LIVE-REJECT"
+                if fill:
+                    # never trust the ack — confirm the position exists venue-side
+                    time.sleep(1.0)
+                    syms = [str(p.get("symbol", "")).upper()
+                            for p in (self.mt5.positions() or [])]
+                    if fill.symbol.upper() not in syms:
+                        act = "LIVE-UNVERIFIED"
+                        JOURNAL.log("AUTOPILOT_UNVERIFIED",
+                                    {"coid": intent.client_order_id,
+                                     "symbol": fill.symbol})
         elif venue == "BINANCE":
             if not close:
                 # A 24/7 tape moves while the daily bar the call was made on does
@@ -1318,39 +1345,6 @@ class Autopilot:
                                          "account": out.get("account"),
                                          "close": close})
         return "PLACED", detail
-
-    def _mt5_close_one(self, symbol: str) -> None:
-        """Close the terminal-side leg of a position the autopilot just sold.
-
-        A swallowed failure here used to leave the terminal holding a position the
-        book had already booked as closed — an open trade with nobody managing its
-        stop, and no trace of it in the journal. So a close that does not go out is
-        reported, and reported loudly enough that the desk shows it.
-        """
-        try:
-            positions = self.mt5.positions()
-        except Exception as exc:
-            positions = None
-            JOURNAL.log("AUTOPILOT_CLOSE_READ_FAIL", {"symbol": symbol,
-                                                      "error": str(exc)[:200]})
-        if positions is None:
-            self._act(symbol, "CLOSE-UNVERIFIED",
-                      f"terminal position list unreadable for {symbol}")
-            return
-        for p in positions:
-            if p.get("symbol") != symbol:
-                continue
-            try:
-                out = self.mt5.close_position(int(p["ticket"]))
-            except Exception as exc:
-                out = None
-                JOURNAL.log("AUTOPILOT_CLOSE_FAIL", {"symbol": symbol,
-                                                     "ticket": p.get("ticket"),
-                                                     "error": str(exc)[:200]})
-            if not out:
-                self._act(symbol, "CLOSE-FAILED",
-                          f"terminal close for {symbol} ticket {p.get('ticket')} "
-                          f"did not come back DONE — the position may still be live")
 
     # ------------------------------------------------------------- reporting
     def status(self) -> dict[str, Any]:
