@@ -12,12 +12,48 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import math
 import os
 import threading
 import time
 from pathlib import Path
 
 import numpy as _np
+
+
+def _non_finite_path(obj, where: str):
+    """Where the first NaN or infinity is, in terms of the caller's structure.
+
+    `json.dumps` would write either one as `NaN` / `Infinity` — two tokens that
+    are not JSON. Our own reader parses them back (Python's `json` is lenient
+    about it), so the file survives on this machine and the record keeps
+    growing, while every other reader — the track-record publisher, a standard
+    parser, an investor's spreadsheet import — stops at the first line, and the
+    arithmetic that reads the value back gets a NaN that poisons whatever it
+    touches without ever raising. A non-finite number here is not a market
+    fact: it is a division by a zero price, a mean over an empty window, or a
+    vendor print that arrived as nothing, and the file that *is* the track
+    record cannot carry it. The serializer refuses and names where it was,
+    because `allow_nan=False` alone reports only "out of range float values"
+    for a state dict holding a thousand numbers.
+    """
+    if isinstance(obj, (_np.ndarray, _np.generic)):
+        if not bool(_np.isfinite(obj).all()):
+            return where
+        return None
+    if isinstance(obj, float) and not math.isfinite(obj):
+        return where
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            hit = _non_finite_path(v, f"{where}.{k}")
+            if hit is not None:
+                return hit
+    elif isinstance(obj, (list, tuple)):
+        for i, v in enumerate(obj):
+            hit = _non_finite_path(v, f"{where}[{i}]")
+            if hit is not None:
+                return hit
+    return None
 
 
 def _json_default(obj):
@@ -50,7 +86,12 @@ def _json_default(obj):
 
 def dumps_strict(obj, indent: int | None = None) -> str:
     """JSON for the files that *are* the record. Raises rather than stringify."""
-    return json.dumps(obj, default=_json_default, indent=indent)
+    where = _non_finite_path(obj, "$")
+    if where is not None:
+        raise ValueError(f"{where} is not a finite number — writing it would put "
+                         f"`NaN`/`Infinity` into the file, which is not JSON. "
+                         f"Fix the calculation that produced it")
+    return json.dumps(obj, default=_json_default, indent=indent, allow_nan=False)
 
 
 def atomic_write(path: Path, text: str) -> None:

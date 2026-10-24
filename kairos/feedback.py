@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 from .config import CFG
-from .store import atomic_write
+from .store import atomic_write, dumps_strict
 
 JOURNAL = CFG.data_dir / "prediction_journal.jsonl"
 
@@ -99,8 +99,9 @@ def record(res: dict[str, Any]) -> None:
                  if sig.get("risk_veto_name") else None),
         strategies=spoke or None)
     JOURNAL.parent.mkdir(parents=True, exist_ok=True)
+    line = dumps_strict(snap.to_dict()) + "\n"
     with _WRITE_LOCK, JOURNAL.open("a", encoding="utf-8") as fh:
-        fh.write(_suffix_if_unterminated() + json.dumps(snap.to_dict()) + "\n")
+        fh.write(_suffix_if_unterminated() + line)
 
 
 def _suffix_if_unterminated() -> str:
@@ -199,7 +200,7 @@ def resolve_outcomes(md) -> int:
             # disk keeps the newcomer and its turn; the lock keeps an append
             # out of the gap between this read and the replace.
             atomic_write(JOURNAL, "\n".join(
-                json.dumps(e) for e in _merge_for_write(lines, _read_lines())) + "\n")
+                dumps_strict(e) for e in _merge_for_write(lines, _read_lines())) + "\n")
     return newly
 
 

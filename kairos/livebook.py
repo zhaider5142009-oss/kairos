@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Any
 
 from .config import CFG
+from .store import dumps_strict
 
 CACHE_S = 300.0
 _cache: tuple[float, list[dict[str, Any]]] | None = None
@@ -36,9 +37,9 @@ def positions() -> dict[str, dict[str, Any]]:
 def _save(positions: dict[str, Any]) -> None:
     p = _path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({"positions": positions,
-                             "updated": datetime.now().isoformat(timespec="seconds")},
-                            indent=2), encoding="utf-8")
+    p.write_text(dumps_strict({"positions": positions,
+                               "updated": datetime.now().isoformat(timespec="seconds")},
+                              indent=2), encoding="utf-8")
 
 
 def add(symbol: str, qty: float, entry: float) -> dict[str, Any]:

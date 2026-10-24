@@ -322,7 +322,7 @@ class PaperBroker:
         return {}
 
     def _save(self) -> None:
-        atomic_write(self.state_path, json.dumps({
+        atomic_write(self.state_path, dumps_strict({
             "capital": self.capital, "cash": self.cash, "positions": self.positions,
             "fills": self.fills[-500:], "realized_pnl": self.realized_pnl,
             "day_pnl": self.day_pnl, "day_stamp": self._day_stamp,
@@ -962,7 +962,7 @@ class JsGlobalTicket:
             "status": "AWAITING_HUMAN_CONFIRMATION",
         }
         path = self.out_dir / f"{ticket['ticket_id']}.json"
-        path.write_text(json.dumps(ticket, indent=2), encoding="utf-8")
+        path.write_text(dumps_strict(ticket, indent=2), encoding="utf-8")
         JOURNAL.log("PSX_TICKET", {"ticket_id": ticket["ticket_id"],
                                    "symbol": intent.symbol, "side": intent.side,
                                    "qty": intent.quantity, "path": str(path)})

@@ -49,7 +49,7 @@ from typing import Any
 from .config import CFG
 from .execution import JOURNAL, KILL
 from .jsgsync import JsGlobalError, _conf, _net, _sess
-from .store import atomic_write
+from .store import atomic_write, dumps_strict
 
 PENDING_PATH = CFG.data_dir / "jsg_pending.json"
 TTL_S = 900.0
@@ -158,8 +158,8 @@ def _save(rows: list[dict[str, Any]]) -> None:
     with _queue_lock:
         PENDING_PATH.parent.mkdir(parents=True, exist_ok=True)
         try:
-            atomic_write(PENDING_PATH, json.dumps(rows, indent=1))
-        except OSError as exc:
+            atomic_write(PENDING_PATH, dumps_strict(rows, indent=1))
+        except (OSError, ValueError) as exc:
             raise JsGlobalError(f"pending order queue at {PENDING_PATH} could not be "
                                 f"written ({str(exc)[:120]}) — order refused") from exc
 

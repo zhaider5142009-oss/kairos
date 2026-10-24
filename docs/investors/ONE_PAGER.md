@@ -16,13 +16,13 @@ SECP-licensed as an investment adviser, and has never managed third-party capita
 
 | | |
 |---|---|
-| Codebase | 17,698 lines of Python across 42 modules, public repo |
+| Codebase | 17,742 lines of Python across 42 modules, public repo |
 | Strategy library | 100 strategies in 10 families, voting into the live consensus |
 | Attribution | each vote weighted by its own realized excess over the base rate of its bucket — per instrument, horizon and regime, measured out-of-sample; the engine runs a named flat poll rather than trust stale weights |
 | Signal council | 6 configured seats across 2 providers, median consensus with named-seat integrity; a blank or dead seat casts no vote |
 | Execution | paper book + JS Global PSX order bridge + MT5 (JS Markets) |
 | Uptime | 24/7 daemon with watchdog and public token-gated API |
-| Tests | 754 passing, money-path and integrity cases included |
+| Tests | 766 passing, money-path and integrity cases included |
 
 ## What has actually been demonstrated
 
@@ -43,7 +43,7 @@ this is published per instrument and never as an average.
 
 ## What has *not* been demonstrated — stated plainly
 
-- **No forward track record yet.** 3,932 predictions journaled, 404 horizons matured, and all
+- **No forward track record yet.** 3,965 predictions journaled, 404 horizons matured, and all
   404 were non-trades. A directional hit rate does not exist until live calls mature.
 - **PSX equities are net-negative out-of-sample.** Local commission and slippage exceeded
   the signal: mean −3.7% across the 5-stock book, versus +8.8% across the global book.

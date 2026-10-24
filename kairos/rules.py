@@ -22,6 +22,7 @@ import math
 from typing import Any
 
 from .config import CFG
+from .store import dumps_strict
 
 DEFAULT_RULES: dict[str, Any] = {
     "max_risk_per_trade_pct": 2.0,       # % of equity risked per trade
@@ -382,7 +383,7 @@ def save_overrides(overrides: dict[str, Any]) -> None:
         except Exception:
             cur = {}
     cur.update(overrides)
-    p.write_text(json.dumps(cur, indent=2), encoding="utf-8")
+    p.write_text(dumps_strict(cur, indent=2), encoding="utf-8")
 
 
 # ------------------------------------------------------------------- sizing
