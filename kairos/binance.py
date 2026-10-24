@@ -43,6 +43,7 @@ import pandas as pd
 
 from .config import CFG
 from .execution import Fill, JOURNAL, KILL, OrderIntent
+from .netio import close_error
 
 VENUE = "BINANCE"
 DEFAULT_BASE = "https://api.binance.com"
@@ -188,6 +189,9 @@ class BinanceClient:
             return payload
         except urllib.error.HTTPError as exc:
             detail = _redact(exc.read().decode("utf-8", "replace"))
+            # the body is read, so the response is finished with — and it is
+            # this socket, not the parsed error text, that must be put down
+            close_error(exc)
             self.error = f"{path} HTTP {exc.code}: {detail}"
             if exc.code in (418, 429):        # rate-limited: back off, do not hammer
                 self._down_until = time.time() + DOWN_PENALTY_S

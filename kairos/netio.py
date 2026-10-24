@@ -1,0 +1,59 @@
+"""The stdlib HTTP error contract: a failed request is an open file.
+
+`urllib.request.urlopen` raises `HTTPError` for a non-2xx answer, and the
+exception *is* the response — the body and the connection it arrived on are
+still attached to it. A `with` block never puts that down, because the raise
+happens before the response is ever handed to the block. So a handler that
+records the error and moves on leaves a live TLS socket waiting for the
+garbage collector. Measured on the running desk: `ResourceWarning: unclosed
+<ssl.SSLSocket [closed] fd=1964>`, with the allocation traceback landing on
+`data.py`'s news fetch and its retry loop — three sockets per call on a box
+that is meant to hold none. `close_error()` is the one line every such
+handler owes.
+
+`HttpStatus` is the other half of the same contract. A fetch that failed
+because a provider *answered* is not a fetch that failed because the wire was
+dead, and the difference is the status code. A backoff built to pause half an
+hour on a 429 cannot act on a message that only says "GET failed".
+"""
+
+from __future__ import annotations
+
+import urllib.error
+
+# The two 4xx that mean "ask again". Any other 4xx will answer the same way on
+# the next attempt, so retrying it buys a slower failure and more load on a
+# provider that has already said no.
+ASK_AGAIN = frozenset({408, 429})
+
+
+class HttpStatus(ConnectionError):
+    """A provider answered with a status the caller could not use.
+
+    Subclasses `ConnectionError` because every caller of this codebase's
+    transport already treats an unanswered fetch that way; the point of the
+    subclass is to carry `code` on top of it, not to change who catches it.
+    """
+
+    def __init__(self, code: int, url: str, reason: str = "") -> None:
+        super().__init__(f"HTTP {code} {reason} from {url}".strip())
+        self.code = int(code)
+        self.url = url
+        self.reason = reason
+
+
+def close_error(exc: BaseException) -> None:
+    """Put down the response an HTTP error is still holding. Anywhere else, does nothing."""
+    if not isinstance(exc, urllib.error.HTTPError):
+        return
+    try:
+        exc.close()
+    except Exception:  # noqa: BLE001 — the peer may have closed it already; that is not a new failure
+        pass
+
+
+def retryable(exc: BaseException) -> bool:
+    """Is this failure worth another request?"""
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code >= 500 or exc.code in ASK_AGAIN
+    return True

@@ -33,6 +33,7 @@ import numpy as np
 import pandas as pd
 
 from .config import CFG
+from .netio import HttpStatus, close_error, retryable
 from .store import atomic_write
 from .universe import Instrument, resolve
 
@@ -52,9 +53,21 @@ def _http_get(url: str, timeout: int = 20, headers: dict[str, str] | None = None
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return resp.read()
         except Exception as exc:  # noqa: BLE001 — network layer must never crash the engine
+            # The `with` above never sees a failed request: `urlopen` raises
+            # the error *as* the response, with its socket still attached.
+            close_error(exc)
             last_err = exc
+            # a 404 answers 404 again; only a server error or a "come back
+            # later" is worth another request on the same call
+            if not retryable(exc):
+                break
             if attempt < retries:
                 time.sleep(0.8 * (attempt + 1))
+    if isinstance(last_err, urllib.error.HTTPError):
+        # Keep the status. "GET failed" cannot be acted on: the news service
+        # is built to pause half an hour when a provider answers 429, and it
+        # has no way to tell that from a page that does not exist.
+        raise HttpStatus(last_err.code, url, str(last_err.reason or ""))
     raise ConnectionError(f"GET failed: {url} ({last_err})")
 
 
@@ -65,8 +78,12 @@ def _http_post_json(url: str, payload: dict[str, Any], timeout: int = 20,
         hdrs.update(headers)
     body = json.dumps(payload).encode()
     req = urllib.request.Request(url, data=body, headers=hdrs, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as exc:
+        close_error(exc)
+        raise
 
 
 def _binance():

@@ -55,6 +55,7 @@ import numpy as np
 
 from .config import CFG
 from .data import _http_get
+from .netio import HttpStatus, close_error
 from .store import atomic_write, dumps_strict
 from .universe import Instrument, universe
 
@@ -919,7 +920,11 @@ class GdeltTone:
         fetch = self._get or _http_get
         try:
             payload = json.loads(fetch(url, timeout=8, retries=0))
-        except urllib.error.HTTPError as exc:
+        except (HttpStatus, urllib.error.HTTPError) as exc:
+            # `close_error` because the second type in that tuple is the raw
+            # response object: whatever produced it may have handed it over
+            # without putting its socket down.
+            close_error(exc)
             if exc.code == 429:
                 self.blocked += 1
                 self._down_until = time.time() + GDELT_PAUSE_S

@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import CFG
+from .netio import close_error
 
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) KAIROS/2.0"
 KIMI_PREFIXES = ("kimi:", "moonshot:")
@@ -164,6 +165,7 @@ class LLMRouter:
             text = payload["choices"][0]["message"]["content"] or ""
             return _answered("openrouter", model, text, time.time() - t0)
         except Exception as exc:
+            close_error(exc)
             if "401" in str(exc) or "403" in str(exc):
                 self._or_key_health[key] = 0.0
             return LLMResponse(False, "openrouter", model,
@@ -187,6 +189,7 @@ class LLMRouter:
                              payload["choices"][0]["message"]["content"],
                              time.time() - t0)
         except Exception as exc:
+            close_error(exc)
             return LLMResponse(False, "deepseek", model, error=_safe_error(str(exc)))
 
     def _call_moonshot(self, messages: list[dict], model: str,
@@ -227,10 +230,12 @@ class LLMRouter:
                 detail = exc.read().decode("utf-8", errors="replace")[:400]
             except Exception:
                 pass
+            close_error(exc)
             return LLMResponse(False, "moonshot", m,
                                error=_safe_error(f"HTTP {exc.code} {detail}"),
                                latency_s=time.time() - t0)
         except Exception as exc:
+            close_error(exc)
             return LLMResponse(False, "moonshot", m, error=_safe_error(str(exc)),
                                latency_s=time.time() - t0)
 
@@ -253,6 +258,7 @@ class LLMRouter:
             return _answered("gemini", model, parts[0].get("text") if parts else None,
                              time.time() - t0)
         except Exception as exc:
+            close_error(exc)
             return LLMResponse(False, "gemini", model, error=_safe_error(str(exc)))
 
     # ------------------------------------------------------------------ chat
@@ -428,8 +434,14 @@ def catalog_ids() -> list[str]:
     req = urllib.request.Request(
         api.get("base_url", "https://openrouter.ai/api/v1") + "/models",
         headers={"Authorization": f"Bearer {keys[0]}", "User-Agent": _UA})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        raw = resp.read().decode("utf-8", errors="replace")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        # the caller catches a broad Exception and only reports the dead seats,
+        # so nothing downstream would ever put this response down
+        close_error(exc)
+        raise
     return sorted({d["id"] for d in json.loads(raw)["data"]})
 
 

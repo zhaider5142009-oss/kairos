@@ -418,7 +418,9 @@ def chronos_forecast(close_series: list[float], horizon: int = 5,
             out = json.loads(r.read())
         if not out.get("ok"):
             raise RuntimeError(str(out.get("error"))[:120])
-    except Exception:
+    except Exception as exc:
+        from .netio import close_error
+        close_error(exc)
         _CLIENT["down_until"] = now + 60.0
         return _wsl_fallback(close_series, horizon)
 
@@ -448,7 +450,9 @@ class _GpuClient:
         try:
             with urllib.request.urlopen("http://127.0.0.1:%d/health" % port, timeout=3) as r:
                 return json.loads(r.read())
-        except Exception:
+        except Exception as exc:
+            from .netio import close_error
+            close_error(exc)
             return None
 
 
