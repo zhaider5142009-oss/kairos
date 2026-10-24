@@ -12,9 +12,6 @@ import pandas as pd
 from .features import feature_panel
 from .models_stat import ModelForecast, _direction
 
-import warnings
-warnings.filterwarnings("ignore")
-
 
 def _prepare_xy(df: pd.DataFrame, horizon: int) -> tuple[np.ndarray, np.ndarray, pd.DataFrame]:
     panel = feature_panel(df)

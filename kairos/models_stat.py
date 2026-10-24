@@ -2,19 +2,24 @@
 
 Each model returns a ModelForecast with direction, expected return over the
 prediction horizon, and a confidence derived from in-sample fit quality.
+
+Nothing here sets a warning filter at import. The engine, the desk and the sweep
+all import this module, so a filter installed at import would mute every numeric
+notice for the whole process — including the ones that explain a bad forecast —
+and would do it by accident, depending on which module happened to be imported
+first. Suppress a notice where it is raised, by its message, inside a
+`catch_warnings()` block that puts the registry back.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+import warnings
 
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
-
-import warnings
-warnings.filterwarnings("ignore")
 
 
 @dataclass
@@ -39,6 +44,24 @@ def _fit_confidence(scale: float) -> float:
 # ---------------------------------------------------------------------------
 # 1. ARIMA — auto-order via AIC grid
 # ---------------------------------------------------------------------------
+def _converged(res: Any) -> bool:
+    """Did the optimizer say it reached the likelihood surface?
+
+    `mle_retvals["converged"]` is the flag behind statsmodels' "failed to
+    converge" notice. A fit that stopped early still reports an `aic`, and that
+    number can be the lowest in the grid — measured across 14 symbols, 8 of 126
+    fits admitted non-convergence and 2 of those won the contest, on a series
+    the live universe trades — so the number that picks the order is not
+    evidence that the parameters were ever optimised. A result that reports no
+    flag at all is not a refusal either: `maxiter`, not the library, decides
+    here, and a version that stops filling the dict must not delete the model.
+    """
+    vals = getattr(res, "mle_retvals", None)
+    if not isinstance(vals, dict):
+        return True
+    return bool(vals.get("converged", True))
+
+
 def arima_forecast(close: pd.Series, horizon: int = 5) -> ModelForecast | None:
     try:
         from statsmodels.tsa.arima.model import ARIMA
@@ -65,17 +88,29 @@ def arima_forecast(close: pd.Series, horizon: int = 5) -> ModelForecast | None:
     except Exception:
         d = 1
     best_aic, best_order, best_res = np.inf, (1, d, 1), None
-    import warnings
+    tried = finished = 0
+    # statsmodels prints what it decides about its own starting values, and this
+    # grid runs nine fits per symbol per cycle, so the notices are silenced
+    # here — by name, inside the block that raises them, and restored after.
+    # The convergence notice in particular is silenced because the loop no longer
+    # needs to be told by a printout: it reads the flag the printout came from,
+    # which is the difference between this and the version that hid it.
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
+        warnings.filterwarnings("ignore",
+                                message=r".*starting (autoregressive|MA) parameters.*")
+        warnings.filterwarnings("ignore", message=r".*failed to converge.*")
         for p in (0, 1, 2):
             for q in (0, 1, 2):
                 try:
                     res = ARIMA(y, order=(p, d, q)).fit(method_kwargs={"maxiter": 60})
-                    if res.aic < best_aic:
-                        best_aic, best_order, best_res = res.aic, (p, d, q), res
                 except Exception:
                     continue
+                tried += 1
+                if not _converged(res):
+                    continue
+                finished += 1
+                if res.aic < best_aic:
+                    best_aic, best_order, best_res = res.aic, (p, d, q), res
     if best_res is None:
         return None
     try:
@@ -89,6 +124,7 @@ def arima_forecast(close: pd.Series, horizon: int = 5) -> ModelForecast | None:
         conf = _fit_confidence(0.15 + min(0.45, snr * 0.35))
         return ModelForecast("ARIMA", _direction(exp_ret), exp_ret, horizon, conf,
                              f"order={best_order} aic={best_aic:.1f} "
+                             f"finished={finished}/{tried} "
                              f"forecast_se={sigma_h:.4f} snr={snr:.2f}")
     except Exception:
         return None
