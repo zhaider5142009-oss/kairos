@@ -98,46 +98,104 @@ def _net(fn, *a, **kw):
         raise JsGlobalError(f"portal unreachable: {type(exc).__name__}") from exc
 
 
+def _drop(dead: "requests.Session | None") -> None:
+    """Put a retired session's pooled sockets down.
+
+    Measured against `requests` 2.34 / urllib3 2.7, not assumed: `close()`
+    drains the connections nobody is holding and drops the pools, so a
+    request another thread checked out before the retire finishes normally,
+    and a request made on a retired session afterwards opens a fresh
+    connection rather than failing. Neither can interrupt an order already
+    sent, which is the only thing a session on this path can damage.
+    """
+    if dead is None:
+        return
+    dead.close()
+
+
+def _retire() -> None:
+    """Clear the cached session and put what it was holding down.
+
+    The cache is a `(fetched_at, session)` pair, so the unpacking that hands
+    a session to `_drop` lives here and nowhere else: written as
+    `dead, _session = _session, None`, `dead` is the pair, and a `close()`
+    that never happened is invisible — the socket just stays where it is.
+    Caller holds `_lock`.
+    """
+    global _session
+    cached, _session = _session, None
+    try:
+        _drop(cached[1] if cached else None)
+    except Exception:  # noqa: BLE001 — a socket the peer already took down is not a sync failure
+        pass
+
+
 def _login(c: dict[str, Any]) -> requests.Session:
     s = requests.Session()
     s.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
                       "X-Requested-With": "XMLHttpRequest",
                       "Accept": "application/json, text/javascript, */*; q=0.01"})
-    r = _net(s.get, c["url"], timeout=_TIMEOUT)
-    pw = c["password"]
-    data: dict[str, str] = {"UserName": c["login"]}
-    for i in _digit_boxes(r.text):
-        if i > len(pw):
-            raise JsGlobalError(f"portal asks for password char {i} but stored password is shorter "
-                                "— update js_global.password in config.yaml")
-        data[f"Digit{i}"] = pw[i - 1]
-    if len(data) == 1:
-        raise JsGlobalError("login form parse failed (no password boxes found)")
-    _net(s.post, c["url"] + "/Home/_Login", data=data, timeout=_TIMEOUT)
-    _net(s.get, c["url"] + "/Home/Index", timeout=_TIMEOUT)
-    if not _accounts(s):
-        raise JsGlobalAuthError("login rejected — check js_global credentials in config.yaml")
+    try:
+        r = _net(s.get, c["url"], timeout=_TIMEOUT)
+        pw = c["password"]
+        data: dict[str, str] = {"UserName": c["login"]}
+        for i in _digit_boxes(r.text):
+            if i > len(pw):
+                raise JsGlobalError(f"portal asks for password char {i} but stored password is shorter "
+                                    "— update js_global.password in config.yaml")
+            data[f"Digit{i}"] = pw[i - 1]
+        if len(data) == 1:
+            raise JsGlobalError("login form parse failed (no password boxes found)")
+        _net(s.post, c["url"] + "/Home/_Login", data=data, timeout=_TIMEOUT)
+        _net(s.get, c["url"] + "/Home/Index", timeout=_TIMEOUT)
+        if not _accounts(s):
+            raise JsGlobalAuthError("login rejected — check js_global credentials in config.yaml")
+    except BaseException:
+        # A login that stopped halfway still holds a live TLS socket and a
+        # cookie jar no caller can ever reach again; a wrong password retried
+        # by the operator would otherwise leave a fresh one behind each time.
+        # The close may not become the error the desk reports: the reason the
+        # login failed is the one thing the operator has to see.
+        try:
+            _drop(s)
+        except Exception:  # noqa: BLE001 — cleanup only, the login error follows
+            pass
+        raise
     return s
 
 
 def _sess() -> requests.Session:
-    """Reuse a warm session; fresh login otherwise (single attempt)."""
+    """Reuse a warm session; fresh login otherwise (single attempt).
+
+    The login stays inside the lock: two threads that both find the cache
+    expired would otherwise mean two logins, and this account locks out on
+    repetition. Retiring the old session is part of the same step.
+    """
     global _session
     with _lock:
         if _session and time.time() - _session[0] < SESSION_TTL_S:
             return _session[1]
+        # `_login` runs under this lock and can fail, so the expired session is
+        # retired first — keeping it reachable on a failed login only keeps it
+        # warm for the same 401 that already proved it dead.
+        _retire()
         s = _login(_conf())
         _session = (time.time(), s)
         return s
 
 
 def _get(path: str, params: dict | None = None) -> Any:
-    global _session
     s = _sess()
     r = _net(s.get, _conf()["url"] + path, params=params or {}, timeout=_TIMEOUT)
     if r.status_code in (401, 403) or "UserName" in r.text[:2000] and "Digit1" in r.text[:2000]:
         with _lock:
-            _session = None
+            # Only if the cache still holds the session that just was refused.
+            # Another thread may have logged in fresh while this request was
+            # in flight, and clearing the cache then would throw away a good
+            # login and ask the portal for another one — the repetition this
+            # module exists to avoid.
+            if _session is not None and _session[1] is s:
+                _retire()
         raise JsGlobalAuthError("session expired — retry the sync")
     if not r.text.strip():
         return None
@@ -321,10 +379,10 @@ def sync(force: bool = False) -> dict[str, Any]:
     from . import livebook
     from .universe import resolve
 
-    global _session, _book
+    global _book
     if force:
         with _lock:
-            _session = None
+            _retire()
             _book = None
 
     accs = accounts()
