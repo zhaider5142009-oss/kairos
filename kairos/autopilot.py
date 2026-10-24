@@ -998,6 +998,10 @@ class Autopilot:
             poss = self.mt5.positions()
             if poss is None:
                 return None
+            # the terminal reports no venue of its own; every other consumer of
+            # this list needs to know which book a row belongs to
+            for p in poss:
+                p.setdefault("venue", "MT5")
             out.extend(poss)
         for h in (book or {}).get("holdings", []):
             out.append({"symbol": h["symbol"], "side": "BUY", "qty": h["qty"],
@@ -1025,18 +1029,74 @@ class Autopilot:
         day = _reading((acct or {}).get("day_pnl"))
         dl_frac, dl_src = _R.daily_loss_fraction(CFG.risk, r)
         pos_unknown = pos_list is None
-        rows = [(abs(_figure(p.get("qty"))),
+        rows = [(str(p.get("venue") or ""),
+                 abs(_figure(p.get("qty"))),
                  _figure(p.get("last") or p.get("entry"))) for p in (pos_list or [])]
         # A held position whose price cannot be read is not a free one: summing
         # zero for it reports an exposure smaller than the book, and the gross
         # cap is the only brake on how much is at risk. A row with no quantity is
         # genuinely nothing at risk (a pending ticket), so it is not blindness.
-        blind_rows = sum(1 for q, px in rows if q > 0 and px <= 0)
-        gross = sum(q * px for q, px in rows)
+        blind_rows = sum(1 for _, q, px in rows if q > 0 and px <= 0)
+        gross = sum(q * px for _, q, px in rows)
         exposure_pct = (None if pos_unknown or eq <= 0
                         else gross / eq * 100)
+        # One book is not measured against another book's money. With two venues
+        # live the ratio above adds dollar notionals to rupee ones and divides by
+        # the two accounts summed, so a 70,000 USD position on a 100,000 USD
+        # terminal account reads as 6% of a 1.1M "book" — under a 60% cap, which
+        # is the brake this exists to enforce passing on the risk it was written
+        # to stop. Each book is compared to its own equity, and the most invested
+        # book is the number the cap is checked against.
+        by_book: dict[str, float] = {}
+        worst = ""
+        blind_book: list[str] = []
+        no_account: list[str] = []
+        if not pos_unknown:
+            # A row on a venue whose account was never read belongs to no ratio:
+            # there is no book to measure it against, and the blend divides it by
+            # someone else's money. That is blindness, not flatness, and it is
+            # named however many of the other venues answered — one book that
+            # reported is not a licence to divide another book's holdings by it.
+            no_account = sorted({v0 for v0, q, _ in rows
+                                 if q > 0 and v0 and v0 not in self._venue_accts})
+        if len(self._venue_accts) > 1 and not pos_unknown:
+            for v, part in self._venue_accts.items():
+                veq = _figure(part.get("equity"))
+                vgross = sum(q * px for v0, q, px in rows if v0 == v)
+                if veq > 0:
+                    by_book[v] = vgross / veq * 100
+                elif vgross > 0:
+                    blind_book.append(v)
+            if by_book:
+                worst = max(by_book, key=by_book.get)
+                # the blend is a weighted average of the ratios that can be
+                # measured, so it can never top the worst book — unless some
+                # notional sits outside them, on a venue whose equity is
+                # unreadable. Taking the higher reading means a blind book can
+                # raise the headline number but never lower it.
+                exposure_pct = max(by_book[worst], exposure_pct)
+        # the same for the daily brake: a dollar loss is a fraction of the dollar
+        # account, and dividing it by a book that is mostly rupees loses the loss
+        day_breach: list[tuple[str, float, float]] = []
+        if len(self._venue_accts) > 1:
+            for v, part in self._venue_accts.items():
+                veq, vday = _figure(part.get("equity")), _reading(part.get("day_pnl"))
+                if veq > 0 and vday is not None and vday < -dl_frac * veq:
+                    day_breach.append((v, vday, veq))
         consec = int(self.st.get("consec_losses") or 0)
         blockers = []
+        if blind_book:
+            blockers.append(", ".join(blind_book) +
+                            ": positions with no usable equity to measure "
+                            "exposure against")
+        if no_account:
+            blockers.append(", ".join(no_account) +
+                            ": position rows on a venue whose account was never "
+                            "read — exposure on that book unknown")
+        if day_breach:
+            v, vday, veq = day_breach[0]
+            blockers.append(f"{v} day P&L {vday:,.0f} on its own {veq:,.0f} "
+                            f"breached the -{dl_frac * 100:.2f}% brake ({dl_src})")
         if eq <= 0:
             # Every guard below needs a positive amount to compare against, so
             # a cycle that cannot read equity has NO breakers rather than
@@ -1056,7 +1116,8 @@ class Autopilot:
                             f"-{dl_frac * 100:.2f}% breaker ({dl_src})")
         if exposure_pct is not None and \
                 exposure_pct > float(r["max_total_exposure_pct"]):
-            blockers.append(f"gross exposure {exposure_pct:.0f}% past the "
+            blockers.append(f"gross exposure {exposure_pct:.0f}%"
+                            f"{' on ' + worst if worst else ''} past the "
                             f"{r['max_total_exposure_pct']}% cap")
         if consec >= int(r["max_consecutive_losses"]):
             blockers.append(f"{consec} consecutive losses — cooling off entries")
@@ -1079,6 +1140,11 @@ class Autopilot:
                 "daily_loss_limit_from": dl_src,
                 "exposure_pct": None if exposure_pct is None
                                     else round(exposure_pct, 1),
+                # the blended number above is the one the cap is checked against,
+                # and a cap needs the worst book, not the average. The desk shows
+                # this so a reader can see which book is the one at the limit.
+                "exposure_by_venue": {v: round(x, 1)
+                                      for v, x in sorted(by_book.items())},
                 "consec_losses": consec,
                 "n_positions": None if pos_unknown else len(pos_list),
                 "equity_peak": round(max(peak, eq), 2),

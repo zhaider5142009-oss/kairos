@@ -590,6 +590,12 @@ def cmd_autopilot(args) -> int:
                       f"positions: {len(st.get('paper_positions') or [])}")
         expo = rp.get("exposure_pct")
         expo_txt = "unknown" if expo is None else f"{expo:.1f}%"
+        # one number beside two books is a number no reader can check, so the
+        # split is printed whenever the cap was measured on more than one book
+        by_v = rp.get("exposure_by_venue") or {}
+        if len(by_v) > 1:
+            expo_txt += " (" + " · ".join(f"{v} {x:.0f}%"
+                                         for v, x in by_v.items()) + ")"
         brake = (f"-{rp['daily_loss_limit_pct']}% "
                  f"({rp.get('daily_loss_limit_from')})"
                  if rp.get("daily_loss_limit_pct") is not None else "unreadable")

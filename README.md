@@ -391,7 +391,7 @@ python -m kairos.cli feedback       # realized record, live
 ```
 
 [docs/investors/](docs/investors/) holds the ledger, a one-pager, the whitepaper and the
-deck. Read the ledger first: there is **no forward track record yet** — 5,105 predictions
+deck. Read the ledger first: there is **no forward track record yet** — 5,143 predictions
 journaled, 779 horizons matured, all 779 non-trades — and 10 of 14 instruments in the
 walk-forward sweep lost money. That is the honest state of the project, and it is the reason
 the risk layer exists.
