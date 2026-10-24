@@ -79,7 +79,7 @@ person reads a published failure and replies.*
 >
 > Fix: a snapshot only counts if the score exceeds the entry threshold, only resolves if the
 > horizon's bars exist, and the confidence multiplier is pinned to 1.0 until 10 real
-> directional calls have matured. Eight regression tests. The honest record today: 4,918
+> directional calls have matured. Eight regression tests. The honest record today: 4,940
 > predictions journaled, 779 horizons matured, 0 directional calls, hit rate not yet measurable.
 >
 > Also in there: a council of LLM seats where a dead seat must shrink the council rather

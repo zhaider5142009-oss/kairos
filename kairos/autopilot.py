@@ -397,13 +397,24 @@ class Autopilot:
                 if reason:
                     side = "SELL" if hp["side"] == "BUY" else "BUY"
                     qty = float(hp["qty"])
-                    act, _d = self._execute(inst, side, qty, price, res,
-                                            broker, live, close=True,
-                                            ticket=hp.get("ticket"))
+                    act, _d, struck = self._execute(inst, side, qty, price, res,
+                                                    broker, live, close=True,
+                                                    ticket=hp.get("ticket"))
                     action, trades = act, trades + 1
                     if act in ("CLOSED", "LIVE-FILLED"):
                         self._book_close(inst.key, hp, hb, price, reason)
                         detail = f"{reason} exit"
+                    elif act == "LIVE-PARTIAL":
+                        # Some of it went. Book that part's P&L, keep the row for
+                        # the rest: the venue still holds it, and the exit that
+                        # fired a moment ago (stop, target, maturity) is still the
+                        # reason to be out. Next cycle re-reads the smaller
+                        # position and finishes the job.
+                        self._book_close(inst.key, hp, hb, price, reason,
+                                         struck=struck)
+                        detail = (f"{reason} exit struck {struck:g} of {qty:g}; "
+                                  "remainder still managed")
+                        self._act(inst.key, "LIVE-PARTIAL", detail)
                     elif act == "PLACED":
                         # `PLACED` is an accepted order, not a fill: JS Global
                         # takes a LIMIT that rests until the tape comes to it.
@@ -483,9 +494,9 @@ class Autopilot:
                                         qty = int(notional // price)   # PSX shares
                                     else:
                                         qty = notional / price
-                                    act, detail = self._execute(inst, side, qty, price,
-                                                                res, broker, live,
-                                                                close=False)
+                                    act, detail, struck = self._execute(
+                                        inst, side, qty, price,
+                                        res, broker, live, close=False)
                                     action = act
                                     trades += 1
                                     if act in ("OPENED", "TICKET", "PLACED",
@@ -501,7 +512,11 @@ class Autopilot:
                                         # not to hold it after all.
                                         st["held"][inst.key] = {
                                             "started": _now(), "side": side,
-                                            "qty": qty, "entry": price,
+                                            # the size the venue traded, not the
+                                            # size that was asked for
+                                            "qty": (struck if struck and struck > 0
+                                                    else qty),
+                                            "entry": price,
                                             "stop": sl0, "stop0": sl0, "target": tgt0}
 
             rows.append({"symbol": res["symbol"], "name": res["name"],
@@ -1068,15 +1083,29 @@ class Autopilot:
         return None
 
     def _book_close(self, key: str, hp: dict, hb: dict, price: float,
-                    reason: str) -> None:
+                    reason: str, struck: float | None = None) -> None:
+        """Realise a closed position.
+
+        `struck` is the quantity the venue actually traded. Left as None it means
+        "the whole position", which is what a paper close or a clean MT5 ticket
+        close is; a partial answer has to size the P&L on what traded and keep the
+        remainder managed, or the ledger counts a close that never happened and
+        the rest of the book loses its stop.
+        """
         dirn = 1 if hp["side"] == "BUY" else -1
         entry = float(hp.get("entry") or hb.get("entry") or price)
-        pnl = (price - entry) * dirn * float(hp.get("qty") or 0)
+        held = float(hp.get("qty") or 0)
+        closed = held if struck is None else min(float(struck), held)
+        pnl = (price - entry) * dirn * closed
         st = self.st
         st["consec_losses"] = int(st.get("consec_losses") or 0) + 1 if pnl < 0 else 0
-        st["held"].pop(key, None)
+        if struck is None or held - closed <= 1e-12:
+            st["held"].pop(key, None)
+        else:
+            hb["qty"] = round(held - closed, 8)
         JOURNAL.log("AUTOPILOT_BOOK_CLOSE",
-                    {"symbol": key, "reason": reason, "pnl_est": round(pnl, 2),
+                    {"symbol": key, "reason": reason, "qty": round(closed, 8),
+                     "pnl_est": round(pnl, 2),
                      "consec_losses": st["consec_losses"]})
 
     def _fill_confirmed(self, symbol: str, positions) -> bool:
@@ -1100,13 +1129,23 @@ class Autopilot:
 
     def _execute(self, inst, side: str, qty: float, price: float,
                  res: dict[str, Any], broker: PaperBroker, live: bool,
-                 close: bool, ticket: int | None = None) -> tuple[str, str]:
+                 close: bool, ticket: int | None = None
+                 ) -> tuple[str, str, float | None]:
+        """Place (or close) one order.
+
+        Returns (action, detail, struck). `struck` is the quantity the venue says
+        it actually traded, or None when the answer carried no quantity — a
+        refusal, a resting order, or a bridge that reports none. Only a fill
+        reports it: the caller sizes its own book on this number rather than on
+        `qty`, because an order that was partially struck is not a trade of the
+        size that was asked for.
+        """
         from . import binance as _BN
         if KILL.engaged():
             self.st["actions"].insert(0, {"ts": _now(), "symbol": inst.key,
                                           "action": "BLOCKED", "why": "kill switch"})
             self.st["actions"] = self.st["actions"][:MAX_ACTIONS_KEPT]
-            return "BLOCKED", "kill switch engaged"
+            return "BLOCKED", "kill switch engaged", None
 
         is_psx = inst.market.upper() in ("PSX", "KSE")
         bands = res.get("confidence_band") or {}
@@ -1169,7 +1208,7 @@ class Autopilot:
                                               "action": "PLANCHECK", "why": why})
                 self.st["actions"] = self.st["actions"][:MAX_ACTIONS_KEPT]
                 JOURNAL.log("AUTOPILOT_PLANCHECK", {"symbol": inst.key, "why": why})
-                return "PLANCHECK", why
+                return "PLANCHECK", why, None
 
         intent = OrderIntent(symbol=inst.key, side=side,
                              quantity=round(qty, 4), venue=venue,
@@ -1182,7 +1221,7 @@ class Autopilot:
             self.st["actions"] = self.st["actions"][:MAX_ACTIONS_KEPT]
             JOURNAL.log("AUTOPILOT_GATED", {"coid": intent.client_order_id,
                                             "symbol": inst.key, "why": why})
-            return "GATED", why
+            return "GATED", why, None
 
         if venue == "MT5":
             if close:
@@ -1198,7 +1237,7 @@ class Autopilot:
                     self._act(inst.key, "CLOSE-UNVERIFIED", why)
                     JOURNAL.log("AUTOPILOT_CLOSE_UNVERIFIED",
                                 {"symbol": inst.key, "why": why})
-                    return "CLOSE-UNVERIFIED", why
+                    return "CLOSE-UNVERIFIED", why, None
                 fill = None
                 try:
                     closed = bool(self.mt5.close_position(int(ticket)))
@@ -1221,7 +1260,7 @@ class Autopilot:
                     why = f"spread {t['spread'] / price * 100:.2f}% > {msp}%"
                     self._act(inst.key, "SPREAD", why)
                     JOURNAL.log("AUTOPILOT_SPREAD", {"symbol": inst.key, "why": why})
-                    return "SPREAD", why
+                    return "SPREAD", why, None
                 fill = self.mt5.place_order(intent)
                 act = "LIVE-FILLED" if fill else "LIVE-REJECT"
                 if fill and not self._fill_confirmed(fill.symbol,
@@ -1244,14 +1283,14 @@ class Autopilot:
                           f"cannot be checked against the tape it will execute on"
                     self._act(inst.key, "NOPRICE", why)
                     JOURNAL.log("AUTOPILOT_NOPRICE", {"symbol": inst.key, "why": why})
-                    return "NOPRICE", why
+                    return "NOPRICE", why, None
                 if price > 0 and abs(px - price) / price * 100 > msp:
                     why = (f"venue {px:g} vs decided {price:g} = "
                            f"{abs(px - price) / price * 100:.2f}% > {msp}%")
                     self._act(inst.key, "TAPE-DIVERGE", why)
                     JOURNAL.log("AUTOPILOT_TAPE_DIVERGE",
                                 {"symbol": inst.key, "why": why})
-                    return "TAPE-DIVERGE", why
+                    return "TAPE-DIVERGE", why, None
             fill = _BN.BINANCE.place_order(intent)
             # None is three different facts on a venue: refused, rejected, or sent
             # and unanswered. The last one may be a live order, so it must not be
@@ -1294,26 +1333,52 @@ class Autopilot:
             self.st["actions"].insert(0, {"ts": _now(), "symbol": inst.key,
                                           "action": "TICKET", "why": ticket["ticket_id"]})
             self.st["actions"] = self.st["actions"][:MAX_ACTIONS_KEPT]
-            return act, ticket["ticket_id"]
+            return act, ticket["ticket_id"], None
         else:
             fill = broker.submit(intent, price)
             act = "CLOSED" if close else "OPENED"
             if close and fill:
                 broker.mark(inst.key, price)
+
+        # What the venue struck, as opposed to what was asked for. A DONE_PARTIAL
+        # MT5 deal and a Binance order that met only part of the book both answer
+        # with a smaller quantity, and the caller cannot find that out from `qty`:
+        # booking the request instead of the fill books a trade nobody made.
+        struck: float | None = None
+        if act == "LIVE-FILLED":
+            struck = (float(fill.quantity) if isinstance(fill, Fill)
+                      else float(qty) if close else None)
+            if struck is not None and qty > 0 and struck < qty - 1e-12:
+                JOURNAL.log("AUTOPILOT_PARTIAL",
+                            {"coid": intent.client_order_id, "symbol": inst.key,
+                             "side": side, "asked": round(qty, 6),
+                             "struck": round(struck, 6), "close": close,
+                             "venue": venue})
+                if close:
+                    # Part of the position closed and part of it did not. The
+                    # whole close would realise the P&L of quantity that never
+                    # traded and delete the managed row, leaving the remainder
+                    # held by the venue with no stop, target or maturity date.
+                    act = "LIVE-PARTIAL"
         self.st["actions"].insert(0, {"ts": _now(), "symbol": inst.key,
                                       "action": act, "side": side,
                                       "qty": round(qty, 4), "price": price,
+                                      "struck": (round(struck, 6)
+                                                 if struck is not None else None),
                                       "coid": intent.client_order_id})
         self.st["actions"] = self.st["actions"][:MAX_ACTIONS_KEPT]
         JOURNAL.log("AUTOPILOT_" + act.replace("-", "_"),
                     {"coid": intent.client_order_id, "symbol": inst.key,
-                     "side": side, "qty": qty, "price": price, "venue": venue})
-        return act, (fill.broker_order_id if isinstance(fill, Fill) else "")
+                     "side": side, "qty": qty, "price": price, "venue": venue,
+                     "struck": struck})
+        return act, (fill.broker_order_id if isinstance(fill, Fill) else ""), struck
 
     def _psx_auto_place(self, inst, side: str, qty: float, price: float,
-                        intent: OrderIntent, close: bool) -> tuple[str, str] | None:
-        """The opt-in real-money PSX path. Returns (action, detail), or None to
-        fall back to a human-confirmed ticket.
+                        intent: OrderIntent, close: bool
+                        ) -> tuple[str, str, None] | None:
+        """The opt-in real-money PSX path. Returns (action, detail, struck), or
+        None to fall back to a human-confirmed ticket. `struck` is always None
+        here: an accepted PSX LIMIT is resting, not traded.
 
         Three separate deliberate acts must all be turned:
           autopilot.auto_place  +  js_global.allow_orders  +  the broker PIN.
@@ -1384,7 +1449,7 @@ class Autopilot:
                                          "order_no": out.get("order_no"),
                                          "account": out.get("account"),
                                          "close": close})
-        return "PLACED", detail
+        return "PLACED", detail, None
 
     # ------------------------------------------------------------- reporting
     def status(self) -> dict[str, Any]:

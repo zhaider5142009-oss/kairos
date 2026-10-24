@@ -488,12 +488,12 @@ def test_the_engine_snapshot_reaches_the_plan_check_through_the_autopilot(
     broker = PaperBroker(capital=1_000_000.0)
     inst = Instrument(key="GOLD", name="Gold", asset_class="commodity",
                       sector="materials", currency="USD", market="GLOBAL")
-    act, why = a._execute(inst, "BUY", 100.0, 100.0,
+    act, why, _s = a._execute(inst, "BUY", 100.0, 100.0,
                           dict(_res(), doctrine={}), broker,
                           live=False, close=False)
     assert act == "PLANCHECK"
     assert "Trend" in why and "not evaluated" in why
-    good, _ = a._execute(inst, "BUY", 100.0, 100.0, _res(), broker,
+    good, _, _s = a._execute(inst, "BUY", 100.0, 100.0, _res(), broker,
                          live=False, close=False)
     assert good != "PLANCHECK"
 

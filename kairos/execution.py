@@ -825,8 +825,13 @@ class Mt5Bridge:
                                        "coid": intent.client_order_id,
                                        "comment": str(getattr(result, "comment", ""))})
             return None
+        # DONE_PARTIAL is a accepted order too, and its whole message is that the
+        # venue struck less than was asked for. `result.volume` is the dealt size;
+        # the request is only a fallback for a bridge that reports no volume at
+        # all, because a fill sized at the order names a trade nobody made.
+        dealt = float(getattr(result, "volume", 0) or 0) or intent.quantity
         fill = Fill(intent.client_order_id, str(result.order), symbol, intent.side,
-                    intent.quantity, float(result.price), 0.0,
+                    dealt, float(result.price), 0.0,
                     abs(float(result.price) - price),
                     datetime.now().isoformat(timespec="seconds"), "MT5")
         JOURNAL.log("MT5_FILL", {"coid": fill.client_order_id, "order": fill.broker_order_id,

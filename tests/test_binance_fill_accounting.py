@@ -56,7 +56,7 @@ def _binance_ap(monkeypatch, tmp_path, fill: Fill) -> tuple[Autopilot, _Journal]
 
 
 def _exit(ap: Autopilot) -> str:
-    act, _detail = ap._execute(BTC, "SELL", 0.5, 100.0, _res(),
+    act, _detail, _struck = ap._execute(BTC, "SELL", 0.5, 100.0, _res(),
                                PaperBroker(capital=1_000_000.0),
                                live=True, close=True)
     return act

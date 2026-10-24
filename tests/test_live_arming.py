@@ -504,7 +504,7 @@ def test_sellable_close_does_reach_the_bridge(ap, monkeypatch):
                                            "account": "99999"})
     ap._psx_live = _book()
     out = ap._psx_auto_place(_Inst("PPL"), "SELL", 15, 219.0, _intent(), True)
-    assert out == ("PLACED", "order 1 at 99999")
+    assert out == ("PLACED", "order 1 at 99999", None)
     assert sent[0][1] == "SELL"
 
 
