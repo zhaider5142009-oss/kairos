@@ -7,7 +7,7 @@ _Rebuilt from the on-disk journals by `tools/make_track_record.py`. Unaudited. N
 | measure | value |
 |---|---|
 | rebuilt from the journals on | 2026-10-24 |
-| predictions journaled | 4940 |
+| predictions journaled | 4962 |
 | horizons matured | 779 |
 | of which directional calls | 0 |
 | of which non-trades (HOLD) | 779 |
@@ -15,7 +15,7 @@ _Rebuilt from the on-disk journals by `tools/make_track_record.py`. Unaudited. N
 
 **There is no directional hit rate yet.** Every matured snapshot was a non-trade, and a non-trade cannot be a correct prediction — the scorer used to count them as wins, which is fixed as of v2.5.0. A forward record of live calls is what this table will show, and it accumulates on its own as horizons elapse.
 
-2022 directional calls from 12 instruments are journaled and still waiting out their horizon, and the tenth row cannot resolve before **2026-10-27** — five sessions after it was written, not five calendar days. This table publishes a hit rate the day it can.
+2032 directional calls from 12 instruments are journaled and still waiting out their horizon, and the tenth row cannot resolve before **2026-10-27** — five sessions after it was written, not five calendar days. This table publishes a hit rate the day it can.
 
 ## 2. Walk-forward strategy sweep
 
@@ -50,7 +50,7 @@ _Backtests are not returns. They include costs but not every market impact, and 
 ## 3. Live paper book
 
 - Capital Rs 1,000,000 · equity Rs 999,992 · realized P&L Rs -13.05 since 2026-10-24T20:50:01
-- Autopilot cycles run: **516** · mode `paper` · live-armed: False
+- Autopilot cycles run: **518** · mode `paper` · live-armed: False
 - Open paper positions: 0 · fills: 2
 
 ## 4. Funded account (read-only, from the broker)
@@ -79,7 +79,7 @@ _Backtests are not returns. They include costs but not every market impact, and 
 
 | measure | value |
 |---|---|
-| lines recorded | 237 |
+| lines recorded | 238 |
 | distinct event types | 23 |
 | live-mode loop starts | 20 |
 | lines inside 30s of a live-mode start (the automated-test signature) | 100 |
@@ -87,7 +87,7 @@ _Backtests are not returns. They include costs but not every market impact, and 
 
 **No order has ever reached a broker.** Every `AUTOPILOT_PLACED` line in the journal answers with the test broker's constant order number `1` at a fixed fixture price, and the single `JSG_STAGED`/`JSG_PLACED` pair came from an offline unit test whose HTTP session was mocked — that pair is annotated in the journal itself.
 
-Of the 237 lines, **100 were written by the automated test suite**, not by the trading process. The suite used to import the operator's live configuration, so the module-bound journal object inside a test process appended to the production file, armed `live` mode against stubbed brokers, and left its daemon threads running after the stubs were torn down. Nothing was placed and the paper book was never touched, but the trail was polluted, which is a defect in an append-only audit log and is not something to leave unmentioned.
+Of the 238 lines, **100 were written by the automated test suite**, not by the trading process. The suite used to import the operator's live configuration, so the module-bound journal object inside a test process appended to the production file, armed `live` mode against stubbed brokers, and left its daemon threads running after the stubs were torn down. Nothing was placed and the paper book was never touched, but the trail was polluted, which is a defect in an append-only audit log and is not something to leave unmentioned.
 
 The fix is structural, not a cleanup of the file: `tests/conftest.py` now points every test at a throwaway config with an unroutable portal URL and empty credentials, blocks the transport layer so no test can reach a network, and stops every autopilot instance built during a test at teardown. The history is left in place — the containment event itself is the last line of the journal, because rewriting an audit trail to hide its own contamination would destroy the thing it is supposed to prove.
 

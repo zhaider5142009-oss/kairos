@@ -486,11 +486,19 @@ class Autopilot:
                                     detail = guard["reason"] or "cluster cap"
                                 else:
                                     notional = guard["allowed_notional"]
-                                    if live and not is_psx:
-                                        # MT5 quotes CFDs in lots, not shares
+                                    # The venue decides the unit, so the venue has
+                                    # to be known before the size is. An MT5 CFD is
+                                    # bought in 100-unit lots and has a 0.01-lot
+                                    # floor; a Binance spot order is the asset
+                                    # itself, where that floor would inflate a
+                                    # small notional past what the risk layer
+                                    # approved and a lot division would send an
+                                    # order a hundred times too small.
+                                    venue = self._venue_for(inst, live, is_psx)
+                                    if venue == "MT5":
                                         qty = round(max(0.01,
                                                         notional / price / 100), 2)
-                                    elif live:
+                                    elif venue == "JS_GLOBAL":
                                         qty = int(notional // price)   # PSX shares
                                     else:
                                         qty = notional / price
@@ -1127,6 +1135,25 @@ class Autopilot:
                 time.sleep(FILL_CONFIRM_POLL_S)
         return False
 
+    def _venue_for(self, inst, live: bool, is_psx: bool) -> str:
+        """Which book a live order for this name belongs to.
+
+        One place answers, because the size and the venue are the same question:
+        a spot unit and a CFD lot are different numbers for the same notional.
+        Sizing before routing is how a crypto order goes out a hundred times too
+        small — or, floored at the broker's minimum lot, too big.
+        """
+        from . import binance as _BN
+        if not live:
+            return "PAPER"
+        if is_psx:
+            return "JS_GLOBAL"
+        # A crypto name has a home venue now, but only once that venue is armed:
+        # naming an unarmed one would route the order to a bridge whose only
+        # answer is a refusal.
+        return ("BINANCE" if (getattr(self, "_bn_armed", False)
+                              and _BN.pair_for(inst.key)) else "MT5")
+
     def _execute(self, inst, side: str, qty: float, price: float,
                  res: dict[str, Any], broker: PaperBroker, live: bool,
                  close: bool, ticket: int | None = None
@@ -1156,15 +1183,7 @@ class Autopilot:
         else:
             sl, tp = bands.get("p90"), tgt.get(hkey)
 
-        venue = "PAPER"
-        if live and not is_psx:
-            # A crypto name has a home venue now, but only once that venue is
-            # armed: naming an unarmed one would route the order to a bridge
-            # whose only answer is a refusal.
-            venue = ("BINANCE" if (getattr(self, "_bn_armed", False)
-                                   and _BN.pair_for(inst.key)) else "MT5")
-        elif live and is_psx:
-            venue = "JS_GLOBAL"
+        venue = self._venue_for(inst, live, is_psx)
         if venue == "MT5":
             acc, pos = self.mt5.account(), self.mt5.positions()
         elif venue == "BINANCE":

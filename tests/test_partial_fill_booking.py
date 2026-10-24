@@ -204,7 +204,7 @@ def _position_row(price: float, qty: float = 0.5) -> dict:
             "pnl": round(-5 * qty, 2)}
 
 
-def _ap_binance(monkeypatch, tmp_path, client, res, managed: bool):
+def _ap_binance(monkeypatch, tmp_path, client, res, managed: bool, term=None):
     """The real loop, with GOLD resting on an armed Binance book."""
     ap = AP.Autopilot()
     ap.state_path = tmp_path / "autopilot.json"
@@ -222,7 +222,7 @@ def _ap_binance(monkeypatch, tmp_path, client, res, managed: bool):
                           "target": round(price * 1.2, 4)}} if managed else {},
     })
     journal = _Journal()
-    monkeypatch.setattr(ap, "mt5", _Terminal([]))
+    monkeypatch.setattr(ap, "mt5", term or _Terminal([]))
     monkeypatch.setattr(ap, "_psx_book", lambda: None)
     monkeypatch.setattr(ap.gate, "check", lambda intent, acct, pos: (True, ""))
     monkeypatch.setattr(AP, "PaperBroker", _fresh_paper(tmp_path))
