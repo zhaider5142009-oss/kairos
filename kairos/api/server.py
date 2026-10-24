@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import secrets
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -19,7 +20,50 @@ ROOT = Path(__file__).resolve().parent.parent
 from kairos.engine import ENGINE  # noqa: E402
 from kairos.universe import resolve, universe  # noqa: E402
 
-app = FastAPI(title="KAIROS Control Tower", version=KAIROS_VERSION)
+# A resume that was refused, or that raised, used to leave no trace anywhere:
+# see `_auto_resume`. The one message worth printing at boot is the one the desk
+# already reads, so the reason goes into the autopilot's own error field.
+_BENIGN_START = "already running"
+
+
+def _auto_resume() -> None:  # paper only, by doctrine — live never resurrects itself
+    """Start the paper loop on boot, and say so out loud when it does not.
+
+    `AUTOPILOT.start()` *returns* a refusal rather than raising, so the handler
+    this replaces — which discarded the return value inside
+    `except Exception: pass` — had no way to fail visibly: a loop that was never
+    asked to start, a loop that was refused, and a loop an operator stopped on
+    purpose all look identical from the desk, which prints "not running" and no
+    reason. The reason exists at this exact moment, and used to be thrown away.
+    `last_error` is the field `/api/desk` already renders as `error: …`, so the
+    boot note lands where a person is already looking, and a successful start
+    clears it the way any other start does.
+    """
+    ap = (CFG.section("autopilot") or {}) if hasattr(CFG, "section") else {}
+    if not ap.get("auto_start_paper", True):
+        return
+    from kairos.autopilot import AUTOPILOT
+    try:
+        res = AUTOPILOT.start("paper")
+    except Exception as exc:
+        res = {"ok": False, "error": f"raised {type(exc).__name__}: {str(exc)[:160]}"}
+    err = str((res or {}).get("error") or "")
+    if (res or {}).get("ok") or _BENIGN_START in err:
+        return
+    AUTOPILOT.st["last_error"] = f"boot: {err[:200]}"
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    # `@app.on_event("startup")` is deprecated, and the way a deprecated hook
+    # fails is not a warning in a log — it is a trading loop that never starts on
+    # a system advertised as resuming itself, which is the defect above.
+    _auto_resume()
+    yield
+
+
+app = FastAPI(title="KAIROS Control Tower", version=KAIROS_VERSION,
+              lifespan=_lifespan)
 BOOT_TS = time.time()
 
 
@@ -44,17 +88,6 @@ async def _token_gate(request, call_next):
                 return JSONResponse(status_code=401,
                                     content={"ok": False, "error": "unauthorized"})
     return await call_next(request)
-
-
-@app.on_event("startup")
-def _auto_resume():  # paper only, by doctrine — live never resurrects itself
-    ap = (CFG.section("autopilot") or {}) if hasattr(CFG, "section") else {}
-    if ap.get("auto_start_paper", True):
-        try:
-            from kairos.autopilot import AUTOPILOT
-            AUTOPILOT.start("paper")
-        except Exception:
-            pass
 
 
 @app.exception_handler(Exception)
