@@ -311,7 +311,11 @@ def compute_features(df: pd.DataFrame) -> dict[str, float]:
         f["vol_z"] = float((v.iloc[-1] - v_ma.iloc[-1]) / (v.rolling(60, min_periods=5).std().iloc[-1] or 1e-9))
         f["volume_trend"] = float(v_ma.iloc[-1] / (v.rolling(60, min_periods=1).mean().iloc[-1] or 1.0))
         obv = (np.sign(c.diff().fillna(0.0)) * v).cumsum()
-        f["obv_slope"] = float((obv.iloc[-1] - obv.iloc[-6]) / (abs(obv.iloc[-1]) + 1e-9))
+        # the same denominator the panel's obv_sl uses: the volume the change was
+        # measured over, not |OBV|, which passes through zero and turns a flat
+        # balance into a number 10^16 times the rest of the feature row
+        v5 = float(v.iloc[-5:].sum())
+        f["obv_slope"] = float((obv.iloc[-1] - obv.iloc[-6]) / v5) if v5 > 0 else 0.0
         mfi_tp = (h + lo + c) / 3
         mf = mfi_tp.diff().fillna(0.0) * v
         pos = mf.clip(lower=0).rolling(14, min_periods=1).sum()
@@ -472,7 +476,15 @@ def feature_panel(df: pd.DataFrame) -> pd.DataFrame:
         v_sd = v.rolling(60, min_periods=5).std()
         panel["vol_z"] = (v - v_ma) / v_sd.replace(0, np.nan)
         obv = (np.sign(ret.fillna(0.0)) * v).cumsum()
-        panel["obv_sl"] = obv.diff(5) / (obv.abs() + 1e-9)
+        # OBV's level is an arbitrary cumulative sum that passes through zero, so
+        # dividing its change by |OBV| divides by ~1e-9 on the bars where the
+        # balance is flat: 4.95e16 on NIKKEI, against a panel whose next-largest
+        # column is 1e2, and that is what made the Ridge solve report
+        # rcond=3.8e-34 on a matrix it should have handled cleanly. The volume
+        # traded over the same window is the scale the change is actually
+        # measured against, and the ratio is net signed volume as a share of
+        # everything that traded: bounded in [-1, 1], same sign as before.
+        panel["obv_sl"] = obv.diff(5) / v.rolling(5, min_periods=1).sum().replace(0, np.nan)
     else:
         panel["vol_z"] = 0.0
         panel["obv_sl"] = 0.0
