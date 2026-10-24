@@ -114,7 +114,50 @@ def test_unmatured_horizon_stays_unresolved(journal, monkeypatch):
     assert _resolved(journal)[0]["resolved"] is False
 
 
-def test_directional_call_that_was_wrong_is_recorded_wrong(journal, monkeypatch):
+def _weekday_bars(days: int, drift: float = 0.004) -> pd.DataFrame:
+    """An exchange calendar: no Saturday or Sunday bar, the way the store is."""
+    rows, d = [], pd.Timestamp("2026-01-05")
+    while len(rows) < days:
+        if d.dayofweek < 5:
+            rows.append({"date": d, "close": 100.0 * (1 + drift) ** len(rows)})
+        d += pd.Timedelta(days=1)
+    return pd.DataFrame(rows)
+
+
+def test_a_weekend_call_is_scored_from_the_close_it_was_made_on(journal, monkeypatch):
+    """A Saturday snapshot is a call about the next five sessions from Friday's
+    close, and the same call stamped on the Friday must score identically.
+
+    The resolver anchored on the first bar *at or after* the snapshot, so a
+    weekend row was graded Monday-close to Monday-close: the call's own first
+    session — and the whole weekend gap inside it — never entered its result, and
+    the row sat one session behind the calendar for as long as it stayed pending.
+    On the live journal that was 4,231 pending rows and none that matured, against
+    350 already elapsed.
+    """
+    monkeypatch.setattr(F, "_direction_threshold", lambda: 0.18)
+    bars = _weekday_bars(30)
+    _write(journal, [_row(score=0.4, ts="2026-01-09T14:00:00"),   # Friday
+                     _row(score=0.4, ts="2026-01-10T14:00:00")])  # Saturday
+    assert F.resolve_outcomes(_Md(bars)) == 2
+    fri, sat = _resolved(journal)
+    assert fri["realized_return"] == sat["realized_return"]
+
+
+def test_a_call_older_than_its_history_starts_at_the_first_bar_after_it(
+        journal, monkeypatch):
+    """The close the call saw is not always in hand. When the series begins after
+    the call, the window must still open after it — never before it."""
+    monkeypatch.setattr(F, "_direction_threshold", lambda: 0.18)
+    bars = _weekday_bars(30)
+    _write(journal, [_row(score=0.4, ts="2026-01-01T09:00:00")])
+    assert F.resolve_outcomes(_Md(bars)) == 1
+    e = _resolved(journal)[0]
+    want = float(bars["close"].iloc[5] / bars["close"].iloc[0] - 1)
+    assert e["realized_return"] == pytest.approx(round(want, 5))
+
+
+
     monkeypatch.setattr(F, "_direction_threshold", lambda: 0.18)
     _write(journal, [_row(score=0.4, exp=0.03)])
     F.resolve_outcomes(_Md(_bars(30, drift=-0.004)))

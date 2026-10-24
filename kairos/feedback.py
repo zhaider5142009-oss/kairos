@@ -165,10 +165,25 @@ def resolve_outcomes(md) -> int:
         if df is None or len(df) < 10:
             continue
         snap_dt = datetime.fromisoformat(e["ts"])
-        idx = df.index[df["date"] >= pd.Timestamp(snap_dt.date())]
-        if len(idx) == 0:
-            continue
-        i0 = int(idx[0])
+        # The horizon starts at the last close the call could have seen, not at
+        # the next session. Anchoring on `>= snap` skips the session that prints
+        # first after the call: a Saturday snapshot was graded from Monday's
+        # close to the following Monday, so the call's own first session —
+        # including the entire weekend gap — was excluded from its result, and
+        # the record sat a session behind the calendar forever. The journal has
+        # 4,231 pending rows and not one of them matured under that rule, while
+        # 350 had already elapsed.
+        idx = df.index[df["date"] <= pd.Timestamp(snap_dt.date())]
+        if len(idx):
+            i0 = int(idx[-1])
+        else:
+            # The series begins after the call: the close it saw is not in hand,
+            # so the earliest bar is the proxy — a window that still opens after
+            # the call, never one that begins before it.
+            ahead = df.index[df["date"] > pd.Timestamp(snap_dt.date())]
+            if len(ahead) == 0:
+                continue
+            i0 = int(ahead[0])
         i1 = i0 + e["horizon"]
         if i1 > len(df) - 1:
             # The bars for this horizon have not printed yet. Clamping to the
