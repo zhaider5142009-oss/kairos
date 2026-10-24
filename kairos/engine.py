@@ -92,7 +92,9 @@ class PredictionEngine:
     def __init__(self, md: MarketData | None = None) -> None:
         self.md = md or MarketData()
         self._intermarket: dict[str, pd.DataFrame] | None = None
+        self._intermarket_at: float = 0.0
         self._factors: pd.DataFrame | None = None
+        self._factors_at: float = 0.0
         self._news_cache: tuple[float, list] = (0.0, [])
         self._pred_cache: dict[tuple, tuple[float, dict]] = {}
         # refitting stat+ML+neural IS the cost of a cycle (7-90s per instrument
@@ -102,8 +104,18 @@ class PredictionEngine:
         self._battery_cache: dict[tuple, list[ModelForecast]] = {}
 
     # ------------------------------------------------------------- context
-    def intermarket(self, force: bool = False) -> dict[str, pd.DataFrame]:
-        if self._intermarket is None or force:
+    def intermarket(self, force: bool = False,
+                    refresh_after_s: float = 300.0) -> dict[str, pd.DataFrame]:
+        # One fetch per cycle, not one per process. The panel used to be held
+        # for the life of the daemon — nothing in the autopilot ever asked for
+        # a refresh — so after a day the macro multiplier sizing every position
+        # came from a boot-time snapshot. The fetch is ten socket waits, so it
+        # is refreshed on a clock that matches the autopilot's 10-min cycle
+        # rather than on every call; a failed refresh raises and leaves the
+        # previous panel in place for the next attempt, because quietly serving
+        # a stale panel is the failure this TTL exists to end.
+        if (self._intermarket is None or force
+                or time.time() - self._intermarket_at > refresh_after_s):
             # 10 independent HTTP fetches, and the wait is entirely on the
             # network, not the CPU: sequentially this cost ~16s of a ~53s
             # prediction. Order of the result is the declared key order, and
@@ -122,14 +134,23 @@ class PredictionEngine:
                     if df is not None and len(df) >= 40:
                         ctx[key] = df
             self._intermarket = ctx
+            self._intermarket_at = time.time()
         return self._intermarket
 
-    def factor_row(self, instrument: Instrument) -> pd.Series | None:
+    def factor_row(self, instrument: Instrument,
+                   refresh_after_s: float = 300.0) -> pd.Series | None:
         if instrument.market != "PSX":
             return None
-        if self._factors is None:
+        # Same boot-time defect as the macro panel: the factor row fed to the
+        # strategy library was computed once and then reused for the daemon's
+        # whole life. It is derived from `psx_snapshot()`, which itself has a
+        # 300s clock, so recomputing on that clock keeps the row on the same
+        # cross-section the strategies are scored against.
+        if (self._factors is None
+                or time.time() - self._factors_at > refresh_after_s):
             snap = self.md.psx_snapshot()
             self._factors = cross_sectional_factors(snap)
+            self._factors_at = time.time()
         if self._factors is None or self._factors.empty:
             return None
         rows = self._factors[self._factors["name"] == instrument.key]
@@ -609,6 +630,7 @@ Respond ONLY with a JSON object:
         if snap.empty:
             return {"ok": False, "error": "PSX snapshot unavailable (TradingView down?)"}
         factors = self._factors = cross_sectional_factors(snap)
+        self._factors_at = time.time()
         cols = [c for c in ("name", "close", "volume", "sector", "momentum_1m",
                             "momentum_3m",
                             "value", "quality", "low_vol", "composite_score", "rank")

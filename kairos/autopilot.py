@@ -135,6 +135,7 @@ class Autopilot:
                 "entry_threshold": 0.18, "exit_threshold": 0.05,
                 "max_trades_per_cycle": 2, "horizon_days": 5,
                 "cycles": 0, "last_cycle": None, "last_cycle_s": None,
+                "last_stages": None,
                 "last_error": None, "feedback_error": None,
                 "state_saved": None, "state_error": None,
                 "signals": [], "actions": [], "held": {}, "consec_losses": 0,
@@ -330,6 +331,11 @@ class Autopilot:
         # the twelve fetches run in parallel and the cycle pays for one slow
         # symbol, not twelve. Measured 2026-10-23: 12 instruments in 8.7s.
         watch = [i for i in (resolve(s) for s in st["symbols"]) if i is not None]
+        # Stage timings live beside `last_cycle_s`: a cycle that got slower has
+        # to name the stage that got slower, or the next efficiency pass spends
+        # its time on whichever one is easiest to see.
+        stages: dict[str, float] = {"news": 0.0, "predict": 0.0}
+        t_stage = time.perf_counter()
         try:
             readings = ENGINE.refresh_news(watch)
             news_desk = {"asked": len(watch),
@@ -344,6 +350,7 @@ class Autopilot:
             news_desk = {"asked": len(watch), "available": 0,
                          "paused": ENGINE.news_paused,
                          "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+        stages["news"] = round(time.perf_counter() - t_stage, 1)
         with self._lock:
             self.st["news_desk"] = news_desk
             self._save()
@@ -351,12 +358,15 @@ class Autopilot:
             inst = resolve(sym)
             if inst is None:
                 continue
+            t_pred = time.perf_counter()
             try:
                 res = ENGINE.predict(inst.key, horizon=st["horizon_days"])
             except Exception as exc:
                 rows.append({"symbol": inst.key, "name": inst.name,
                              "error": str(exc)[:120]})
                 continue
+            finally:
+                stages["predict"] += time.perf_counter() - t_pred
             if not res.get("ok"):
                 continue
             if macro is None:
@@ -490,6 +500,7 @@ class Autopilot:
         with self._lock:
             st.update({"cycles": st["cycles"] + 1, "last_cycle": _now(),
                        "last_cycle_s": round(time.perf_counter() - started, 1),
+                       "last_stages": {k: round(v, 1) for k, v in stages.items()},
                        "signals": rows[:12], "macro": macro})
             self._save()
         # self-improvement pulse: resolve realized outcomes so Fugu's
@@ -1323,7 +1334,8 @@ class Autopilot:
         return {"ok": True, **{k: self.st[k] for k in
                 ("running", "mode", "armed_live", "symbols", "interval_s",
                  "entry_threshold", "max_trades_per_cycle", "horizon_days",
-                 "cycles", "last_cycle", "last_cycle_s", "last_error",
+                 "cycles", "last_cycle", "last_cycle_s", "last_stages",
+                 "last_error",
                  "feedback_error", "state_saved", "state_error",
                  "signals", "actions",
                  "held", "consec_losses", "psx_day_start", "macro",

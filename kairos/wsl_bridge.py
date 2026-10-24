@@ -35,6 +35,12 @@ def _venv() -> str:
 
 
 class WslBridge:
+    # The cache is content-addressed, so it is correct — but a forecast per
+    # symbol per cycle is a new key every cycle, and an unbounded dict on an
+    # always-on daemon is a leak. A cycle needs 11 entries; the rest of the
+    # window is there so a restart-time backfill reuses what it just fetched.
+    CACHE_MAX = 64
+
     def __init__(self) -> None:
         self._cache: dict[str, Any] = {}
         self._last_probe: tuple[bool, float] = (False, 0.0)
@@ -129,6 +135,8 @@ class WslBridge:
             return self._cache[key]
         out = self._call({"model": model, "series": series, "horizon": horizon})
         if out is not None and use_cache:
+            while len(self._cache) >= self.CACHE_MAX:
+                self._cache.pop(next(iter(self._cache)))
             self._cache[key] = out
         return out
 
