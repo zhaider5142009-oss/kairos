@@ -47,6 +47,29 @@ def _hit_rate(y_true: np.ndarray, y_pred_sign: np.ndarray) -> float:
     return float(np.mean(np.sign(y_true) == np.sign(y_pred_sign)))
 
 
+def _p_up(model, row: np.ndarray) -> float | None:
+    """The probability that the *rising* class wins, named rather than indexed.
+
+    `predict_proba` columns come back in `model.classes_` order, so column 1 is
+    the up-probability only when the label set has exactly two classes and the
+    second one is the positive. The number this returns is what makes the vote's
+    sign and feeds the size channel, so a fit whose columns mean something else
+    has to be refused, not guessed at. `None` is that refusal: no up column, or
+    a decision score that is not a single up/down number.
+    """
+    if hasattr(model, "predict_proba"):
+        up = [i for i, c in enumerate(model.classes_) if float(c) > 0]
+        if len(up) != 1:
+            return None
+        return float(model.predict_proba(row.reshape(1, -1))[0][up[0]])
+    d = np.asarray(model.decision_function(row.reshape(1, -1))).ravel()
+    if d.size != 1:
+        return None
+    # The same sigmoid the two-class `predict_proba` of a linear model produces,
+    # so both branches hand back a probability on the same scale.
+    return float(1.0 / (1.0 + np.exp(-float(d[0]))))
+
+
 # ---------------------------------------------------------------------------
 # Tree/linear stack: directional classifiers with walk-forward validation.
 # Classification avoids the degenerate constant-mean regression that kills
@@ -61,7 +84,13 @@ def tree_stack_forecast(df: pd.DataFrame, horizon: int = 5) -> list[ModelForecas
     X, y, _ = _prepare_xy(df, horizon)
     if len(X) < 80:
         return []
-    y_sign = np.sign(y)
+    # Up or not-up, never three-way. `np.sign(y)` gave a bar whose forward
+    # return is exactly 0.0 a class of its own, and that class is `predict_proba`
+    # column 1 — so on 33 of the 97 cached series, including BANK and every PSX
+    # name that trades in whole-rupee steps, this line manufactured a third
+    # outcome the rest of the function has no notion of. The magnitudes below
+    # already split on `y > 0`; this is the same convention, applied to the label.
+    y_sign = np.where(y > 0, 1.0, -1.0)
     forecasts: list[ModelForecast] = []
     models = {
         "GBM": GradientBoostingClassifier(n_estimators=150, max_depth=3,
@@ -77,7 +106,7 @@ def tree_stack_forecast(df: pd.DataFrame, horizon: int = 5) -> list[ModelForecas
     }
     for name, model in models.items():
         try:
-            hits, probs, mags = [], [], []
+            hits, mags = [], []
             for tr_s, tr_e, te_s, te_e in _walk_forward_splits(len(X)):
                 ytr = y_sign[tr_s:tr_e]
                 if len(np.unique(ytr)) < 2:
@@ -85,19 +114,15 @@ def tree_stack_forecast(df: pd.DataFrame, horizon: int = 5) -> list[ModelForecas
                 model.fit(X[tr_s:tr_e], ytr)
                 p = model.predict(X[te_s:te_e])
                 hits.append(_hit_rate(y[te_s:te_e], p))
-                if hasattr(model, "predict_proba"):
-                    probs.append(float(model.predict_proba(X[te_s:te_e])[:, 1].mean()))
                 up_mask = y[tr_s:tr_e] > 0
                 mags.append((float(np.mean(np.abs(y[tr_s:tr_e][up_mask]))) if up_mask.any() else 0.0,
                              float(np.mean(np.abs(y[tr_s:tr_e][~up_mask]))) if (~up_mask).any() else 0.0))
             if not hits:
                 continue
             model.fit(X[:-horizon], y_sign[:-horizon])
-            if hasattr(model, "predict_proba"):
-                p_up = float(model.predict_proba(X[-1:].reshape(1, -1))[0, 1])
-            else:
-                d = float(model.decision_function(X[-1:].reshape(1, -1))[0])
-                p_up = float(1 / (1 + np.exp(-d)))
+            p_up = _p_up(model, X[-1])
+            if p_up is None:
+                continue
             hit = float(np.mean(hits))
             up_mag = float(np.mean([m[0] for m in mags])) if mags else 0.0
             down_mag = float(np.mean([m[1] for m in mags])) if mags else 0.0
