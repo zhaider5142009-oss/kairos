@@ -459,10 +459,9 @@ def _identity(inst: Instrument) -> _Identity:
     # the wrong stock: `_GENERIC` ("development" is all that survives from Oil &
     # Gas Development Co, and "khan" is all that survives from a politician), the
     # four-character floor, and `_rival_phrases`. Known imprecision, kept on
-    # purpose: "Fauji Fertilizer" is the phrase for both FFC and FFBL, so a
-    # parent-company story counts to both — they are the same group and the same
-    # news, and a matcher that split them would be claiming a precision it does
-    # not have.
+    # purpose: a group story that names the group without naming the listed arm
+    # counts to the arm, and a matcher that split them would be claiming a
+    # precision it does not have.
     rivals = _rival_phrases(head, keep, inst.key) if head else ()
     # A brand's own arms are named further than the brand, and `matches` reads
     # these as phrases for the same reason the matcher does: "engro polymer" as a

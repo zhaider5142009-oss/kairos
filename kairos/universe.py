@@ -72,7 +72,7 @@ PSX_BLUE_CHIPS: list[Instrument] = [
     _psx("SSGC", "Sui Southern Gas", "Utilities", ("gas-proxy", "soe")),
     _psx_no_yahoo("HUBC", "Hub Power Co.", "Utilities", ("index-heavy",)),
     _psx("KAPCO", "Kot Addu Power", "Utilities", ()),
-    _psx("MLCF", "MLCF Global (Mustafaabad Cotton)", "Textile", ()),
+    _psx("MLCF", "Maple Leaf Cement Factory Ltd.", "Cement", ("cyclical",)),
     _psx("LUCK", "Lucky Cement", "Cement", ("index-heavy", "cyclical")),
     _psx("DGKC", "D.G. Khan Cement", "Cement", ("cyclical",)),
     _psx("FCCL", "Fauji Cement", "Cement", ("cyclical",)),
@@ -83,7 +83,9 @@ PSX_BLUE_CHIPS: list[Instrument] = [
     _psx("EFERT", "Engro Fertilizers", "Fertilizer", ("agri-proxy",)),
     _psx("FFC", "Fauji Fertilizer Co.", "Fertilizer", ("index-heavy", "agri-proxy")),
     _psx("FATIMA", "Fatima Fertilizer", "Fertilizer", ("agri-proxy",)),
-    _psx_no_yahoo("FFBL", "Fauji Fertilizer Bin Qasim", "Fertilizer", ("agri-proxy",)),
+    # FFBL is not on the exchange board and has no Yahoo series since its merger
+    # into FFC; an unpriced name in a tradable universe is only a source of
+    # "no history" noise, so it is not listed here.
     _psx("HBL", "Habib Bank Ltd.", "Banking", ("index-heavy", "bank")),
     _psx("UBL", "United Bank Ltd.", "Banking", ("index-heavy", "bank")),
     _psx("MCB", "MCB Bank", "Banking", ("index-heavy", "bank")),
@@ -107,7 +109,7 @@ PSX_BLUE_CHIPS: list[Instrument] = [
     _psx("ILP", "Interloop Ltd.", "Textile", ("export",)),
     _psx("COLG", "Colgate-Palmolive Pakistan", "Consumer", ()),
     _psx("NESP", "Nestle Pakistan", "Consumer", (), ticker="NESTLE"),
-    _psx("MFL", "Millat Tractors", "Auto", ("agri-proxy",)),
+    _psx("MTL", "Millat Tractors Ltd.", "Auto", ("agri-proxy",)),
 ]
 
 PSX_INDEX: Instrument = Instrument(

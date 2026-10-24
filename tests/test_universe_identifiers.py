@@ -42,6 +42,22 @@ def test_renamed_and_respelled_names_point_at_the_exchange_symbol():
     assert resolve("NESTLE") is resolve("NESP")
 
 
+def test_a_ticker_belonging_to_another_company_is_not_reused():
+    # MFL is Matco Foods on the board; Millat Tractors trades as MTL. Carrying
+    # Millat's label on Matco's prices is the same defect as a wrong tv symbol.
+    mtl = resolve("MTL")
+    assert mtl is not None and mtl.name.startswith("Millat")
+    assert resolve("MFL") is None
+    mlcf = resolve("MLCF")
+    assert mlcf.name == "Maple Leaf Cement Factory Ltd."
+    assert mlcf.sector == "Cement"
+
+
+def test_a_name_with_no_board_row_is_not_in_the_universe():
+    # FFBL merged into FFC: no board row, no Yahoo series, nothing to price
+    assert resolve("FFBL") is None
+
+
 def test_the_board_sweep_writes_into_the_file_history_opens(tmp_path):
     st = D.Store(tmp_path)
     df = pd.DataFrame({
