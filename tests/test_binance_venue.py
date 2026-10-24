@@ -234,7 +234,10 @@ def test_intent_lands_before_the_request(venue, monkeypatch):
     assert isinstance(fill, Fill) and fill.venue == B.VENUE
     assert [e[0] for e in venue.events] == ["BINANCE_INTENT", "BINANCE_PLACED"]
     assert venue.events[0][1]["cid"] == fill.client_order_id
-    assert fake.paths()[0] == "/api/v3/order"      # only after the journal row
+    # the POST is the last thing to leave, after the journal row. Reading the
+    # pair's precision rules is a public GET that may precede it: it is not an
+    # order, and it carries no signature.
+    assert fake.calls[-1] == ("/api/v3/order", "POST", True)
 
 
 def test_failing_journal_stops_the_order(venue, monkeypatch):
@@ -246,7 +249,9 @@ def test_failing_journal_stops_the_order(venue, monkeypatch):
     monkeypatch.setattr(B.JOURNAL, "last_error", None)
     assert venue.place_order(OrderIntent(symbol="BTC", side="BUY",
                                          quantity=0.5)) is None
-    assert fake.calls == []
+    # nothing *signed* left: an unreadable audit trail stops the order, whatever
+    # the venue's public metadata happened to answer
+    assert [c for c in fake.calls if c[2]] == []
 
 
 def test_an_unanswered_post_is_unconfirmed_not_refused(venue, monkeypatch):
