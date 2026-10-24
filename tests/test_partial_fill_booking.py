@@ -143,6 +143,10 @@ class _Client:
         # the spot client answers with the price it last saw, not a book
         return self.price
 
+    def filters(self, pair: str) -> None:
+        # a pair whose settings could not be read: nothing constrains the size
+        return None
+
     def outcome(self, coid: str) -> str:
         return "PLACED"
 

@@ -1,7 +1,7 @@
 # KAIROS — technical whitepaper
 **A self-auditing prediction and execution stack for Pakistan and global markets**
 
-Version 2.6.2 · 2026-10-24 · single-operator, publicly verifiable
+Version 2.6.2 · 2026-10-25 · single-operator, publicly verifiable
 
 > **Reading note.** This document describes a system, not a track record. Every quantitative
 > claim is either reproduced from an on-disk journal or explicitly labelled as a backtest.
@@ -222,7 +222,7 @@ under "no coverage" rather than being credited or demoted on evidence it never s
 - Logs rotate; state persists across restarts; RAM, startup and per-cycle cost were profiled
   on a 2015-era i5 / 8 GB machine, which is a deliberate constraint — if it runs there, the
   infrastructure argument is cheap.
-- 1051 regression tests, including the money path and the integrity cases below.
+- 1057 regression tests, including the money path and the integrity cases below.
 
 ## 7. What the numbers say, and what they do not
 
@@ -235,7 +235,7 @@ and 9 instruments reported as losses.
 important finding in the project: the edge, if any, is in the global and commodity books,
 and any PSX strategy must be sized against costs before it is sized against conviction.
 
-The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 522
+The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 525
 autopilot cycles) with two fills. That is a system working as designed on a low-conviction
 market, not a strategy proving itself.
 
@@ -433,7 +433,7 @@ be mis-sized because of it.
 git clone https://github.com/zhaider5142009-oss/kairos && cd kairos
 cp config.example.yaml config.yaml      # add your own keys; config.yaml is git-ignored
 pip install -r requirements.txt
-python -m pytest tests -q                    # 1051 tests
+python -m pytest tests -q                    # 1057 tests
 python -m kairos.cli backtest GOLD WTI HBL   # walk-forward sweep, costs modelled
 python -m kairos.cli health                  # subsystem health, dead council seats
 python -m kairos.cli feedback                # realized track record, live from the journal

@@ -74,14 +74,16 @@ def _size_for(venue: str, notional: float, price: float,
               spec: dict[str, float] | None = None) -> float:
     """The largest position in the venue's own unit that still fits the cap.
 
-    Every venue trades a different thing: MT5 a CFD lot whose units, step and
-    minimum the broker owns (a 1,000-oz silver lot is not a 100-oz gold lot); PSX
-    whole shares; spot and paper fractional units of the asset itself. Each one
-    rounds *down*, because an approved notional is a ceiling and rounding to the
-    lot step used to spend past it. Zero means the name cannot be traded at this
-    size — less than the venue's minimum volume, or less than one share — and the
-    caller vetoes instead of forcing the floor, which is how a position too small
-    for the broker became one far larger than the account's risk per trade.
+    Every venue trades a different thing and counts it on its own ladder: MT5 a
+    CFD lot whose units, step and minimum the broker owns (a 1,000-oz silver lot
+    is not a 100-oz gold lot); PSX whole shares; a spot pair the quantity step,
+    minimum order and minimum value the exchange publishes. Each one rounds
+    *down*, because an approved notional is a ceiling and rounding to the lot
+    step used to spend past it. Zero means the name cannot be traded at this
+    size — less than the venue's minimum volume, less than its smallest order, or
+    less than one share — and the caller vetoes instead of forcing the floor,
+    which is how a position too small for the broker became one far larger than
+    the account's risk per trade.
     """
     if not (notional > 0) or not (price > 0) or not math.isfinite(notional + price):
         return 0.0
@@ -93,7 +95,16 @@ def _size_for(venue: str, notional: float, price: float,
         return round(lots, 8) if lots >= minimum else 0.0
     if venue == "JS_GLOBAL":
         return float(math.floor(notional / price))        # whole shares
-    return notional / price                               # spot units
+    units = notional / price                              # spot and paper units
+    if venue != "BINANCE":
+        return units
+    step = float((spec or {}).get("step_size") or 0)
+    if step > 0:
+        units = round(math.floor(units / step + 1e-9) * step, 8)
+    if units < float((spec or {}).get("min_qty") or 0):
+        return 0.0
+    least = float((spec or {}).get("min_notional") or 0)
+    return 0.0 if units * price < least else units
 
 
 def _figure(raw: Any) -> float:
@@ -517,9 +528,8 @@ class Autopilot:
                                     # unit is the broker's own, not an assumption
                                     # about lots.
                                     venue = self._venue_for(inst, live, is_psx)
-                                    spec = (self.mt5.spec(self.mt5.resolve_symbol(
-                                        inst.key)) if venue == "MT5" else None)
-                                    qty = _size_for(venue, notional, price, spec)
+                                    qty = _size_for(venue, notional, price,
+                                                    self._venue_spec(venue, inst))
                                     if qty <= 0:
                                         # Nothing tradeable fits the cap. Sending
                                         # the venue's minimum anyway would place an
@@ -1188,6 +1198,24 @@ class Autopilot:
         return ("BINANCE" if (getattr(self, "_bn_armed", False)
                               and _BN.pair_for(inst.key)) else "MT5")
 
+    def _venue_spec(self, venue: str, inst) -> dict[str, float] | None:
+        """How the venue itself says a position in this name is counted.
+
+        The unit belongs to the broker or the exchange, not to the code, so it has
+        to be asked before a size can be computed: MT5 gives a contract size, a
+        minimum lot and a lot step; a spot pair gives the quantity ladder, its
+        smallest order and the least it is worth. Either can be unreadable — then
+        the size falls back to the venue's own convention instead of vetoing a
+        trade nobody checked. Cached per pair by the bridge, so a 10-minute loop
+        pays one settings read per pair per hour, not one per entry.
+        """
+        if venue == "MT5":
+            return self.mt5.spec(self.mt5.resolve_symbol(inst.key))
+        if venue == "BINANCE":
+            from . import binance as _BN
+            return _BN.BINANCE.filters(_BN.pair_for(inst.key) or inst.key)
+        return None
+
     def _execute(self, inst, side: str, qty: float, price: float,
                  res: dict[str, Any], broker: PaperBroker, live: bool,
                  close: bool, ticket: int | None = None
@@ -1264,7 +1292,10 @@ class Autopilot:
                 return "PLANCHECK", why, None
 
         intent = OrderIntent(symbol=inst.key, side=side,
-                             quantity=round(qty, 4), venue=venue,
+                             # 8 decimals, not 4: a spot size already floored onto
+                             # the exchange's 0.00001 ladder is exact here, and
+                             # rounding it at 4 lifts it back above the cap.
+                             quantity=round(qty, 8), venue=venue,
                              stop_loss=sl, take_profit=tp,
                              comment="autopilot-close" if close else "autopilot")
         allowed, why = self.gate.check(intent, acc, pos)
