@@ -8,6 +8,7 @@ Institutional conventions:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -221,6 +222,11 @@ def cluster_budget(candidate: dict, book: list[dict], equity: float,
     spent the whole cluster cap, because "unreadable" is the conservative
     answer and not the free one.
 
+    Every number here is one money: `equity`, the candidate's notional and each
+    row's notional are expected in the currency the candidate is sized in, and a
+    row that cannot be stated in it arrives as `None`, which is charged rather
+    than skipped. A missing key is zero — that row holds nothing.
+
     Returns `allowed_notional` (never more than the candidate asked for), the
     cluster's share of equity after the add, and a reason when nothing fits.
     """
@@ -265,9 +271,15 @@ def cluster_budget(candidate: dict, book: list[dict], equity: float,
         name = str(pos.get("symbol") or pos.get("key") or "?")
         out["members"].append(name)
         try:
-            held += max(0.0, float(pos.get("notional") or 0.0))
+            val = float(pos.get("notional", 0.0))
         except (TypeError, ValueError):
             unreadable = True
+            continue
+        if not math.isfinite(val) or val < 0:
+            # Neither a hole nor a negative bet is evidence of an empty cluster.
+            unreadable = True
+            continue
+        held += val
     if unreadable:
         held = cap
 
@@ -278,7 +290,9 @@ def cluster_budget(candidate: dict, book: list[dict], equity: float,
                scaled=allowed + 1e-9 < want)
     if allowed <= 0 and out["members"]:
         shown = ", ".join(out["members"][:3]) + ("…" if len(out["members"]) > 3 else "")
-        out["reason"] = (f"correlated cluster ({shown}) already at "
-                         f"{held / eq * 100:.0f}% of equity, at its "
-                         f"{cluster_cap_pct:g}% cap")
+        out["reason"] = (
+            f"correlated cluster ({shown}) cannot be measured in this currency, "
+            f"so its {cluster_cap_pct:g}% cap is charged in full" if unreadable else
+            f"correlated cluster ({shown}) already at {held / eq * 100:.0f}% of "
+            f"equity, at its {cluster_cap_pct:g}% cap")
     return out

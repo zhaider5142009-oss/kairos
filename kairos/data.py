@@ -194,6 +194,69 @@ class Store:
 
 STORE = Store(CFG.cache_dir)
 
+
+# ---------------------------------------------------------------------------
+# The one rate two books share
+# ---------------------------------------------------------------------------
+FX_KEY = "USDPKR"
+# the series prints once a session, and a cycle asks per candidate: re-reading
+# the CSV each time is pure disk
+FX_TTL_S = 900.0
+# past this the print is history, not an exchange rate
+FX_MAX_AGE_DAYS = 7
+_fx_cache: tuple[float, float | None] | None = None
+
+
+def usd_pkr() -> float | None:
+    """The cached rupee per dollar, or None when the series cannot answer.
+
+    Read from the store the rest of the system already fills, never assumed. A
+    portfolio brake that silently used 1.0 instead priced a 70,000 dollar
+    holding as a 70,000 rupee position — two hundred times too small in front of
+    a rupee book — and a None is the answer that makes the caller veto instead.
+    """
+    global _fx_cache
+    now = time.monotonic()
+    if _fx_cache is not None and now - _fx_cache[0] < FX_TTL_S:
+        return _fx_cache[1]
+    rate: float | None = None
+    try:
+        df = STORE.load(FX_KEY)
+        if df is not None and len(df) and {"date", "close"} <= set(df.columns):
+            last = df.iloc[-1]
+            close = _num(last["close"])
+            day = pd.Timestamp(last["date"]).date()
+            age = (pd.Timestamp.now().normalize().date() - day).days
+            if close is not None and close > 0 and age <= FX_MAX_AGE_DAYS:
+                rate = close
+    except Exception:  # noqa: BLE001 — no rate is a valid answer, a crash is not
+        rate = None
+    _fx_cache = (now, rate)
+    return rate
+
+
+def fx_rate(frm: str, to: str) -> float | None:
+    """How much of `to` one unit of `frm` buys, or None when it cannot be said.
+
+    This desk holds exactly two currencies, so one rate between them answers
+    every mixing the portfolio does. Same-currency is 1.0 without touching the
+    tape; any other pair has no print here and is an honest None.
+    """
+    f, t = str(frm or "").upper(), str(to or "").upper()
+    if not f or not t:
+        return None
+    if f == t:
+        return 1.0
+    pkr = usd_pkr()
+    if pkr is None:
+        return None
+    if (f, t) == ("USD", "PKR"):
+        return pkr
+    if (f, t) == ("PKR", "USD"):
+        return 1.0 / pkr
+    return None
+
+
 # PSX history accumulation runs here, off the read path. One lock means only a
 # single sweep is ever in flight; `concurrent.futures` installs an exit hook
 # that joins submitted work, so a fire-and-forget sweep still finishes its

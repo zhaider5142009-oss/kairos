@@ -143,6 +143,34 @@ def _reading(raw: Any) -> float | None:
     return v if math.isfinite(v) else None
 
 
+# What each venue's book is counted in. Only consulted for a row whose name the
+# registry does not know, where the settlement currency of the book it sits on is
+# the one fact still available about it.
+_VENUE_CCY = {"MT5": "USD", "JS_GLOBAL": "PKR", "BINANCE": "USD"}
+
+
+def _notional_in(qty: Any, price: Any, frm: str, currency: str) -> float | None:
+    """What one holding is worth, in the currency a cap is counted in.
+
+    Flat is zero and blind is None. The old path produced `qty * px` with both
+    forced to 0.0 whenever either could not be read, so an unpriceable position
+    and an unconvertible one each cost the cluster budget nothing — the two
+    readings a brake is supposed to be built for. None reaches the budget as
+    "charge me the cap"; a missing currency is the same, because inventing a
+    rate is how a 70,000 dollar holding came to be counted as 7% of a rupee book.
+    """
+    from .data import fx_rate
+    if qty is None:
+        return None
+    qty = abs(qty)
+    if qty == 0:
+        return 0.0
+    if price is None or price <= 0:
+        return None
+    rate = fx_rate(frm, currency)
+    return None if rate is None else qty * price * rate
+
+
 class Autopilot:
     """A single supervised thread that repeatedly:
        scan watchlist -> engine verdicts -> size -> gate -> execute -> journal.
@@ -1172,12 +1200,22 @@ class Autopilot:
             cache[key] = _K.returns_from_bars(df)
         return cache[key]
 
-    def _cluster_book(self, pos_list: list | None, skip_key: str) -> list[dict]:
+    def _cluster_book(self, pos_list: list | None, skip_key: str,
+                      currency: str) -> list[dict]:
         """The open book in the shapes the cluster budget compares.
 
         `skip_key` drops the candidate itself: an entry path that sees its own
         name in the book is sizing against a position it is about to manage,
         not one that competes with it for the cluster's budget.
+
+        `currency` is what the candidate's notional and the venue's equity are
+        counted in, and every row is stated in it before it is summed. Two books
+        of this desk are in different currencies, and adding them together read
+        a 70,000 dollar holding as a 70,000 rupee position — 7% of a rupee book
+        instead of 1,900% — so one correlated cluster could be filled several
+        times over without the cap ever firing. A row that cannot be told in the
+        candidate's currency carries None, which the budget charges against the
+        cap rather than counting as free.
         """
         from .universe import resolve
         out: list[dict] = []
@@ -1189,15 +1227,17 @@ class Autopilot:
             key = inst.key if inst is not None else sym.upper()
             if key == skip_key:
                 continue
-            try:
-                qty = abs(float(p.get("qty") or 0))
-                px = float(p.get("last") or p.get("entry") or 0)
-            except (TypeError, ValueError):
-                qty, px = 0.0, 0.0
+            qty = _reading(p.get("qty"))
+            last = _reading(p.get("last"))
+            price = last if last and last > 0 else _reading(p.get("entry"))
             out.append({"symbol": key,
                         "market": inst.market if inst is not None else "",
                         "side": str(p.get("side") or "").upper(),
-                        "notional": qty * px,
+                        "notional": _notional_in(
+                            qty, price,
+                            getattr(inst, "currency", "") or _VENUE_CCY.get(
+                                str(p.get("venue") or "").upper(), ""),
+                            currency),
                         "returns": self._returns_for(key)})
         return out
 
@@ -1210,7 +1250,8 @@ class Autopilot:
                 "side": side, "notional": notional,
                 "returns": self._returns_for(inst.key)}
         return _K.cluster_budget(
-            cand, self._cluster_book(pos_list, inst.key), equity,
+            cand, self._cluster_book(pos_list, inst.key,
+                                     getattr(inst, "currency", "")), equity,
             float(_R.get_rule("max_correlation", 0.7)),
             float(_R.get_rule("max_cluster_pct", 30.0)))
 
