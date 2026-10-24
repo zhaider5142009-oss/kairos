@@ -51,7 +51,17 @@ def arima_forecast(close: pd.Series, horizon: int = 5) -> ModelForecast | None:
     y = y[-400:]
     # choose d by ADF test (AIC comparisons across differencing orders are invalid)
     try:
-        d = 0 if adfuller(y, autolag="AIC")[1] < 0.05 else 1
+        try:
+            # Ask for the named result and read the named field. `[1]` is a
+            # position in a tuple statsmodels has announced it will stop
+            # returning by default, and the number it holds decides whether the
+            # series is differenced before every AIC in the grid below is
+            # compared — so the day the default flips, that choice moves with
+            # it and nothing here has to change to be wrong.
+            pval = adfuller(y, autolag="AIC", result_object=True).pvalue
+        except TypeError:  # a statsmodels with no such option: it has only tuples
+            pval = adfuller(y, autolag="AIC")[1]
+        d = 0 if float(pval) < 0.05 else 1
     except Exception:
         d = 1
     best_aic, best_order, best_res = np.inf, (1, d, 1), None
