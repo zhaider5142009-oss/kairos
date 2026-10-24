@@ -438,9 +438,19 @@ class BinanceClient:
                       "PLACED" if status in ("FILLED", "PARTIALLY_FILLED", "NEW")
                       else "REJECTED")
         fills = (raw.get("fills") or []) if isinstance(raw, dict) else []
-        px = (sum(float(f["price"]) * float(f["qty"]) for f in fills)
-              / max(sum(float(f["qty"]) for f in fills), 1e-12)) if fills else 0.0
-        qty = float(raw.get("executedQty") or intent.quantity)
+        # What actually left the venue, never what was asked for: an order that
+        # came back with nothing executed has to say so, because a Fill sized at
+        # the request turns an empty answer into a booked trade downstream.
+        qty = float(raw.get("executedQty") or 0) or (
+            sum(float(f.get("qty") or 0) for f in fills))
+        if fills:
+            px = (sum(float(f["price"]) * float(f["qty"]) for f in fills)
+                  / max(sum(float(f["qty"]) for f in fills), 1e-12))
+        else:
+            # Spot's order response names no fills at all — only the quote value
+            # that was spent. Reading that as price 0.0 put every live Binance
+            # trade in the audit trail as a fill for free.
+            px = (float(raw.get("cummulativeQuoteQty") or 0) / qty) if qty > 0 else 0.0
         fill = Fill(client_order_id=intent.client_order_id,
                     broker_order_id=str(raw.get("orderId", "")),
                     symbol=str(raw.get("symbol") or pair).upper(),

@@ -561,3 +561,36 @@ def test_paper_reconcile_still_runs(monkeypatch, tmp_path):
     ap._reconcile({}, live=False, mt5_up=False, psx_up=False, pos_known=True)
     assert ap.st["held"] == {}
     assert ap.acted
+
+
+def test_a_spot_answer_with_no_fills_array_still_reports_what_it_paid(
+        venue, monkeypatch):
+    """Spot's order response names no `fills` at all — only the quote value that
+    was spent. Reading the missing array as the price made every live Binance
+    fill look like it was struck for free."""
+    _arm(monkeypatch, venue)
+    monkeypatch.setattr(venue, "_send", FakeSend({
+        "/api/v3/order": {"orderId": 7, "status": "FILLED", "symbol": "BTCUSDT",
+                          "executedQty": "0.5", "cummulativeQuoteQty": "52.0"}}))
+
+    fill = venue.place_order(OrderIntent(symbol="BTC", side="BUY", quantity=0.5))
+
+    assert fill is not None
+    assert fill.quantity == 0.5
+    assert fill.price == 104.0, "a live fill was journalled as free"
+
+
+def test_an_answer_with_no_executed_quantity_is_not_a_trade(venue, monkeypatch):
+    """A Fill carries what left the venue. Falling back to the quantity that was
+    asked for turns an empty answer into a booked trade."""
+    _arm(monkeypatch, venue)
+    monkeypatch.setattr(venue, "_send", FakeSend({
+        "/api/v3/order": {"orderId": 8, "status": "EXPIRED", "symbol": "BTCUSDT",
+                          "cummulativeQuoteQty": "0"}}))
+
+    fill = venue.place_order(OrderIntent(symbol="BTC", side="BUY", quantity=0.5))
+
+    assert fill is not None
+    assert fill.quantity == 0.0, "the requested size was reported as executed"
+    assert fill.price == 0.0
+    assert fill.status == "EXPIRED"

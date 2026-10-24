@@ -1264,7 +1264,17 @@ class Autopilot:
                              "venue": venue})
             else:
                 act = "LIVE-FILLED" if fill else "LIVE-REJECT"
-            if fill and not close:
+                if fill and float(fill.quantity or 0) <= 0:
+                    # The venue answered, and its answer is that nothing was
+                    # struck: a MARKET order into no liquidity comes back with
+                    # zero executed. Trusting the acknowledgement booked a close
+                    # on a position the venue still holds, or an open on a trade
+                    # that never existed.
+                    act = "LIVE-EMPTY"
+                    JOURNAL.log("AUTOPILOT_UNFILLED",
+                                {"coid": intent.client_order_id,
+                                 "symbol": inst.key, "status": fill.status})
+            if act == "LIVE-FILLED" and not close:
                 # Spot has no position object to close — the sell IS the exit — so
                 # an entry is checked against the balance instead. Same rule as
                 # MT5: the acknowledgement gets confirmed venue-side, or the fill
