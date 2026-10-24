@@ -28,6 +28,22 @@ def tmp_store(tmp_path, monkeypatch):
     return st
 
 
+@pytest.fixture
+def weekday_clock(monkeypatch):
+    """The sweep refuses a weekend day, so a test that expects a written bar must
+    not inherit whichever weekday the suite happens to run on — the suite is green
+    Monday to Friday and, before this, silently wrote nothing on a Saturday."""
+    class Clock:
+        instant = "2026-10-21 09:30:00"
+
+        @classmethod
+        def now(cls, *a, **k):
+            return _real_datetime.strptime(cls.instant, "%Y-%m-%d %H:%M:%S")
+
+    monkeypatch.setattr(D, "datetime", Clock)
+    return Clock
+
+
 # ------------------------------------------------------------------ upsert_row
 def test_an_unchanged_bar_does_not_rewrite_the_file(tmp_store):
     tmp_store.upsert_row("LUCK", "2026-10-21", 100.0, 104.0, 100.0, 104.0, 9000.0)
@@ -80,7 +96,8 @@ def _drain_sweep(timeout: float = 20.0) -> None:
     D._bar_sweep.release()
 
 
-def test_psx_snapshot_answers_before_the_sweep_is_done(tmp_store, monkeypatch):
+def test_psx_snapshot_answers_before_the_sweep_is_done(tmp_store, monkeypatch,
+                                                      weekday_clock):
     md = _Md(_scan(300))
     monkeypatch.setattr(md.tv, "scan_psx", md._scan_psx)
     t0 = time.perf_counter()
@@ -92,10 +109,11 @@ def test_psx_snapshot_answers_before_the_sweep_is_done(tmp_store, monkeypatch):
     assert tmp_store._path("S7").exists()
     bar = tmp_store.load("S7")
     assert float(bar["close"].iloc[-1]) == 107.0
-    assert str(bar["date"].iloc[-1].date()) == time.strftime("%Y-%m-%d")
+    assert str(bar["date"].iloc[-1].date()) == "2026-10-21"
 
 
-def test_a_refresh_during_a_sweep_skips_instead_of_queuing(tmp_store, monkeypatch):
+def test_a_refresh_during_a_sweep_skips_instead_of_queuing(tmp_store, monkeypatch,
+                                                           weekday_clock):
     md = _Md(_scan(50))
     monkeypatch.setattr(md.tv, "scan_psx", md._scan_psx)
     md.psx_snapshot()
@@ -116,7 +134,8 @@ def test_a_refresh_during_a_sweep_skips_instead_of_queuing(tmp_store, monkeypatc
         D._bar_sweep.release()
 
 
-def test_a_bad_row_in_the_scan_does_not_stop_the_sweep(tmp_store, monkeypatch):
+def test_a_bad_row_in_the_scan_does_not_stop_the_sweep(tmp_store, monkeypatch,
+                                                      weekday_clock):
     frame = _scan(5)
     frame.loc[2, "close"] = None
     frame.loc[3, "name"] = ""
@@ -150,7 +169,8 @@ def test_a_fresh_instance_reuses_the_cached_snapshot(tmp_store, monkeypatch):
     _drain_sweep()
 
 
-def test_store_dir_files_are_not_left_half_written_by_the_sweep(tmp_store, monkeypatch):
+def test_store_dir_files_are_not_left_half_written_by_the_sweep(tmp_store, monkeypatch,
+                                                               weekday_clock):
     md = _Md(_scan(40))
     monkeypatch.setattr(md.tv, "scan_psx", md._scan_psx)
     md.psx_snapshot()
@@ -159,18 +179,11 @@ def test_store_dir_files_are_not_left_half_written_by_the_sweep(tmp_store, monke
     assert leftovers == []
 
 
-def test_a_sweep_that_runs_past_midnight_stamps_the_day_it_read(tmp_store, monkeypatch):
-    class Clock:
-        instant = "2026-10-21 23:59:00"
-
-        @classmethod
-        def now(cls, *a, **k):
-            return _real_datetime.strptime(cls.instant, "%Y-%m-%d %H:%M:%S")
-
-    monkeypatch.setattr(D, "datetime", Clock)
+def test_a_sweep_that_runs_past_midnight_stamps_the_day_it_read(tmp_store, monkeypatch,
+                                                                weekday_clock):
     md = _Md(_scan(4))
     monkeypatch.setattr(md.tv, "scan_psx", md._scan_psx)
     md.psx_snapshot()
-    Clock.instant = "2026-10-22 00:01:00"      # the worker is slow, not the read
+    weekday_clock.instant = "2026-10-22 00:01:00"   # the worker is slow, not the read
     _drain_sweep()
     assert str(tmp_store.load("S1")["date"].iloc[-1].date()) == "2026-10-21"

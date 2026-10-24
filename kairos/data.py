@@ -101,6 +101,18 @@ def _binance():
 # ---------------------------------------------------------------------------
 # Store — CSV persistence + genuine history accumulation
 # ---------------------------------------------------------------------------
+def _same_number(a, b) -> bool:
+    """Two prints are the same when both are NaN, or equal.
+
+    The vendor spells a hole as NaN, and `nan == nan` is False, so a strict
+    comparison would call two identical holes different and write the bar.
+    """
+    a, b = float(a), float(b)
+    if math.isnan(a) or math.isnan(b):
+        return math.isnan(a) and math.isnan(b)
+    return a == b
+
+
 class Store:
     """Local OHLCV cache. Every successful fetch appends today's bar so the
     system builds real PSX history over time even from quote-only sources."""
@@ -129,6 +141,12 @@ class Store:
     def save(self, key: str, df: pd.DataFrame) -> None:
         if df is None or df.empty:
             return
+        # Nothing lands in the store unless every bar contains its own open and
+        # close. `history()` already widens on the way out, which is why an
+        # impossible bar never reached a model — but the merge paths persist the
+        # provider's rows as printed, so the next fetch put them back and the
+        # file, which is the record, went on contradicting itself.
+        df = coerce_bar_range(df)
         out = df[["date", "open", "high", "low", "close", "volume"]].copy()
         out["date"] = pd.to_datetime(out["date"]).dt.strftime("%Y-%m-%d")
         # through the atomic writer, and through a string first: the bar store
@@ -153,9 +171,20 @@ class Store:
             # latest row can match, and a match means the file already says
             # exactly this, so leave it alone.
             last = df.iloc[-1]
-            if (last["date"] == row["date"].iloc[0]
-                    and float(last["open"]) == open_ and float(last["close"]) == close
-                    and float(last["volume"]) == volume):
+            same_day = last["date"] == row["date"].iloc[0]
+            if (same_day and _same_number(last["open"], open_)
+                    and _same_number(last["close"], close)
+                    and _same_number(last["volume"], volume)):
+                return df
+            # A new date carrying the previous session's close *and* volume is
+            # that session served again, not a new one — a weekend, a public
+            # holiday, or a pre-open poll all look exactly like this. Writing it
+            # anyway invented a flat Saturday and Sunday for every symbol on the
+            # exchange, and each invented bar dilutes volatility and pulls every
+            # five-bar horizon a day forward. A real flat session prints its own
+            # volume, so it differs here and is still written.
+            if (not same_day and _same_number(last["close"], close)
+                    and _same_number(last["volume"], volume)):
                 return df
             df = pd.concat([df[df["date"] != pd.to_datetime(date)], row], ignore_index=True)
             df = df.sort_values("date").reset_index(drop=True)
@@ -174,6 +203,12 @@ _bar_sweep = threading.Semaphore(1)
 
 
 def _accumulate_bars(store: Store, df: pd.DataFrame, today: str) -> None:
+    # The whole board is the PSX exchange, and PSX does not trade at the
+    # weekend: a Saturday snapshot is Friday's session served again. The day is
+    # bound when the snapshot is taken, so a sweep that runs across midnight
+    # cannot relabel yesterday's close as a new session either.
+    if pd.Timestamp(today).weekday() >= 5:
+        return
     for _, row in df.iterrows():
         sym = str(row.get("name") or "")
         if not sym:
@@ -191,7 +226,14 @@ def _accumulate_bars(store: Store, df: pd.DataFrame, today: str) -> None:
             # Yahoo series would stay unpriceable however often the board quotes it.
             inst = resolve(sym)
             key = inst.key if inst is not None and inst.market == "PSX" else sym
-            store.upsert_row(key, today, prev, c, prev, c,
+            # The snapshot carries a close and a percentage change, never an
+            # intraday range; the previous close is the only other price in
+            # hand, so the bar's range is between those two and nothing more.
+            # The old synthesis assumed an up day (high=close, low=previous) and
+            # on a down day wrote a high below its own low — an impossible bar
+            # that only the read path's widening hid, while the file kept it.
+            hi, lo = (c, prev) if c >= prev else (prev, c)
+            store.upsert_row(key, today, prev, hi, lo, c,
                              float(row.get("volume") or 0))
         except Exception:  # noqa: BLE001 — one bad row cannot stop the sweep
             continue
@@ -812,8 +854,12 @@ class MarketData:
         close = float(q["close"])
         change = float(q.get("change") or 0.0) / 100.0
         prev = close / (1 + change) if (1 + change) != 0 else close
-        today = datetime.now().strftime("%Y-%m-%d")
-        STORE.upsert_row(instrument.key, today, prev, close, prev, close,
+        now = datetime.now()
+        if now.weekday() >= 5:      # PSX is closed; this is the last session again
+            return
+        today = now.strftime("%Y-%m-%d")
+        hi, lo = (close, prev) if close >= prev else (prev, close)
+        STORE.upsert_row(instrument.key, today, prev, hi, lo, close,
                          float(q.get("volume") or 0))
 
     # -- cross-sectional PSX snapshot ----------------------------------------

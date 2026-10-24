@@ -66,7 +66,9 @@ def test_the_board_sweep_writes_into_the_file_history_opens(tmp_path):
         "change": [1.0, 1.0, 1.0, 1.0],
         "volume": [1000.0, 2000.0, 30.0, 400.0],
     })
-    D._accumulate_bars(st, df, "2026-10-24")
+    # a trading day: the sweep refuses the weekend, which is its own test in
+    # test_bar_sessions.py, and this one is about which file the bar lands in
+    D._accumulate_bars(st, df, "2026-10-23")
 
     for key, board in (("ENGRO", "ENGROH"), ("BANK", "BOP"), ("NESP", "NESTLE")):
         bar = st.load(key)
