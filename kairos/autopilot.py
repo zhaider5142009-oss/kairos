@@ -1136,6 +1136,10 @@ class Autopilot:
         if getattr(self, "_psx_down", False):
             self._act(inst.key, "TICKET-ONLY", "JS Global portal unreachable this cycle")
             return None
+        # the broker spells some names differently from KAIROS' stable key
+        # (BANK is BOP there, NESP is NESTLE, ENGRO is ENGROH): the ticket must
+        # carry the exchange's spelling, not the key the engine thinks in
+        broker_sym = (getattr(inst, "psx_ticker", None) or inst.key).upper()
         if side == "BUY":
             book = getattr(self, "_psx_live", None) or {}
             cash = float(book.get("cash") or 0)
@@ -1152,8 +1156,11 @@ class Autopilot:
             # SELL is a short sale (blocked), a close may not exceed the
             # settled quantity net of orders already resting at the broker.
             book = getattr(self, "_psx_live", None) or {}
+            # both spellings are accepted so a book imported before the fix
+            # (keyed by the old spelling) still matches its holdings
             rows = [h for h in book.get("holdings", [])
-                    if h["symbol"] == inst.key.upper()]
+                    if str(h.get("symbol") or "").upper()
+                    in (broker_sym, inst.key.upper())]
             free = sum(h["qty"] - h["pending_sell"] for h in rows)
             if not close:
                 self._act(inst.key, "GATED", "PSX cash account cannot short")
@@ -1163,7 +1170,7 @@ class Autopilot:
                                              f"(asked {qty:.0f})")
                 return None
         try:
-            out = jsgtrade.place_now(inst.key, side, qty, price, "LIMIT",
+            out = jsgtrade.place_now(broker_sym, side, qty, price, "LIMIT",
                                      note="autopilot" + ("-close" if close else ""))
         except Exception as exc:
             JOURNAL.log("AUTOPILOT_PLACE_FAIL", {"symbol": inst.key,

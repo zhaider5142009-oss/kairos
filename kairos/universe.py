@@ -27,20 +27,29 @@ class Instrument:
 
 
 def _psx(key: str, name: str, sector: str, tags: tuple[str, ...] = (),
-         yahoo: str | None = None) -> Instrument:
+         yahoo: str | None = None, ticker: str | None = None) -> Instrument:
+    # `key` is KAIROS' stable handle (regime baskets, news attribution, saved
+    # state); `ticker` is what the exchange and the feeds actually answer to.
+    # They are not always the same — PSX renamed ENGRO to ENGROH and the board
+    # spells Bank of Punjab BOP and Nestle NESTLE. Deriving the venue symbols
+    # from the key silently pointed every fetch at a symbol that does not exist.
+    board = ticker or key
     # Yahoo carries most PSX names as "<TICKER>.KA" (probed live 2026-10-16);
     # names without Yahoo coverage fall back to local API / store accumulation
     return Instrument(
         key=key, name=name, asset_class="equity", sector=sector,
-        currency="PKR", market="PSX", tv=f"PSX:{key}", psx_ticker=key,
-        yahoo=yahoo or f"{key}.KA", tags=tags,
+        currency="PKR", market="PSX", tv=f"PSX:{board}", psx_ticker=board,
+        yahoo=yahoo or f"{board}.KA", tags=tags,
     )
 
 
-def _psx_no_yahoo(key: str, name: str, sector: str, tags: tuple[str, ...] = ()) -> Instrument:
+def _psx_no_yahoo(key: str, name: str, sector: str, tags: tuple[str, ...] = (),
+                  ticker: str | None = None) -> Instrument:
+    board = ticker or key
     return Instrument(
         key=key, name=name, asset_class="equity", sector=sector,
-        currency="PKR", market="PSX", tv=f"PSX:{key}", psx_ticker=key, tags=tags,
+        currency="PKR", market="PSX", tv=f"PSX:{board}", psx_ticker=board,
+        tags=tags,
     )
 
 
@@ -69,7 +78,8 @@ PSX_BLUE_CHIPS: list[Instrument] = [
     _psx("FCCL", "Fauji Cement", "Cement", ("cyclical",)),
     _psx("CHCC", "Cherat Cement", "Cement", ("cyclical",)),
     _psx("PIOC", "Pioneer Cement", "Cement", ("cyclical",)),
-    _psx_no_yahoo("ENGRO", "Engro Corporation", "Conglomerate", ("index-heavy",)),
+    _psx_no_yahoo("ENGRO", "Engro Holdings Ltd.", "Conglomerate",
+                  ("index-heavy",), ticker="ENGROH"),
     _psx("EFERT", "Engro Fertilizers", "Fertilizer", ("agri-proxy",)),
     _psx("FFC", "Fauji Fertilizer Co.", "Fertilizer", ("index-heavy", "agri-proxy")),
     _psx("FATIMA", "Fatima Fertilizer", "Fertilizer", ("agri-proxy",)),
@@ -81,7 +91,7 @@ PSX_BLUE_CHIPS: list[Instrument] = [
     _psx("MEBL", "Meezan Bank", "Banking", ("index-heavy", "bank", "islamic")),
     _psx("BAHL", "Bank AL Habib", "Banking", ("bank",)),
     _psx("NBP", "National Bank of Pakistan", "Banking", ("bank", "soe")),
-    _psx("BANK", "Bank of Punjab", "Banking", ("bank", "soe"), yahoo="BOP.KA"),
+    _psx("BANK", "Bank of Punjab", "Banking", ("bank", "soe"), ticker="BOP"),
     _psx("AKBL", "Askari Bank", "Banking", ("bank",)),
     _psx("SYS", "Systems Ltd.", "Technology", ("tech",)),
     _psx("TRG", "TRG Pakistan", "Technology", ("tech",)),
@@ -96,7 +106,7 @@ PSX_BLUE_CHIPS: list[Instrument] = [
     _psx("NML", "Nishat Mills", "Textile", ("cyclical", "export")),
     _psx("ILP", "Interloop Ltd.", "Textile", ("export",)),
     _psx("COLG", "Colgate-Palmolive Pakistan", "Consumer", ()),
-    _psx("NESP", "Nestle Pakistan", "Consumer", (), yahoo="NESTLE.KA"),
+    _psx("NESP", "Nestle Pakistan", "Consumer", (), ticker="NESTLE"),
     _psx("MFL", "Millat Tractors", "Auto", ("agri-proxy",)),
 ]
 
@@ -205,8 +215,10 @@ _SEED_KEYS = frozenset(i.key.upper() for i in ALL)
 def resolve(symbol: str) -> Instrument | None:
     """Resolve any symbol form (KAIROS key, Yahoo, TV, Binance pair, or PSX ticker)."""
     s = symbol.strip().upper()
+    # the full TV form ("PSX:OGDC") is tried as well as the bare ticker: the
+    # docstring promised it, and every caller that held a `tv` symbol missed
     return (_BY_KEY.get(s) or _BY_YAHOO.get(s) or _BY_BINANCE.get(s)
-            or _BY_TV.get(f"PSX:{s}"))
+            or _BY_TV.get(s) or _BY_TV.get(f"PSX:{s}"))
 
 
 _MISSING = ("", "nan", "none", "null", "n/a", "-", "?")

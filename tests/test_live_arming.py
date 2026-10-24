@@ -53,8 +53,9 @@ def _book(cash=6500.52, holdings=None):
 
 
 class _Inst:
-    def __init__(self, key):
+    def __init__(self, key, psx_ticker=None):
         self.key = key
+        self.psx_ticker = psx_ticker
 
 
 def _never_places(monkeypatch):
@@ -505,6 +506,39 @@ def test_sellable_close_does_reach_the_bridge(ap, monkeypatch):
     out = ap._psx_auto_place(_Inst("PPL"), "SELL", 15, 219.0, _intent(), True)
     assert out == ("PLACED", "order 1 at 99999")
     assert sent[0][1] == "SELL"
+
+
+def _capture(monkeypatch):
+    sent = []
+    monkeypatch.setattr(jsgtrade, "enabled", lambda: True)
+    monkeypatch.setattr(jsgtrade, "place_now", lambda *a, **kw:
+                        sent.append(a) or {"ok": True, "order_no": 2,
+                                           "account": "99999"})
+    return sent
+
+
+def test_a_respelled_name_reaches_the_broker_as_the_exchange_ticker(ap, monkeypatch):
+    """KAIROS calls it BANK; the broker's script is BOP."""
+    from kairos.universe import resolve
+
+    sent = _capture(monkeypatch)
+    ap._psx_live = _book(cash=100000.0)
+    out = ap._psx_auto_place(resolve("BANK"), "BUY", 5, 27.3, _intent(), False)
+    assert out[0] == "PLACED"
+    assert sent[0][0] == "BOP"
+
+
+def test_a_holding_under_the_exchange_ticker_is_sellable(ap, monkeypatch):
+    """The live book carries the broker's spelling, not the engine's key."""
+    from kairos.universe import resolve
+
+    sent = _capture(monkeypatch)
+    ap._psx_live = _book(holdings=[
+        {"symbol": "BOP", "qty": 20.0, "avg": 25.0, "mtm": 27.3,
+         "value": 546.0, "pending_sell": 0.0, "account": "99999"}])
+    out = ap._psx_auto_place(resolve("BANK"), "SELL", 15, 27.3, _intent(), True)
+    assert out[0] == "PLACED"
+    assert sent[0][0] == "BOP"
 
 
 def test_ticket_only_when_the_portal_is_unreachable(ap, monkeypatch):

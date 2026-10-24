@@ -185,7 +185,13 @@ def _accumulate_bars(store: Store, df: pd.DataFrame, today: str) -> None:
             change = float(row.get("change") or 0.0) / 100.0
             c = float(close)
             prev = c / (1 + change) if (1 + change) != 0 else c
-            store.upsert_row(sym, today, prev, c, prev, c,
+            # The board's symbol is not always the registry key (ENGROH/ENGRO,
+            # BOP/BANK, NESTLE/NESP). Writing the board spelling would put the
+            # bar in a file `history(instrument)` never opens, so a name with no
+            # Yahoo series would stay unpriceable however often the board quotes it.
+            inst = resolve(sym)
+            key = inst.key if inst is not None and inst.market == "PSX" else sym
+            store.upsert_row(key, today, prev, c, prev, c,
                              float(row.get("volume") or 0))
         except Exception:  # noqa: BLE001 — one bad row cannot stop the sweep
             continue
