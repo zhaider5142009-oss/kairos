@@ -15,6 +15,8 @@ handler owes.
 because a provider *answered* is not a fetch that failed because the wire was
 dead, and the difference is the status code. A backoff built to pause half an
 hour on a 429 cannot act on a message that only says "GET failed".
+`status_of()` is how a handler that caught a broad exception reads that code
+without assuming which exception class it caught.
 """
 
 from __future__ import annotations
@@ -50,6 +52,27 @@ def close_error(exc: BaseException) -> None:
         exc.close()
     except Exception:  # noqa: BLE001 — the peer may have closed it already; that is not a new failure
         pass
+
+
+def status_of(exc: BaseException) -> int:
+    """The status a failed request carries, or 0 when no provider answered with one.
+
+    The code is the only part of a failed fetch that says what to do next — 401
+    rotate a key, 402 fund the account, 429 wait, 500 retry — and a handler that
+    keeps only `str(exc)` throws it away. A message cannot stand in for it: the
+    digits in a provider's prose ("you requested 4296 tokens") are
+    indistinguishable from a status code by substring, so acting on them means
+    obeying a number that never described the request.
+
+    0 is not a status. It is the answer to "did anything answer?", which is a
+    different question from any code and must stay distinguishable from one.
+    """
+    if isinstance(exc, (urllib.error.HTTPError, HttpStatus)):
+        try:
+            return int(exc.code)
+        except (TypeError, ValueError):  # a transport that printed no usable code
+            return 0
+    return 0
 
 
 def retryable(exc: BaseException) -> bool:

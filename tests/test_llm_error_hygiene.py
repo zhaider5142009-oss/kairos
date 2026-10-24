@@ -6,7 +6,8 @@ parsed by the council, so three things must hold about it:
 1. A provider names its own account inside HTTP error bodies — a 429 from
    Moonshot carries the organisation id and the access-key id. Those strings
    must not leave the process, and redacting them must not cost the caller the
-   status code, because _FATAL_HINTS is what puts a dead provider into cooldown.
+   status code or the reason, because `FATAL_CODES` and the word hints together
+   are what put a dead provider into cooldown.
 2. A model hosted behind OpenRouter can end its answer with its own stop-token
    markup; parsed as part of the answer it rides into the verdict.
 3. A reasoning model that spends max_tokens on hidden thinking returns an empty
@@ -61,8 +62,8 @@ def test_status_code_and_reason_survive_redaction():
     """Redaction must not cost the caller the diagnosis or the cooldown."""
     out = _safe_error(RAW_429)
     assert "429" in out and "insufficient balance" in out
-    assert _fatal(out) is True
-    assert _fatal(_safe_error("HTTP 401 invalid authentication")) is True
+    assert _fatal(out, 429) is True
+    assert _fatal(_safe_error("HTTP 401 invalid authentication"), 401) is True
     assert _fatal(_safe_error("timed out")) is False
 
 
@@ -143,7 +144,8 @@ def test_moonshot_error_response_reaches_the_caller_clean(monkeypatch):
                                 "kimi-k2.6", 8, 0.3)
     assert res.ok is False
     assert ORG_ID not in res.error
-    assert "429" in res.error and _fatal(res.error) is True
+    assert res.status == 429
+    assert "429" in res.error and _fatal(res.error, res.status) is True
 
 
 def test_openrouter_blank_completion_is_not_success(monkeypatch):

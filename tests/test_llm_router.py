@@ -77,7 +77,8 @@ def test_every_leg_reason_is_returned(router):
 
 
 def test_fatal_error_cools_the_provider_down(router):
-    router._or_response = LLMResponse(False, "openrouter", "d", error="429 insufficient balance")
+    router._or_response = LLMResponse(False, "openrouter", "d",
+                                      error="HTTP 429", status=429)
     assert router.chat("q", model="a/b", use_cache=False).ok is False
     before = len(router._calls)
     res = router.chat("q2", model="a/b", use_cache=False)

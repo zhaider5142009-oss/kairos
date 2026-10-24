@@ -222,7 +222,7 @@ under "no coverage" rather than being credited or demoted on evidence it never s
 - Logs rotate; state persists across restarts; RAM, startup and per-cycle cost were profiled
   on a 2015-era i5 / 8 GB machine, which is a deliberate constraint — if it runs there, the
   infrastructure argument is cheap.
-- 800 regression tests, including the money path and the integrity cases below.
+- 827 regression tests, including the money path and the integrity cases below.
 
 ## 7. What the numbers say, and what they do not
 
@@ -235,13 +235,13 @@ and 9 instruments reported as losses.
 important finding in the project: the edge, if any, is in the global and commodity books,
 and any PSX strategy must be sized against costs before it is sized against conviction.
 
-The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 438
+The live paper book is essentially flat (realized P&L −Rs 13.05 on Rs 1,000,000 over 443
 autopilot cycles) with two fills. That is a system working as designed on a low-conviction
 market, not a strategy proving itself.
 
 ## 8. The integrity bugs, documented because they are the credibility
 
-An investor kit is only worth its willingness to publish its own audit. Seventy-six defects
+An investor kit is only worth its willingness to publish its own audit. Seventy-seven defects
 are tabled below, each with what it would have cost had it shipped. Eight of them arrived with
 this release's cross-asset axis and the audit of the silence it made possible, and belong to
 the machinery that produces the numbers rather than to the code that trades on them: a skill
@@ -266,13 +266,15 @@ repair or the guardrail we built for one — which is why the last ones were fou
 Thirty-six more were on the money path, the trail that records it, a limit that
 read as a control and was not wired to one, or a forecast whose stationarity answer was taken
 from a position in another project's return rather than by its name; a thirty-seventh was the
-record file itself, which was allowed to hold a number that arithmetic cannot use; fourteen were a provider or a
+record file itself, which was allowed to hold a number that arithmetic cannot use; fifteen were a provider or a
 bridge answering in a way the desk then reported wrongly — as health, or as an absence — or
 answering in a way the desk reported honestly and still leaving something lying behind: a
 refusal whose connection nobody owned, a rate-limit backoff wired to an exception its own
-transport never raised, and a broker login that was replaced in four places and closed in
+transport never raised, a broker login that was replaced in four places and closed in
 none — the last of those twice, because the reset was not checked against the login it was
-clearing;
+clearing — and a provider declared dead by matching digits inside the sentence that
+explained it, on the strength of an error string three of its four legs had already stripped
+of that sentence;
 three were credentials — or the
 guard that was supposed to catch them — sitting in tracked files. The last five sat on the
 surface itself: a flag whose type let it read back as its own opposite once it had been through
@@ -364,6 +366,7 @@ application's startup path at all.
 | The backoff built for a rate limit was wired to an error its own transport never raises | The tone service is written to see a 429, pause that provider for half an hour and count the refusal — and this machine was measured, the day before this release, being answered 429 by that provider on both of its endpoints, which is why the pause exists at all. Its handler catches the standard library's HTTP error; the transport it is called through converted every HTTP answer, including that 429, into a plain connection failure whose message is "GET failed", so the status was gone before the handler saw it. The branch could not run: the penalty box stayed open, the refusal count stayed zero, and the desk carried a news feed it re-asked on every cycle for as long as the process lived, hammering a host that had already said no. The suite proved the backoff works — it had a test that asserted the pause and the count — because that test handed the service a fake transport raising the exact type the engine never produces. This is the trap the two rows above it name, in the test rather than the code: a green assertion about a shape the program cannot make | The transport now raises `HttpStatus`, which subclasses `ConnectionError` so every existing catcher keeps catching it and carries the code the provider actually answered with, and the tone handler reads that code. The retry policy is taken from the same answer instead of guessed: 408, 429 and anything 5xx keep their retries, because those codes mean come back, and a 404 does not, because that one does not. The proof goes through the transport the engine really uses — `GdeltTone()` with no injected fake, the production reader, a 429 — which is the test this release can write and the previous one could not; a companion refuses a 404 the right to pause, because a missing page is not a rate limit and mistaking the two would silence a feed that was fine — 2 new tests, and with the replaced reader put back twelve of the twenty in this pair fail, which is what makes them a description of the bug rather than of the fix |
 | A broker login the desk replaced was never closed, and four paths replaced it | The JS Global bridge keeps one warm session to the web terminal for ten minutes, because this account locks out on repeated logins and the bridge is built to ask exactly once per sync. It puts a new session where the old one was when that clock runs out, drops it when the terminal answers 401 in the middle of a read, drops it again when an operator forces a fresh sync, and abandons one entirely whenever a login stops partway — a wrong password, a portal that will not hand back its account list, a form whose boxes the page no longer has. None of those four ever called `close()`, so each retired login left its pooled connection to the same collector the row above it was written about, on a live broker session rather than a public data feed, in the one process on this machine that is never restarted. What makes it more than a descriptor is the retry loop a human drives: an operator correcting a password is billed a fresh connection every attempt and sees none of them, and the portal may still count a session the code has already given up on. The first version of this fix also shipped wrong, and quietly, which is the more useful half of the row: writing the retire as `dead, _session = _session, None` hands `close()` the `(timestamp, session)` pair instead of the session inside it, the resulting `AttributeError` fell into a broad handler meant for sockets the peer had already taken down, and a fix that did nothing was indistinguishable from a fix that succeeded — nothing on the client side reports a close that never happened | The cache is now unpicked in one function and nowhere else, so the shape that hid the bug cannot be written at a call site, and a scan of the module refuses both that shape and any future writer of the cache that does not retire through it. The two claims the safety of this rests on are measured against a portal this suite starts on loopback, over the real HTTP stack, because neither was known before testing: `close()` really does take the connection down as counted on the *server* side — which is the only side that could see the fix doing nothing — and it does not disturb a request another thread has already checked out, so retiring a session under a running cycle cannot interrupt an order that has been sent or make the engine place it twice; the same test shows what the library actually does with a retired session asked again, which is to reconnect rather than fail, so the cache must not keep it. A refusal now retires only the session it was refused with, and a login that stops partway puts its own socket down before raising the reason it stopped — 14 new tests, six of which fail against the module this replaced, and two of which fail against the first version of this one |
 | The reset that a refused session triggers cleared the cache whatever the cache held | Two threads, one account: the desk reads the real book while the engine reads the risk posture, and both reach the same cached login. When the terminal refuses one of them with a 401, that thread cleared the cache before asking for a new session — without looking at what the cache held by then. If the other thread had already logged in during that request, the fresh, valid session was discarded on the strength of an answer about an old one, and the next caller had to log in again. The cost is not a socket: it is a third login attempt where one was needed, against the broker account whose lockout risk is the reason this module refuses to retry anything at all, and the failure is invisible in the ordinary case because a session that is simply expired produces exactly the same code path and *should* clear. Every occurrence was a race, so every occurrence looked like bad luck about the portal | The retirement is now checked against the login it would discard: a refused session puts its own sockets down and clears the cache only while the cache still holds that session, and leaves a login that superseded it untouched. Two tests drive the interleaving on purpose rather than describing it, one for each side of the question, and one of the pair fails against the module this replaced |
+| A provider's health was decided by matching digits in its error message, and three of its four legs had thrown that message away | `str(urllib.error.HTTPError)` is only "HTTP Error 400: Bad Request" — the sentence that explains a refusal rides in the body, and only the Kimi leg read it. So DeepSeek's "Insufficient Balance", Gemini's "API key not valid" and OpenRouter's actual complaint reached the desk as a bare status line nobody could act on, and the rule that decides whether a provider is dead had nothing to work from but substring matching on digits. That rule matched "429" inside "you requested 4296 tokens": a healthy provider was cooled for thirty minutes for being asked for too many tokens, and a council seat silently cooled for half an hour is a missing vote nobody notices, on the machinery that produces the figures an investor reads. The key-rotation check grepped the same kind of string for "401" and "403", so the day a body arrived it would have retired a working key for exactly the same reason | One builder now owns every leg's failure: it reads the body before it puts the socket down, lifts the provider's sentence out of the JSON envelope it arrives in so the reason is what survives the 90-character budget, keeps the redaction over both, and carries the status as a number on the response. `FATAL_CODES` decides from that number; the word list holds words only, and a test fails if a digit string is ever added back to it; the key-rotation check reads the code — 26 new tests, 22 of which fail against the module this replaced, the token-count false positive among them on the leg that was already reading bodies and on the three that would have inherited it |
 
 Nothing moved money. The journal now says so itself: rebuilt from `data/audit_journal.jsonl`,
 the track record publishes the count of lines carrying the test signature and the count of
@@ -404,7 +407,7 @@ be mis-sized because of it.
 git clone https://github.com/zhaider5142009-oss/kairos && cd kairos
 cp config.example.yaml config.yaml      # add your own keys; config.yaml is git-ignored
 pip install -r requirements.txt
-python -m pytest tests -q                    # 800 tests
+python -m pytest tests -q                    # 827 tests
 python -m kairos.cli backtest GOLD WTI HBL   # walk-forward sweep, costs modelled
 python -m kairos.cli health                  # subsystem health, dead council seats
 python -m kairos.cli feedback                # realized track record, live from the journal

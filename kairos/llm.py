@@ -30,14 +30,21 @@ from pathlib import Path
 from typing import Any
 
 from .config import CFG
-from .netio import close_error
+from .netio import close_error, status_of
 
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) KAIROS/2.0"
 KIMI_PREFIXES = ("kimi:", "moonshot:")
 PROVIDER_COOLDOWN_S = 1800.0
-# errors that will not fix themselves between two cycles
-_FATAL_HINTS = ("401", "402", "403", "429", "invalid authentication",
-                "insufficient balance", "suspended", "no api_key", "no keys")
+# Statuses that will not fix themselves between two cycles: a key that is not
+# accepted, an account with no credit, a rate limit that costs 30 minutes anyway.
+FATAL_CODES = frozenset({401, 402, 403, 429})
+# Words that mean the same thing when the status does not say it: a suspended
+# key or an account with no credit will not recover between cycles whatever
+# code it arrives on, so the sentence stays evidence even without a code. Deliberately no
+# bare digits here: "HTTP 401" is a status, "you requested 4019 tokens" is
+# prose, and a substring rule cannot tell them apart.
+_FATAL_HINTS = ("invalid authentication", "insufficient balance", "suspended",
+                "no api_key", "no keys")
 
 # A provider echoes its own account identifiers into the HTTP error body — a 429
 # from Moonshot names the organisation and the access-key id. That string is
@@ -84,6 +91,61 @@ def _answered(provider: str, model: str, text: str,
     return LLMResponse(True, provider, model, body, latency_s=latency_s)
 
 
+def _reason(detail: str) -> str:
+    """The provider's own sentence out of a JSON error body, not the whole blob.
+
+    Every leg here speaks the OpenAI shape, `{"error": {"message": …}}`. Carried
+    as JSON the sentence is the least readable part of the print, and the router
+    shows each leg's reason in 90 characters, so an operator would read
+    `{"error": {"message": "This model's maximum cont…` and never reach the part
+    that tells them what to do. Anything that is not that shape is kept verbatim:
+    a provider that answers with plain text should not lose it to a parser.
+    """
+    try:
+        parsed = json.loads(detail)
+    except Exception:  # noqa: BLE001 — a body that is not JSON is still the reason
+        return detail
+    if isinstance(parsed, dict):
+        err = parsed.get("error")
+        msg = err.get("message") if isinstance(err, dict) else None
+        if isinstance(msg, str) and msg.strip():
+            return msg.strip()
+    return detail
+
+
+def _failed(provider: str, model: str, exc: BaseException,
+            t0: float) -> LLMResponse:
+    """Turn a leg's exception into a response carrying the provider's answer.
+
+    `str(urllib.error.HTTPError)` is only "HTTP Error 400: Bad Request": the
+    sentence that explains the failure lives in the body, and the body is the
+    exception's own file handle, so it has to be read here — before
+    `close_error()` puts the socket down — or the operator is left with a status
+    line they cannot act on and the cooldown has only digits to reason about.
+
+    The code is kept as a number, not folded into the text, because a number is
+    what `FATAL_CODES` can decide from. Redaction still runs over the body: a
+    Moonshot 429 prints its own organisation and access-key ids into it.
+    """
+    code = status_of(exc)
+    detail = ""
+    if isinstance(exc, urllib.error.HTTPError):
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")[:400]
+        except Exception:  # noqa: BLE001 — an unreadable body must not lose the status
+            pass
+    close_error(exc)
+    if code:
+        err = _safe_error(f"HTTP {code} {_reason(detail)}".strip())
+    else:
+        # A leg also fails on a payload it cannot read, and the bare exception
+        # message for that is a quoted key — `error: 'choices'` on the desk tells
+        # nobody that a response shape changed. The type names it.
+        err = _safe_error(f"{type(exc).__name__}: {exc}")
+    return LLMResponse(False, provider, model, error=err, status=code,
+                       latency_s=time.time() - t0)
+
+
 @dataclass
 class LLMResponse:
     ok: bool
@@ -93,6 +155,8 @@ class LLMResponse:
     error: str = ""
     latency_s: float = 0.0
     cached: bool = False
+    # 0 = nothing answered with a status; not the same fact as any code
+    status: int = 0
 
 
 class LLMRouter:
@@ -165,11 +229,12 @@ class LLMRouter:
             text = payload["choices"][0]["message"]["content"] or ""
             return _answered("openrouter", model, text, time.time() - t0)
         except Exception as exc:
-            close_error(exc)
-            if "401" in str(exc) or "403" in str(exc):
+            # A key that is refused must be taken out of the rotation on the
+            # code, not on the digits in whatever the provider printed: a 400
+            # about token counts would otherwise retire a working key.
+            if status_of(exc) in (401, 403):
                 self._or_key_health[key] = 0.0
-            return LLMResponse(False, "openrouter", model,
-                               error=_safe_error(str(exc)), latency_s=time.time() - t0)
+            return _failed("openrouter", model, exc, t0)
 
     def _call_deepseek(self, messages: list[dict], model: str,
                        max_tokens: int, temperature: float) -> LLMResponse:
@@ -189,8 +254,7 @@ class LLMRouter:
                              payload["choices"][0]["message"]["content"],
                              time.time() - t0)
         except Exception as exc:
-            close_error(exc)
-            return LLMResponse(False, "deepseek", model, error=_safe_error(str(exc)))
+            return _failed("deepseek", model, exc, t0)
 
     def _call_moonshot(self, messages: list[dict], model: str,
                        max_tokens: int, temperature: float) -> LLMResponse:
@@ -224,20 +288,8 @@ class LLMRouter:
             # reasoning models can answer with an empty content and the text
             # in reasoning_content; never report a blank success
             return _answered("moonshot", m, msg.get("content"), time.time() - t0)
-        except urllib.error.HTTPError as exc:
-            detail = ""
-            try:
-                detail = exc.read().decode("utf-8", errors="replace")[:400]
-            except Exception:
-                pass
-            close_error(exc)
-            return LLMResponse(False, "moonshot", m,
-                               error=_safe_error(f"HTTP {exc.code} {detail}"),
-                               latency_s=time.time() - t0)
         except Exception as exc:
-            close_error(exc)
-            return LLMResponse(False, "moonshot", m, error=_safe_error(str(exc)),
-                               latency_s=time.time() - t0)
+            return _failed("moonshot", m, exc, t0)
 
     def _call_gemini(self, prompt: str, model: str,
                      max_tokens: int, temperature: float) -> LLMResponse:
@@ -258,8 +310,7 @@ class LLMRouter:
             return _answered("gemini", model, parts[0].get("text") if parts else None,
                              time.time() - t0)
         except Exception as exc:
-            close_error(exc)
-            return LLMResponse(False, "gemini", model, error=_safe_error(str(exc)))
+            return _failed("gemini", model, exc, t0)
 
     # ------------------------------------------------------------------ chat
     def _legs(self) -> list[tuple[str, Any]]:
@@ -319,7 +370,7 @@ class LLMRouter:
             # every leg's reason, in order — the last provider's balance error
             # must not hide the primary provider's actual failure
             errs.append(f"{name}: {resp.error[:90]}")
-            if _fatal(resp.error):
+            if _fatal(resp.error, resp.status):
                 # a dead key or an empty balance will not recover between
                 # cycles — stop paying 0.5s per call for a guaranteed 401/429
                 self._cooldown_until[name] = time.time() + PROVIDER_COOLDOWN_S
@@ -394,7 +445,17 @@ class LLMRouter:
         return out
 
 
-def _fatal(error: str) -> bool:
+def _fatal(error: str, status: int = 0) -> bool:
+    """Will this provider answer the same way on the next cycle?
+
+    The status decides when the provider sent one — it is the only part of the
+    reply that names the failure. Words are the fallback for a leg that has no
+    code to offer, and they are read as words: a hint list of bare digits would
+    cool a healthy provider for half an hour because its 400 body happened to
+    print "4296 tokens".
+    """
+    if status in FATAL_CODES:
+        return True
     e = (error or "").lower()
     return any(h in e for h in _FATAL_HINTS)
 
