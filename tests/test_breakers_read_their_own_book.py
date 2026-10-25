@@ -36,14 +36,16 @@ USD_POSITION = {"symbol": "TESTX", "side": "BUY", "qty": 70.0,
                 "ticket": 99999}                    # 70,000 USD = 70% of MT5
 
 
-def _limits(monkeypatch, cap: float = 60.0, brake: float = 0.02):
+def _limits(monkeypatch, cap: float = 60.0, brake: float = 0.02,
+            dd: float = 100.0):
     """One risk instruction per test, so a figure in config.yaml cannot decide
-    whether a guard fired. The drawdown guard is parked far out: these tests ask
-    which book a ratio was measured on, not what the book did last week."""
+    whether a guard fired. The drawdown guard is parked far out for the exposure
+    tests: those ask which book a ratio was measured on, not what the book did
+    last week. The drawdown tests below bring it in to the shipped 8%."""
     from kairos import rules as R
     monkeypatch.setattr(R, "rules", lambda: {
         **R.DEFAULT_RULES, "max_total_exposure_pct": cap,
-        "max_equity_drawdown_pct": 100.0})
+        "max_equity_drawdown_pct": dd})
     monkeypatch.setattr(R, "daily_loss_fraction", lambda *a: (brake, "test brake"))
 
 
@@ -248,6 +250,113 @@ def test_a_single_book_is_measured_exactly_as_it_always_was(monkeypatch):
     # named; an untagged row must not read as a holding on a stranger's account
     assert not any("never" in b for b in posture["blockers"]), \
         str(posture["blockers"])
+
+
+# ---------------------------------------------------------------- drawdown
+def test_a_dark_venue_is_not_a_drawdown_of_the_book_still_answering(monkeypatch):
+    """The peak ratchets, so a false one never clears.
+
+    The old guard compared the snapshot to one stored scalar. With a terminal and
+    a portal both up that scalar was 1,100,000 of two currencies; when the
+    terminal dropped out the snapshot became the portal's 1,000,000, which reads
+    as a 9.1% drawdown on a cycle where nothing was lost — and because a peak is
+    only raised, never lowered, every entry stays refused until the terminal
+    returns. A single venue still answering is measured against its own peak.
+    """
+    _limits(monkeypatch, dd=8.0)
+    ap, acct, pos = _two_books()
+    ap.st["mode"] = "live"
+    ap.st["equity_peak"] = MT5_EQ + PSX_EQ      # the blend the old guard stored
+    ap._venue_accts = {"MT5": ap._venue_accts["MT5"]}
+    acct = ap._merge_account(ap._venue_accts)
+    posture = ap._risk_posture(acct, ap._venue_positions(True, None))
+
+    assert posture["dd_from_peak_pct"] == 0.0
+    assert not any("drawdown" in b for b in posture["blockers"]), \
+        str(posture["blockers"])
+    # and the blended scalar was not inherited: a live cluster's old peak may
+    # have counted a venue that is not in this snapshot
+    assert ap.st["equity_peak_by_book"] == {"MT5|": MT5_EQ}
+
+
+def test_a_dollar_book_halving_is_not_a_four_percent_day(monkeypatch):
+    """The fail-open direction, which is the one that costs money.
+
+    A terminal account going from 100,000 USD to 50,000 is a 50% drawdown on the
+    book that took it. Summed against a million-rupee portal book the snapshot
+    moved from 1,100,000 to 1,050,000, a 4.5% "drawdown" under an 8% guard — so
+    the guard that exists to de-risk after a trough reported nothing while the
+    dollar book had halved.
+    """
+    _limits(monkeypatch, dd=8.0)
+    book = _book(cash=PSX_EQ, holdings=[])
+    ap, acct, pos = _two_books(psx_book=book)
+    ap.st["mode"] = "live"
+    ap._risk_posture(acct, pos)                 # each book sets its own peak
+    assert ap.st["equity_peak_by_book"]["MT5|"] == MT5_EQ
+
+    ap._venue_accts = {"MT5": {**ap._venue_accts["MT5"], "equity": MT5_EQ / 2}}
+    acct = ap._merge_account(ap._venue_accts)
+    posture = ap._risk_posture(acct, [])
+
+    assert posture["dd_from_peak_pct"] == 50.0
+    assert any("MT5" in b and "drawdown" in b for b in posture["blockers"]), \
+        str(posture["blockers"])
+    assert posture["dd_from_peak_book"] == "MT5"
+    assert posture["block_entries"] is True
+
+
+def test_a_book_restated_in_another_currency_starts_a_fresh_peak(monkeypatch):
+    """A peak recorded in rupees is not a high-water mark for a dollar book.
+
+    The venue key carries the currency so that a portal restated from PKR to USD
+    does not read its own 100,000 as 90% below a million it never held.
+    """
+    _limits(monkeypatch, dd=8.0)
+    ap, acct, pos = _two_books()
+    ap.st["mode"] = "live"
+    ap._risk_posture(acct, pos)
+    # two books have no single honest scalar between them, so none is invented
+    assert ap.st["equity_peak"] == 0.0
+
+    ap._venue_accts = {"JS_GLOBAL": {"venue": "JS_GLOBAL", "equity": 100_000.0,
+                                     "day_pnl": 0.0, "currency": "USD",
+                                     "open_positions": 0}}
+    posture = ap._risk_posture(ap._merge_account(ap._venue_accts), [])
+
+    assert posture["dd_from_peak_pct"] == 0.0
+    assert set(ap.st["equity_peak_by_book"]) == {
+        "MT5|", "JS_GLOBAL|PKR", "JS_GLOBAL|USD"}
+    # back to one book, and the file's scalar follows that book rather than
+    # staying frozen at the value it held before the split
+    assert ap.st["equity_peak"] == 100_000.0
+
+
+def test_the_paper_peak_written_before_the_split_is_still_a_peak(monkeypatch):
+    """The migration must not quietly disarm a guard that is actually active.
+
+    A paper cycle always measured one book, so the scalar in the state file was
+    that book's own equity and is adopted rather than discarded — otherwise the
+    first restart after this change would reset an 8% drawdown to zero and open
+    the entries the guard was holding shut.
+    """
+    _limits(monkeypatch, dd=8.0)
+    ap = AP.Autopilot()
+    ap.st = ap._defaults()
+    ap.st["equity_peak"] = 1_000_000.0
+    posture = ap._risk_posture({"venue": "PAPER", "equity": 900_000.0,
+                                "currency": "PKR", "day_pnl": 0.0}, [])
+
+    assert posture["dd_from_peak_pct"] == 10.0
+    assert any("PAPER" in b and "drawdown" in b for b in posture["blockers"]), \
+        str(posture["blockers"])
+    assert ap.st["equity_peak_by_book"] == {"PAPER|PKR": 1_000_000.0}
+    # the pre-split scalar keeps tracking the one book it was always about, so a
+    # reader who opens the file does not find a ratchet frozen at yesterday's
+    # value and mistake it for the live one
+    ap._risk_posture({"venue": "PAPER", "equity": 1_100_000.0,
+                      "currency": "PKR", "day_pnl": 0.0}, [])
+    assert ap.st["equity_peak"] == 1_100_000.0
 
 
 def test_the_terminal_names_its_rows_because_the_bridge_never_did(monkeypatch):

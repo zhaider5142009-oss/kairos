@@ -243,6 +243,7 @@ class Autopilot:
                 "state_saved": None, "state_error": None,
                 "signals": [], "actions": [], "held": {}, "consec_losses": 0,
                 "equity_peak": 0.0, "peak_since": None,
+                "equity_peak_by_book": {},
                 "last_rotation": None, "rotated": [], "psx_day_start": None,
                 "macro": None, "news_desk": None}
 
@@ -1093,6 +1094,30 @@ class Autopilot:
             out.extend(poss)
         return out
 
+    def _book_equities(self, acct: dict | None) -> list[tuple[str, str, float]]:
+        """Each readable book as (peak key, label, equity in its own money).
+
+        The key carries the book's currency: a book restated in another money is
+        a different book, and a peak recorded in the old one is not a high-water
+        mark it ever held. One snapshot with no venue parts (paper, or a single
+        live terminal) is the whole account, so it keeps one key and one peak.
+        """
+        if not self._venue_accts:
+            eq = _figure((acct or {}).get("equity"))
+            if eq <= 0:
+                return []
+            venue = str((acct or {}).get("venue") or "PAPER").upper()
+            ccy = str((acct or {}).get("currency") or "").upper()
+            return [(f"{venue}|{ccy}", venue, eq)]
+        out: list[tuple[str, str, float]] = []
+        for venue, part in self._venue_accts.items():
+            veq = _figure(part.get("equity"))
+            if veq <= 0:
+                continue
+            ccy = str(part.get("currency") or "").upper()
+            out.append((f"{venue}|{ccy}", venue, veq))
+        return out
+
     def _risk_posture(self, acct: dict | None,
                       pos_list: list | None) -> dict[str, Any]:
         """Circuit breakers computed from fresh venue data every cycle."""
@@ -1209,17 +1234,41 @@ class Autopilot:
         # cross-day equity drawdown guard (merged from JARVIS v1
         # profit_engine.DrawdownGuard): persistent peak tracker, de-risk after
         # a multi-day trough even when each individual day looked fine.
-        peak = _figure(self.st.get("equity_peak"))
-        dd_pct = 0.0
-        if eq > 0:
-            if eq > peak:
-                self.st["equity_peak"] = round(eq, 2)
+        #
+        # The peak is kept per book, in that book's own money. `eq` above is the
+        # sum of the venues, so it adds MT5 dollars to JS Global rupees: a venue
+        # that stops answering drops the total by a whole book and reads as a
+        # drawdown no account took — and because a peak only ratchets up, the
+        # guard would then refuse every entry until the dead venue returned. The
+        # cross moving between the two currencies moves the sum the same way.
+        # Each book is measured against the peak it set itself.
+        books = self._book_equities(acct)
+        peaks = self.st.setdefault("equity_peak_by_book", {})
+        if not peaks and self.st.get("mode") != "live" and len(books) == 1:
+            # The state written before the split kept one scalar, and a paper
+            # cycle's scalar was always this single book's own equity, so it is
+            # adoptable. A live cluster's old peak may have been the blend this
+            # fix exists to stop comparing across, and is not inherited.
+            peaks[books[0][0]] = round(_figure(self.st.get("equity_peak")), 2)
+        dd_pct, dd_book, dd_peak = 0.0, "", 0.0
+        for key, label, veq in books:
+            prev = _figure(peaks.get(key))
+            if veq > prev:
+                peaks[key] = round(veq, 2)
                 self.st["peak_since"] = _now()
-            elif peak > 0:
-                dd_pct = (1 - eq / peak) * 100
-                if dd_pct > float(_R.get_rule("max_equity_drawdown_pct", 8.0)):
-                    blockers.append(f"equity {dd_pct:.1f}% under peak "
-                                    f"{peak:,.0f} — drawdown guard active")
+            elif prev > 0:
+                pct = (1 - veq / prev) * 100
+                if pct > dd_pct:
+                    dd_pct, dd_book, dd_peak = pct, label, prev
+        if len(books) == 1:
+            # The pre-split scalar stays the truth it always was — this one
+            # book's own peak — rather than freezing at its last value, where a
+            # reader coming back to the file would take it for the live ratchet.
+            # With more than one book there is no honest scalar to write.
+            self.st["equity_peak"] = round(peaks[books[0][0]], 2)
+        if dd_pct > float(_R.get_rule("max_equity_drawdown_pct", 8.0)):
+            blockers.append(f"{dd_book} equity {dd_pct:.1f}% under its own peak "
+                            f"{dd_peak:,.0f} — drawdown guard active")
         return {"equity": eq, "day_pnl": day,
                 "daily_loss_limit_pct": round(dl_frac * 100, 2),
                 "daily_loss_limit_from": dl_src,
@@ -1232,8 +1281,13 @@ class Autopilot:
                                       for v, x in sorted(by_book.items())},
                 "consec_losses": consec,
                 "n_positions": None if pos_unknown else len(pos_list),
-                "equity_peak": round(max(peak, eq), 2),
+                # the peak behind the drawdown above, so the two are one claim;
+                # `dd_from_peak_book` says whose peak when the desk has more than
+                # one book and the worst one is not the whole desk.
+                "equity_peak": round(dd_peak or max((p for p in peaks.values()
+                                                     if p), default=0.0), 2),
                 "dd_from_peak_pct": round(dd_pct, 2),
+                "dd_from_peak_book": dd_book or None,
                 "block_entries": bool(blockers), "blockers": blockers}
 
     # -------------------------------------------------------- portfolio cluster
