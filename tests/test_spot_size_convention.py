@@ -36,8 +36,8 @@ def _cleared(monkeypatch, ap) -> list[float]:
     real = ap._cluster_guard
     seen: list[float] = []
 
-    def _guard(inst, side, notional, eq, pos_list):
-        out = real(inst, side, notional, eq, pos_list)
+    def _guard(inst, side, notional, eq, pos_list, currency=""):
+        out = real(inst, side, notional, eq, pos_list, currency)
         seen.append(float(out["allowed_notional"]))
         return out
 
@@ -50,8 +50,8 @@ def _capped(monkeypatch, ap, cap: float) -> None:
     risk layer approved rather than whatever a default book happens to allow."""
     real = ap._cluster_guard
 
-    def _guard(inst, side, notional, eq, pos_list):
-        out = real(inst, side, notional, eq, pos_list)
+    def _guard(inst, side, notional, eq, pos_list, currency=""):
+        out = real(inst, side, notional, eq, pos_list, currency)
         return {**out, "allowed_notional": min(float(out["allowed_notional"]), cap)}
 
     monkeypatch.setattr(ap, "_cluster_guard", _guard)

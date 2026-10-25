@@ -128,6 +128,28 @@ def _stale_figures(body: str, figures) -> list[str]:
     return bad
 
 
+def _stale_stamps(body: str, want: dict) -> list[str]:
+    """Every stamped figure written somewhere other than the way the kit says it.
+
+    The whole match is compared, not a digit tail. This check used to pull the
+    last date-or-version-shaped run out of the match and call it a day, so a
+    stamped value could be wrong in whatever part of itself the tail regex did not
+    recognise: a rupee figure with a comma and decimals is nothing
+    `(\\d{4}-\\d{2}-\\d{2}|\\d+\\.\\d+\\.\\d+)$` can see, and neither was a stale sign
+    in front of it. Comparing `group(0)` against `prefix + value` needs no
+    vocabulary of shapes — it asks whether the text is exactly what `--write` would
+    have produced, which is the only question worth asking.
+    """
+    bad: list[str] = []
+    for pattern, key, keep in kit_stats.STAMP_RULES:
+        for m in re.finditer(pattern, body):
+            expected = ("".join(m.group(i) or "" for i in range(1, keep + 1))
+                        + want[key])
+            if m.group(0) != expected:
+                bad.append(f"{m.group(0)!r} — {key} is {want[key]!r}")
+    return bad
+
+
 def test_the_powerpoint_deck_quotes_the_same_figures(figures):
     """The .pptx is the copy that gets emailed, and `--write` cannot rewrite it.
 
@@ -143,12 +165,7 @@ def test_the_powerpoint_deck_quotes_the_same_figures(figures):
     body = kit_stats.pptx_text(path)
     assert len(body) > 2_000, "the extractor read an empty deck"
     bad = _stale_figures(body, figures)
-    want = kit_stats.stamps(kit_stats.ledger())
-    for pattern, key, _keep in kit_stats.STAMP_RULES:
-        for m in re.finditer(pattern, body):
-            tail = re.search(r"(\d{4}-\d{2}-\d{2}|\d+\.\d+\.\d+)$", m.group(0))
-            if tail.group() != want[key]:
-                bad.append(f"{m.group(0)!r} — {key} is {want[key]}")
+    bad += _stale_stamps(body, kit_stats.stamps(kit_stats.ledger()))
     assert not bad, (f"{path.relative_to(ROOT)} contradicts the repository; rebuild "
                      f"it from DECK.md: {bad}")
 
@@ -175,6 +192,13 @@ def test_a_deck_figure_in_a_prose_sentence_is_reachable(figures):
         assert body.count(good) >= 2, f"{good!r} is quoted in one place only"
         assert _stale_figures(body.replace(good, wrong, 1), figures), \
             f"corrupting {good!r} left the deck guard green"
+    # The money figure is quoted once, and corrupting it in place has to fire the
+    # stamp guard — the sentence is reachable, not merely matched by a synthetic one.
+    want = kit_stats.stamps(kit_stats.ledger())
+    money = want["realized_pkr"]
+    assert f"Paper book: {money} realized on Rs" in body, "the money sentence moved"
+    stale = body.replace(money, "−Rs 13.05", 1)
+    assert _stale_stamps(stale, want), "corrupting the deck's rupee left the guard green"
 
 
 def test_the_deck_is_flattened_in_play_order_not_part_order(tmp_path):
@@ -237,24 +261,59 @@ def test_no_figure_phrase_lacks_a_rule(path, figures):
 
 
 @pytest.mark.parametrize("path", PACK, ids=lambda p: p.name)
-def test_the_stamped_date_and_version_are_not_typed(path):
-    """A date or version in the pack is a figure like any other.
+def test_the_stamped_date_version_and_rupee_are_not_typed(path):
+    """A stamped figure in the pack is a figure like any other.
 
     The v2.6.0 deck printed "Figures dated 2026-10-20" over a ledger rebuilt on
     the 21st, and the whitepaper still described a release that was no longer the
-    one the kit shipped with. Neither was a number, so neither was checked — the
+    one the kit shipped with. Neither was a count, so neither was checked — the
     stamp now comes from the ledger's own rebuild date and from `kairos.__version__`,
     which is what makes a stale one a test failure instead of a sentence.
+
+    The realized rupee joined them for the same reason. The pack described a book
+    as "essentially flat (−Rs 13.05 realized on Rs 1,000,000)" in four files while
+    that figure was the dollar arithmetic of one leg, and the ledger it sits beside
+    said −Rs 3,501.69 after the restatement. It is not a count, so no digit rule
+    could hold it, and "realized" is a scope word, so the phrase lint never looked
+    in that sentence either — the one shape of number in the pack that no guard had
+    ever been pointed at.
     """
     body = _text(path)
-    want = kit_stats.stamps(kit_stats.ledger())
-    bad: list[str] = []
-    for pattern, key, _keep in kit_stats.STAMP_RULES:
-        for m in re.finditer(pattern, body):
-            tail = re.search(r"(\d{4}-\d{2}-\d{2}|\d+\.\d+\.\d+)$", m.group(0))
-            if tail.group() != want[key]:
-                bad.append(f"{m.group(0)!r} — {key} is {want[key]}")
+    bad = _stale_stamps(body, kit_stats.stamps(kit_stats.ledger()))
     assert not bad, f"{path.relative_to(ROOT)} carries a stale stamp: {bad}"
+
+
+def test_the_realized_rupee_is_a_figure_the_pack_can_get_wrong():
+    """The money figure, and the parse it comes from, both shown to be reachable.
+
+    Three ways this goes wrong, all of them live before this test existed: the pack
+    prints a magnitude the ledger no longer agrees with; the pack prints the right
+    digits under the wrong sign; and the command that reads the figure out of the
+    ledger stops at the first comma, so a −Rs 3,501.69 book is read as "−3" and
+    every comparison below passes on the sign and the leading digit of a number
+    three thousand four hundred and ninety-eight rupees too small.
+    """
+    want = kit_stats.stamps(kit_stats.ledger())
+    live = want["realized_pkr"]
+    assert re.fullmatch(r"−?Rs [\d,]+\.\d{2}", live), live
+    # the figure the pack prints and the figure the ledger holds are the same money
+    def _money(s: str) -> float:
+        return float(s.replace("−", "-").replace("Rs", "").replace(",", "").replace(" ", ""))
+
+    assert _money(live) == _money(kit_stats.ledger()["realized_pnl"]), live
+
+    for sentence in (f"Paper book: {live} realized on Rs 1,000,000 across 545 cycles",
+                     f"The book is flat (realized P&L {live} on Rs 1,000,000 over 545)"):
+        assert _stale_stamps(sentence, want) == [], sentence
+        wrong = sentence.replace(live, "−Rs 13.05", 1)
+        assert wrong != sentence, "the stale example is already the live figure"
+        assert _stale_stamps(wrong, want), \
+            f"the pack could print {live!r} as −Rs 13.05 and nothing would fire"
+        # right digits, wrong direction
+        if live.startswith("−"):
+            unsigned = sentence.replace(live, live[1:], 1)
+            assert _stale_stamps(unsigned, want), \
+                "a minus in front of a gain reads as a figure, not as a claim"
 
 
 def test_a_non_trade_count_is_a_figure_that_can_go_stale(figures):

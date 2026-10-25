@@ -149,6 +149,29 @@ def _reading(raw: Any) -> float | None:
 _VENUE_CCY = {"MT5": "USD", "JS_GLOBAL": "PKR", "BINANCE": "USD"}
 
 
+def _convert(amount: float, frm: str, to: str) -> float | None:
+    """The same money written in another currency, or None when it cannot be said.
+
+    This is the one division the sizing path cannot get wrong: a cap counted in
+    rupees divided by a price printed in dollars buys 277 times the trade the risk
+    layer approved, and every guard downstream of it — stop distance, exposure,
+    the daily brake — inherits the error. So the price is restated into the
+    money of the book that has to fund it before any of them see it.
+
+    An unnamed side of the pair passes the amount through. The universe holds
+    exactly PKR and USD names and every venue declares its money, so a name with
+    no currency on it is a fixture or a hand-typed ticket, not a second currency;
+    the money that *is* mixed has to be answered for, which is why a named pair
+    with no usable cross returns None and the caller refuses the order.
+    """
+    from .data import fx_rate
+    f, t = str(frm or "").strip().upper(), str(to or "").strip().upper()
+    if not f or not t or f == t:
+        return amount
+    rate = fx_rate(f, t)
+    return None if rate is None else amount * rate
+
+
 def _notional_in(qty: Any, price: Any, frm: str, currency: str) -> float | None:
     """What one holding is worth, in the currency a cap is counted in.
 
@@ -561,6 +584,23 @@ class Autopilot:
                                             {"symbol": inst.key, "venue": venue,
                                              "read": venue in self._venue_accts})
                                 eq = 0.0
+                            # The cap is in the book's money and the tape is in the
+                            # instrument's, and the size is one divided by the other.
+                            # Left unreconciled, a Rs 5,020 cap bought $5,020 of gold
+                            # — 1.2 oz, which is Rs 1.39M on a Rs 1M book — and every
+                            # guard downstream of it read the trade at the rupee
+                            # figure. One cross restates the price, and the veto is
+                            # the honest answer when no cross answers.
+                            vccy = self._venue_currency(venue, acct)
+                            vpx = _convert(price, inst.currency, vccy)
+                            if vpx is None:
+                                action = "NO-FX"
+                                detail = (f"no {inst.currency}->{vccy} rate to price "
+                                          f"a {venue} entry in {inst.key}")
+                                JOURNAL.log("AUTOPILOT_NO_FX",
+                                            {"symbol": inst.key, "venue": venue,
+                                             "from": inst.currency, "to": vccy})
+                                eq = 0.0
                             notional = min((rk["suggested_weight"] or 0) * eq,
                                            0.15 * eq)
                             bands = res.get("confidence_band") or {}
@@ -577,7 +617,7 @@ class Autopilot:
                                 # conviction, so a single macro shock could stop
                                 # eight overlapping five-day windows at once.
                                 guard = self._cluster_guard(inst, side, notional,
-                                                            eq, pos_list)
+                                                            eq, pos_list, vccy)
                                 if guard["allowed_notional"] <= 10:
                                     action = "CLUSTER"
                                     detail = guard["reason"] or "cluster cap"
@@ -585,9 +625,10 @@ class Autopilot:
                                     notional = guard["allowed_notional"]
                                     # The venue decides the unit, so the unit is
                                     # the broker's own, not an assumption about
-                                    # lots.
+                                    # lots — and the price it is divided by is the
+                                    # price in the venue's own money.
                                     spec = self._venue_spec(venue, inst)
-                                    qty = _size_for(venue, notional, price, spec)
+                                    qty = _size_for(venue, notional, vpx, spec)
                                     if qty <= 0:
                                         # Nothing tradeable fits the cap. Sending
                                         # the venue's minimum anyway would place an
@@ -602,12 +643,12 @@ class Autopilot:
                                             f"for {inst.key}"
                                             if venue == "MT5" and not spec else
                                             f"{venue} minimum is bigger than the "
-                                            f"{notional:,.0f} {inst.currency} cap "
-                                            f"at {price:,.4f}")
+                                            f"{notional:,.0f} {vccy} cap "
+                                            f"at {vpx:,.4f}")
                                         JOURNAL.log("AUTOPILOT_MIN_LOT",
                                                     {"symbol": inst.key, "venue": venue,
                                                      "cap": round(notional, 2),
-                                                     "price": price,
+                                                     "price": vpx, "currency": vccy,
                                                      "spec": bool(spec)})
                                     else:
                                         act, detail, struck = self._execute(
@@ -1055,6 +1096,11 @@ class Autopilot:
         r = _R.rules()
         eq = _figure((acct or {}).get("equity"))
         day = _reading((acct or {}).get("day_pnl"))
+        # The paper book publishes the money its ledger is counted in and names
+        # the holdings it could not mark; a live bridge reports neither, so both
+        # read as "nothing special to say here".
+        acct_ccy = str((acct or {}).get("currency") or "").strip().upper()
+        unmarked = [str(s) for s in ((acct or {}).get("unmarked") or [])]
         dl_frac, dl_src = _R.daily_loss_fraction(CFG.risk, r)
         pos_unknown = pos_list is None
         rows = [(str(p.get("venue") or ""),
@@ -1130,7 +1176,14 @@ class Autopilot:
             # a cycle that cannot read equity has NO breakers rather than
             # working ones. The gate still refuses the order; the posture says
             # so too, instead of reporting a clean risk picture it never had.
-            blockers.append("no usable equity figure — venues unreadable")
+            # "unreadable venues" is not the reason when the book answered and
+            # simply could not price what it holds — that is a missing cross,
+            # and the holdings it belongs to are named.
+            blockers.append(
+                f"{', '.join(unmarked[:3])} cannot be marked in "
+                f"{acct_ccy or 'its own'} money — equity unknown, not smaller"
+                if unmarked else
+                "no usable equity figure — venues unreadable")
         if pos_unknown:
             blockers.append("position list unreadable — exposure unknown, "
                             "not flat")
@@ -1235,23 +1288,35 @@ class Autopilot:
                         "side": str(p.get("side") or "").upper(),
                         "notional": _notional_in(
                             qty, price,
-                            getattr(inst, "currency", "") or _VENUE_CCY.get(
+                            # the money the venue printed the row in, when it
+                            # prints one; then the registry; then the currency the
+                            # book itself settles in.
+                            str(p.get("currency") or "").strip().upper()
+                            or getattr(inst, "currency", "") or _VENUE_CCY.get(
                                 str(p.get("venue") or "").upper(), ""),
                             currency),
                         "returns": self._returns_for(key)})
         return out
 
     def _cluster_guard(self, inst, side: str, notional: float, equity: float,
-                       pos_list: list | None) -> dict:
-        """How much of this entry one correlated cluster can still absorb."""
+                       pos_list: list | None,
+                       currency: str = "") -> dict:
+        """How much of this entry one correlated cluster can still absorb.
+
+        `notional` and `equity` are one money — the funding book's — and
+        `currency` names it, so every row of the book is stated in the same money
+        before the cap is compared with it. With no caller opinion the candidate's
+        own currency is used: the same money on a single-currency book, and one
+        rule for the whole comparison either way.
+        """
         from . import risk as _K
         from . import rules as _R
+        money = str(currency or "").strip().upper() or getattr(inst, "currency", "")
         cand = {"symbol": inst.key, "market": getattr(inst, "market", ""),
                 "side": side, "notional": notional,
                 "returns": self._returns_for(inst.key)}
         return _K.cluster_budget(
-            cand, self._cluster_book(pos_list, inst.key,
-                                     getattr(inst, "currency", "")), equity,
+            cand, self._cluster_book(pos_list, inst.key, money), equity,
             float(_R.get_rule("max_correlation", 0.7)),
             float(_R.get_rule("max_cluster_pct", 30.0)))
 
@@ -1363,6 +1428,21 @@ class Autopilot:
                 time.sleep(FILL_CONFIRM_POLL_S)
         return False
 
+    def _venue_currency(self, venue: str, acct: dict | None) -> str:
+        """The money the book that has to fund this order is counted in.
+
+        The venue's own snapshot is asked first, because it is the only figure
+        that cannot drift from the ledger — the paper book publishes the currency
+        its cash, equity and day P&L are in. A bridge that reports no money of its
+        own falls back to what that venue settles in: the terminal and the
+        exchange are dollar books, the PSX book a rupee one.
+        """
+        for part in (self._venue_accts.get(venue), acct):
+            ccy = str((part or {}).get("currency") or "").strip().upper()
+            if ccy:
+                return ccy
+        return _VENUE_CCY.get(venue, "")
+
     def _venue_for(self, inst, live: bool, is_psx: bool) -> str:
         """Which book a live order for this name belongs to.
 
@@ -1462,8 +1542,26 @@ class Autopilot:
             doc = res.get("doctrine") or {}
             n_held = (None if pos is None
                       else max(len(self.st.get("held") or {}), len(pos)))
-            plan = _R.check_plan(price, sl, tp,
-                                 float((acc or {}).get("equity") or 0),
+            # Both sides of every doctrine check are money, so they have to be the
+            # same money: the risk of a trade is its stop distance times its size,
+            # over the equity that bears it. Read against a rupee equity, a dollar
+            # stop on a dollar tape understated the risk 277-fold, and the rule
+            # "never risk more than this per trade" passed the trades it was
+            # written to stop. An empty book needs no rate to be refused.
+            acc_ccy = self._venue_currency(venue, acc)
+            eq_raw = _figure((acc or {}).get("equity"))
+            eq_doc = _convert(eq_raw, acc_ccy, inst.currency) if eq_raw else 0.0
+            if eq_doc is None:
+                why = (f"no {acc_ccy}->{inst.currency} rate to price this plan "
+                       f"against the {venue} book")
+                self.st["actions"].insert(0, {"ts": _now(), "symbol": inst.key,
+                                              "action": "NO-FX", "why": why})
+                self.st["actions"] = self.st["actions"][:MAX_ACTIONS_KEPT]
+                JOURNAL.log("AUTOPILOT_NO_FX", {"symbol": inst.key, "venue": venue,
+                                                "from": acc_ccy,
+                                                "to": inst.currency, "where": "plan"})
+                return "NO-FX", why, None
+            plan = _R.check_plan(price, sl, tp, eq_doc,
                                  (res.get("signal") or {}).get("confidence"),
                                  1 if side == "BUY" else -1, qty=qty,
                                  n_held=n_held, sma=doc.get("sma"),
@@ -1607,6 +1705,21 @@ class Autopilot:
             return act, ticket["ticket_id"], None
         else:
             fill = broker.submit(intent, price)
+            if fill is None:
+                # `OPENED` and `CLOSED` are claims about what the venue filled,
+                # and the caller acts on them: it books a managed position for an
+                # OPENED and realises a P&L for a CLOSED. The paper book now
+                # refuses a trade it cannot count in its own money, and a refusal
+                # wearing one of those two names leaves the loop managing a
+                # position that was never taken.
+                why = (f"the paper book refused this {inst.currency} order — it "
+                       f"cannot count it in {broker.currency}")
+                self._act(inst.key, "PAPER-REFUSED", why)
+                JOURNAL.log("AUTOPILOT_PAPER_REFUSED", {"symbol": inst.key,
+                                                        "side": side, "qty": qty,
+                                                        "book": broker.currency,
+                                                        "currency": inst.currency})
+                return "PAPER-REFUSED", why, None
             act = "CLOSED" if close else "OPENED"
             if close and fill:
                 broker.mark(inst.key, price)

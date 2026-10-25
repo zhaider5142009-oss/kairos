@@ -29,7 +29,7 @@ import numpy as np
 import pandas as pd
 
 from .config import CFG
-from .store import atomic_write, dumps_strict
+from .store import _non_finite_path, atomic_write, dumps_strict
 from . import rules as _R
 
 
@@ -283,13 +283,58 @@ class RiskGate:
 # ---------------------------------------------------------------------------
 # Paper broker
 # ---------------------------------------------------------------------------
+
+# The money a paper book is counted in. Every surface that reads the figure calls
+# it rupees — the desk prints `free cash Rs`, the track record prints
+# `Capital Rs` — so the book is rupee-funded unless `paper.currency` funds it in
+# dollars. One book, one money: a holding this book cannot count in its own
+# currency is a hole in the ledger, and the old ledger did not have it. GOLD is
+# quoted in dollars and PSX scrips in rupees, and `submit` used to deduct
+# `price * qty` from the cash whichever price the tape printed, so 1.2 oz of
+# gold at $4,183 charged a Rs 1,000,000 book Rs 5,020 — 0.5% of capital for a
+# position worth 139% of it — and the same 277x understatement landed in
+# `day_pnl`, which is the number the daily-loss brake divides by equity, and in
+# the `realized P&L Rs` line the track record publishes.
+PAPER_CURRENCY = "PKR"
+
+
+def _paper_currency() -> str:
+    ccy = str((CFG.section("paper") or {}).get("currency") or "").strip().upper()
+    return ccy or PAPER_CURRENCY
+
+
+def _instrument_currency(symbol: str, home: str) -> str:
+    """The money a name is printed in, or the book's own when the registry is silent.
+
+    A name outside the registry has no second currency in it, so it is counted at
+    par rather than refused: the universe holds exactly PKR and USD names, and
+    anything else is a hand-typed ticket or a fixture. Counting the unknown as
+    *foreign* would be the more expensive mistake — it would brick the book on a
+    name that was never mixed money to begin with.
+    """
+    try:
+        from .universe import resolve
+        ccy = str(getattr(resolve(symbol), "currency", "") or "").strip().upper()
+    except Exception:  # noqa: BLE001 — a registry that cannot answer is a silent one
+        return home
+    return ccy or home
+
+
 class PaperBroker:
     """Deterministic simulated venue: fills at next open + slippage, applies
-    commissions, tracks cash/equity/positions, persists state to disk."""
+    commissions, tracks cash/equity/positions, persists state to disk.
+
+    The book holds one money. Every figure it reports — capital, cash, equity,
+    realized, day P&L — is in `currency`, and a fill in another currency is
+    converted at the published cross before it touches the ledger."""
 
     def __init__(self, capital: float = 1_000_000.0) -> None:
         self.state_path = CFG.data_dir / "paper_account.json"
         state = self._load()
+        # The file wins over the config: the numbers already in the ledger were
+        # counted in whatever money the book was opened with, and relabelling a
+        # rupee ledger as dollars is the same mixing in a new place.
+        self.currency: str = str(state.get("currency") or _paper_currency()).upper()
         self.capital: float = state.get("capital", capital)
         self.cash: float = state.get("cash", capital)
         self.positions: dict[str, dict[str, float]] = state.get("positions", {})
@@ -301,7 +346,18 @@ class PaperBroker:
     def _load(self) -> dict[str, Any]:
         if self.state_path.exists():
             try:
-                return json.loads(self.state_path.read_text(encoding="utf-8"))
+                state = json.loads(self.state_path.read_text(encoding="utf-8"))
+                # The writer refuses a NaN; our own reader is lenient about one,
+                # so a legacy or hand-edited file still parses and every figure
+                # under it goes quietly non-finite. The next `_save()` — which
+                # `account()` calls on the desk's read path — would then raise out
+                # of a *successful* read. Read it with the same rule it was
+                # written with, and let a ledger that breaks the rule follow the
+                # path below instead of poisoning the arithmetic.
+                where = _non_finite_path(state, "$")
+                if where is not None:
+                    raise ValueError(f"{where} is not a finite number")
+                return state
             except Exception:
                 # An unreadable file used to fall through as "no state yet", so
                 # the next cycle opened at full capital with no positions and no
@@ -323,10 +379,70 @@ class PaperBroker:
 
     def _save(self) -> None:
         atomic_write(self.state_path, dumps_strict({
+            "currency": self.currency,
             "capital": self.capital, "cash": self.cash, "positions": self.positions,
             "fills": self.fills[-500:], "realized_pnl": self.realized_pnl,
             "day_pnl": self.day_pnl, "day_stamp": self._day_stamp,
         }, indent=1))
+
+    # -- money -----------------------------------------------------------------
+    def rate(self, frm: str) -> float | None:
+        """Book money per one unit of `frm`.
+
+        One for the book's own currency without asking the tape, the published
+        cross for the other one, and None when the cross has no usable print —
+        which is a refusal, not a rate of one. This desk holds exactly two
+        currencies, so the same reader that settled the cluster budget (#96)
+        answers every mixing this book does.
+        """
+        from .data import fx_rate
+        frm = str(frm or "").strip().upper()
+        if not frm or frm == self.currency:
+            return 1.0
+        return fx_rate(frm, self.currency)
+
+    def _ccy(self, symbol: str, pos: dict[str, Any] | None = None) -> str:
+        """The money a holding is printed in, fixed on the row when it was opened.
+
+        The stored value wins so a position keeps the currency it was filled in
+        even if the registry later starts (or stops) knowing about the name.
+        """
+        return (str((pos or {}).get("ccy") or "").strip().upper()
+                or _instrument_currency(symbol, self.currency))
+
+    def units_for(self, symbol: str, notional: float, price: float) -> float | None:
+        """How many units of `symbol` `notional` of book money buys, or None.
+
+        A hand-typed ticket states its size in the money the desk works in and the
+        tape prints the instrument's, and the two are not the same for a dollar
+        name on a rupee book: dividing one by the other without the cross is the
+        277x sizing error the autopilot had, in the one place a human enters it.
+        None says there is no cross to do it with, which is a refusal, not a size.
+        """
+        if not (notional > 0) or not (price > 0):
+            return None
+        fx = self.rate(self._ccy(symbol))
+        return None if fx is None else notional / (price * fx)
+
+    def _mark(self, symbol: str, pos: dict[str, Any]) -> float | None:
+        """What a holding is worth in book money, or None when it cannot be marked.
+
+        A missing price or a missing cross is blindness, not zero: this figure
+        feeds equity, and equity is what every breaker on the desk divides by.
+        """
+        try:
+            qty = float(pos["qty"])
+            last = float(pos["last"])
+        except (TypeError, ValueError, KeyError):
+            return None
+        if not (math.isfinite(qty) and math.isfinite(last)):
+            return None
+        if qty == 0:
+            return 0.0
+        if last <= 0:
+            return None
+        fx = self.rate(self._ccy(symbol, pos))
+        return None if fx is None else qty * last * fx
 
     # -- account/positions ----------------------------------------------------
     def account(self) -> dict[str, Any]:
@@ -338,8 +454,20 @@ class PaperBroker:
             # stale stamp and the daily figure published in the track record aged
             # past the day it claims to describe.
             self._save()
-        equity = self.cash + sum(p["qty"] * p["last"] for p in self.positions.values())
-        return {"venue": "PAPER", "login": "paper", "equity": equity,
+        marked, unmarked = 0.0, []
+        for sym, p in self.positions.items():
+            mv = self._mark(sym, p)
+            if mv is None:
+                unmarked.append(sym)
+            else:
+                marked += mv
+        # None, not a smaller number: an equity that cannot be counted is one the
+        # gate refuses to size against and the breakers report as unreadable.
+        # Adding the dollar holdings to the rupee cash instead — which is what
+        # this line used to do — is how the book grew equity it never had.
+        equity = None if unmarked else self.cash + marked
+        return {"venue": "PAPER", "login": "paper", "currency": self.currency,
+                "equity": equity, "unmarked": unmarked,
                 "balance": self.cash, "day_pnl": self.day_pnl,
                 "open_positions": len(self.positions), "leverage": 1.0}
 
@@ -348,7 +476,11 @@ class PaperBroker:
         for sym, p in self.positions.items():
             out.append({"symbol": sym, "side": "BUY" if p["qty"] > 0 else "SELL",
                         "qty": abs(p["qty"]), "entry": p["entry"],
-                        "last": p["last"], "pnl": (p["last"] - p["entry"]) * p["qty"]})
+                        "last": p["last"], "pnl": (p["last"] - p["entry"]) * p["qty"],
+                        # the money `entry`, `last` and `pnl` are printed in. A
+                        # row of a dollar holding next to a row of a rupee one is
+                        # only readable if the reader can tell which is which.
+                        "currency": self._ccy(sym, p)})
         return out
 
     def mark(self, symbol: str, price: float) -> None:
@@ -378,13 +510,40 @@ class PaperBroker:
             commission_bps = self._fee_bps(intent.symbol)
         slip = fill_price * slippage_bps / 10_000
         price = fill_price + slip if intent.side == "BUY" else fill_price - slip
+        ccy = self._ccy(intent.symbol, self.positions.get(intent.symbol))
+        fx = self.rate(ccy)
+        if fx is None:
+            # The venue would take this trade, and this book cannot count what it
+            # costs. Refusing is the only answer that leaves the ledger in one
+            # money; booking it at par is the bug this path was written to close.
+            JOURNAL.log("PAPER_NO_FX", {"symbol": intent.symbol, "side": intent.side,
+                                        "currency": ccy, "book": self.currency})
+            return None
         commission = price * intent.quantity * commission_bps / 10_000
         qty = intent.quantity if intent.side == "BUY" else -intent.quantity
         pos = self.positions.get(intent.symbol)
         realized = 0.0
+        # A cash book cannot buy what it cannot fund. Nothing else on this path
+        # checks it: the gate's order-value bound only reads LIMIT orders, and the
+        # autopilot's own caps keep an entry under a fraction of equity, so the
+        # orders that can reach here bigger than the account are the ones a human
+        # types in. Before the cross, a Rs 150,000 ticket on a dollar name cost
+        # 150,000 of a million-rupee book and never looked near the edge; counted
+        # in rupees it is 41.5 million, and the answer is a refusal, not a book
+        # that goes quietly negative and calls the difference leverage.
+        # A buy that closes a short is not a purchase — it hands cash back — so
+        # only the order that opens or adds to the long side needs the money.
+        cost = (price * qty + commission) * fx
+        if qty > 0 and (pos is None or pos["qty"] >= 0) and cost > self.cash:
+            JOURNAL.log("PAPER_NO_BUYING_POWER",
+                        {"symbol": intent.symbol, "qty": intent.quantity,
+                         "cost": round(cost, 2), "cash": round(self.cash, 2),
+                         "book": self.currency})
+            return None
         if pos is None:
             self.positions[intent.symbol] = {"qty": qty, "entry": price,
-                                              "last": price, "commission": commission}
+                                              "last": price, "commission": commission,
+                                              "ccy": ccy}
         elif pos["qty"] * qty >= 0:                       # adding
             new_qty = pos["qty"] + qty
             pos["entry"] = (pos["entry"] * pos["qty"] + price * qty) / new_qty if new_qty else price
@@ -397,10 +556,13 @@ class PaperBroker:
             if abs(pos["qty"]) < 1e-9:
                 del self.positions[intent.symbol]
         # proper cash ledger: buys consume notional, sells return it, so
-        # equity = cash + Σ qty·last stays a true mark-to-market number
-        self.cash -= price * qty + commission
-        self.realized_pnl += realized - commission
-        self.day_pnl += realized - commission
+        # equity = cash + Σ qty·last·fx stays a true mark-to-market number — in
+        # the book's own money. A leg closed is realised at the cross it closed
+        # on, which is the convention a rupee-funded desk reports its dollar
+        # trades by; the rate used is on the journal line with the fill.
+        self.cash -= cost
+        self.realized_pnl += (realized - commission) * fx
+        self.day_pnl += (realized - commission) * fx
         fill = Fill(intent.client_order_id, f"paper-{int(time.time() * 1000)}",
                     intent.symbol, intent.side, intent.quantity, price,
                     commission, slip, datetime.now().isoformat(timespec="seconds"),
@@ -410,24 +572,43 @@ class PaperBroker:
         JOURNAL.log("PAPER_FILL", {"coid": fill.client_order_id, "symbol": fill.symbol,
                                    "side": fill.side, "qty": fill.quantity,
                                    "price": fill.price, "commission": commission,
-                                   "realized": realized})
+                                   "realized": realized, "currency": ccy,
+                                   "book": self.currency, "fx": fx})
         return fill
 
     def equity_curve(self) -> pd.Series:
+        """The book's value after each fill, in the book's own money.
+
+        Rebuilt from `fills` because the state file keeps only the last 500. Each
+        leg is counted at the cross the book answers with today: `fills` stores
+        the venue's own print and no rate, so a historical curve of a mixed book
+        can only be restated at par or at today's money, and today's money is the
+        one that keeps a dollar trade the size of a dollar trade.
+        """
         if not self.fills:
             return pd.Series(dtype=float)
         df = pd.DataFrame(self.fills)
         df["ts"] = pd.to_datetime(df["ts"])
-        pnl = []
+        df = df.sort_values("ts")
+        pnl: list[float] = []
+        kept: list = []
         cash = self.capital
         pos: dict[str, float] = {}
         entry: dict[str, float] = {}
-        for _, row in df.sort_values("ts").iterrows():
-            sym, side, qty, price = row["symbol"], row["side"], row["quantity"], row["price"]
+        for row in df.itertuples():
+            sym, side = row.symbol, row.side
+            qty, price = float(row.quantity), float(row.price)
+            fx = self.rate(_instrument_currency(sym, self.currency))
+            if fx is None:
+                # A leg that cannot be counted is not a leg that cost nothing:
+                # leaving it out understates the curve and says so in the line
+                # above, while adding it at par would redraw the exact mixing
+                # this method exists to stop doing.
+                continue
             q = qty if side == "BUY" else -qty
             if sym in pos and pos[sym] * q < 0:
                 close_q = min(abs(q), abs(pos[sym]))
-                cash += (price - entry[sym]) * np.sign(pos[sym]) * close_q
+                cash += (price - entry[sym]) * np.sign(pos[sym]) * close_q * fx
             if sym not in pos or pos[sym] * q >= 0:
                 if sym in pos:
                     tot = abs(pos[sym]) + abs(q)
@@ -440,9 +621,13 @@ class PaperBroker:
                 if abs(pos[sym]) < 1e-9:
                     pos.pop(sym)
                     entry.pop(sym)
-            cash -= row["commission"]
+            cash -= row.commission * fx
             pnl.append(cash)
-        return pd.Series(pnl, index=df.sort_values("ts")["ts"].values)
+            kept.append(row.ts)
+        # The index is the rows that were counted, not the rows that were read:
+        # a mixed book with no cross skips a leg, and pairing a shorter series
+        # with the full timestamp index raised out of the desk's own equity chart.
+        return pd.Series(pnl, index=pd.DatetimeIndex(kept), dtype=float)
 
 
 # ---------------------------------------------------------------------------

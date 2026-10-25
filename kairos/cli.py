@@ -468,14 +468,27 @@ def cmd_paper(args) -> int:
                             title="KAIROS PAPER"))
         return 0
     side = "BUY" if s["score"] > 0 else "SELL"
-    qty = max(1.0, round(args.notional / r["price"], 2))
     broker = PaperBroker()
+    # `--notional` is desk money and the price is the instrument's: on a dollar
+    # name in a rupee book, dividing one by the other sizes the trade by the wrong
+    # cross, which is what this book used to do silently.
+    units = broker.units_for(r["symbol"], args.notional, r["price"])
+    if units is None:
+        console.print(Panel(f"[red]no {broker.currency} rate for this order's "
+                            "money — the size cannot be stated, so nothing was "
+                            "sent[/]", title="KAIROS PAPER"))
+        return 1
+    qty = max(1.0, round(units, 2))
     intent = OrderIntent(symbol=r["symbol"], side=side, quantity=qty, venue="PAPER")
     allowed, why = RiskGate().check(intent, broker.account(), broker.open_positions())
     if not allowed:
         console.print(Panel(f"[red]risk gate blocked: {why}", title="KAIROS PAPER"))
         return 1
     fill = broker.submit(intent, r["price"])
+    if fill is None:
+        console.print(Panel("[red]the paper book refused to count this trade — "
+                            "nothing was booked[/]", title="KAIROS PAPER"))
+        return 1
     console.print(Panel(
         f"[green]FILLED[/] {fill.symbol} {fill.side} {fill.quantity} @ "
         f"{fill.price} (slip {fill.slippage:.4f}, comm {fill.commission:.2f})\n"

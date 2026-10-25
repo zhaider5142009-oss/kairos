@@ -20,12 +20,18 @@ from pathlib import Path
 import pytest
 
 import kairos.autopilot as AP
+import kairos.data as D
 from kairos.ensemble import veto_size_multiplier
 from kairos.execution import PaperBroker
 from kairos.models_stat import ModelForecast
 from test_risk_veto_channel import _vote, _weight_and_notes
 
 UI = Path(__file__).resolve().parents[1] / "kairos" / "api" / "ui.html"
+# The cross a rupee book needs to price a dollar name. Pinned, because the real
+# reader answers from `data/cache/USDPKR.csv` and goes blind after seven days:
+# the tests that fire an entry would otherwise pass or fail on the age of a file
+# this suite never writes.
+RATE = 300.0
 
 
 def _fresh_paper(root: Path):
@@ -44,18 +50,24 @@ def _fresh_paper(root: Path):
             self.positions, self.fills = {}, []
             self.realized_pnl = self.day_pnl = 0.0
             self._day_stamp = ""
+            # The money the book counts in is part of the state it just threw
+            # away: a real ledger opened in another currency would otherwise size
+            # and mark this fixture's rupees with the wrong cross.
+            self.currency = "PKR"
 
     return _Paper
 
 
-def _run_cycle(monkeypatch, tmp_path, votes, name, symbol="GOLD", battery=()):
+def _run_cycle(monkeypatch, tmp_path, votes, name, symbol="GOLD", battery=(),
+               rate=RATE):
     """One real paper cycle over one real engine prediction.
 
     `res` comes from the engine itself (`test_risk_veto_channel._engine`), with
     only its data feed, its model battery and its strategy library stubbed, so
     the `signal` block the desk row is built from is the block the engine
     actually journals. The broker, the state file and the risk posture are the
-    production ones.
+    production ones. `rate` is the published cross — pass None for a book that
+    has no way to count a dollar name in its own money.
     """
     res = _weight_and_notes(monkeypatch, votes, battery)[2]
     books: list[PaperBroker] = []
@@ -73,6 +85,7 @@ def _run_cycle(monkeypatch, tmp_path, votes, name, symbol="GOLD", battery=()):
     monkeypatch.setattr(ENGINE, "predict", lambda key, horizon=None, **kw: res)
     monkeypatch.setattr(ENGINE, "refresh_news", lambda watch: {})
     monkeypatch.setattr(AP, "PaperBroker", _Recording)
+    monkeypatch.setattr(D, "usd_pkr", lambda: rate)
     out = ap.cycle()
     return ap, res, books[0], out
 

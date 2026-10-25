@@ -382,7 +382,11 @@ def run_paper_session(md, symbols: list[str], engine, days: int = 60,
         strong = engine.predict(symbols[0], horizon=5)
         if strong.get("ok") and strong["signal"]["score"] > 0.18:
             side = "BUY" if strong["signal"]["score"] > 0 else "SELL"
-            qty = max(1.0, round(10_000 / strong["price"], 2))
+            # A Rs 10,000 demonstration order at a dollar price is not 10,000/price
+            # units: the book counts one money and the tape prints the other, and
+            # no cross means no size rather than a size at par.
+            units = broker.units_for(symbols[0], 10_000, strong["price"])
+            qty = max(1.0, round(units, 2)) if units else 0.0
             intent = OrderIntent(symbol=symbols[0], side=side, quantity=qty, venue="PAPER")
             acct = broker.account()
             allowed, why = gate.check(intent, acct, broker.open_positions())

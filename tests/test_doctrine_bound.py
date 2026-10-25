@@ -480,20 +480,28 @@ def test_an_advisor_refusal_never_raises_on_a_missing_key():
 
 
 def test_the_engine_snapshot_reaches_the_plan_check_through_the_autopilot(
-        tmp_path):
+        tmp_path, monkeypatch):
     """The autopilot must read the numbers off the prediction, not invent them."""
+    from kairos import data as D
+    # A rupee book sizing a dollar name asks the tape for the cross before it asks
+    # the doctrine anything, and the test sandbox has no bar series to answer from.
+    # Pinned so the answer this test reads is the plan check, not a money veto.
+    monkeypatch.setattr(D, "usd_pkr", lambda: 300.0)
     a = Autopilot()
     a.state_path = tmp_path / "autopilot.json"
     a._save()
     broker = PaperBroker(capital=1_000_000.0)
     inst = Instrument(key="GOLD", name="Gold", asset_class="commodity",
                       sector="materials", currency="USD", market="GLOBAL")
-    act, why, _s = a._execute(inst, "BUY", 100.0, 100.0,
+    # Sized against the money the plan is judged in. A Rs 1,000,000 book is
+    # $3,333 of a dollar-quoted name, so 100 units at a $5 stop risks 15% of it and
+    # the doctrine is right to refuse the order; 1 unit is a trade a real book makes.
+    act, why, _s = a._execute(inst, "BUY", 1.0, 100.0,
                           dict(_res(), doctrine={}), broker,
                           live=False, close=False)
     assert act == "PLANCHECK"
     assert "Trend" in why and "not evaluated" in why
-    good, _, _s = a._execute(inst, "BUY", 100.0, 100.0, _res(), broker,
+    good, _, _s = a._execute(inst, "BUY", 1.0, 100.0, _res(), broker,
                          live=False, close=False)
     assert good != "PLANCHECK"
 

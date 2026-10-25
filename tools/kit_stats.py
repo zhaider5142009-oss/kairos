@@ -82,9 +82,14 @@ def ledger() -> dict[str, str]:
                        ("of which non-trades (HOLD)", "non_trades")):
         m = re.search(rf"\| {re.escape(label)} \| ([\d,]+) \|", body)
         out[key] = m.group(1) if m else "MISSING"
+    # The comma is in the pattern because it is in the number. The ledger prints
+    # this figure with `{:,.2f}`, and the class that read it did not include the
+    # separator, so a restated book of −Rs 3,501.69 was parsed as "−3": the guard
+    # stopped at the first thousand-group and reported the sign and the leading
+    # digit of a figure three thousand four hundred and ninety-eight rupees bigger.
     for pattern, key in ((r"cycles run: \*\*([\d,]+)\*\*", "cycles"),
                          (r"fills: (\d+)", "fills"),
-                         (r"realized P&L Rs (-?[\d.]+)", "realized_pnl")):
+                         (r"realized P&L Rs (-?[\d,.]+)", "realized_pnl")):
         m = re.search(pattern, body)
         out[key] = m.group(1) if m else "MISSING"
     m = re.search(r"^\| rebuilt from the journals on \| (.+?) \|", body, re.M)
@@ -179,6 +184,17 @@ STAMP_RULES = [
     (r"(KAIROS v)\d+\.\d+\.\d+", "version", 1),
     (r"(KAIROS v\d+\.\d+\.\d+ · )\d{4}-\d{2}-\d{2}", "pack_date", 1),
     (r"(repository on )\d{4}-\d{2}-\d{2}", "pack_date", 1),
+    # The rupee the pack quotes for the paper book's realized P&L. It belongs with
+    # the stamps, not the counts: `int()` cannot hold a figure with decimals, so no
+    # digit rule could own it — and "realized" is a scope word, not a figure word,
+    # so the phrase lint never looked in this sentence either. The pack printed
+    # "−Rs 13.05", which was the dollar arithmetic of one leg wearing an Rs label,
+    # across the restatement that put the book at −Rs 3,501.69, and no guard could
+    # see either number because no guard had ever been pointed at the phrase. The
+    # sign travels inside the value: a pack reading "−Rs" over a book that had
+    # turned positive would otherwise stay green on its digits.
+    (r"[-−]?Rs [\d,.]+(?= realized on Rs )", "realized_pkr", 0),
+    (r"(?<=P&L )[-−]?Rs [\d,.]+(?= on Rs )", "realized_pkr", 0),
 ]
 
 
@@ -236,11 +252,24 @@ def pptx_text(path: Path) -> str:
     return re.sub(r"\s+", " ", unescape(" ".join(runs)))
 
 
+def _rs(v: str) -> str:
+    """The realized P&L in the shape the pack prints it: `−Rs 3,501.69`.
+
+    The sign is part of the value, not part of the sentence around it, so a book
+    that turns positive restates the word too instead of leaving a minus in front
+    of a gain.
+    """
+    n = float(str(v).replace(",", ""))
+    return f"{'−' if n < 0 else ''}Rs {abs(n):,.2f}"
+
+
 def stamps(facts: dict | None = None) -> dict[str, str]:
     """The string figures, resolved from the ledger and the package."""
     facts = ledger() if facts is None else facts
     return {"pack_date": str(facts["ledger_generated"]).strip(),
-            "version": _package_version()}
+            "version": _package_version(),
+            "realized_pkr": _rs(facts["realized_pnl"])}
+
 
 
 # A denial is a figure. "No hit rate appears anywhere in this pack" describes the

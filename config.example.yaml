@@ -315,6 +315,14 @@ rules:
 
 # paper venue economics
 paper:
+  currency: PKR                      # the one money this book is counted in.
+                                     # Capital, cash, equity, realized and day
+                                     # P&L are all in it, and a fill in another
+                                     # currency is converted at the published
+                                     # USDPKR cross before it touches the ledger
+                                     # — or refused when the cross has no print.
+                                     # Fund it in dollars with `USD` to trade the
+                                     # global tape without any conversion at all.
   commission_bps: 8.0                # global non-PSX commission, bps of notional
   psx_commission_bps: 20.0           # PSX all-in (brokerage+GFSS+SECP+PSX+CDC) —
                                      # tune to your JS Global slab

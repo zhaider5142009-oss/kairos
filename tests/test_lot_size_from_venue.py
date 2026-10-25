@@ -255,8 +255,8 @@ def _capped_and_recorded(monkeypatch, ap, cap: float) -> list[float]:
     real = ap._cluster_guard
     seen: list[float] = []
 
-    def _guard(inst, side, notional, eq, pos_list):
-        out = real(inst, side, notional, eq, pos_list)
+    def _guard(inst, side, notional, eq, pos_list, currency=""):
+        out = real(inst, side, notional, eq, pos_list, currency)
         allowed = min(float(out["allowed_notional"]), cap)
         seen.append(allowed)
         return {**out, "allowed_notional": allowed}

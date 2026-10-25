@@ -314,13 +314,27 @@ def paper_order(req: PaperReq):
                 f"Signal {s['score']:+.2f} below the 0.18 trade threshold — "
                 "KAIROS stood down. Use force=true to override."}
     side = "BUY" if s["score"] > 0 else "SELL"
-    qty = max(1.0, round(req.notional / r["price"], 2))
     broker = PaperBroker()
+    # The ticket's `notional` is desk money — rupees, the currency the paper book
+    # publishes — and the prediction's price is the instrument's. Dividing one by
+    # the other is what made a hand-keyed Rs 5,020 order buy $5,020 of gold.
+    units = broker.units_for(r["symbol"], req.notional, r["price"])
+    if units is None:
+        return {"ok": False, "reason": "paper_no_fx",
+                "message": f"The paper book is counted in {broker.currency} and "
+                           f"has no usable rate for this order's money, so the "
+                           f"size cannot be stated. Fund the book in the "
+                           f"instrument's currency or wait for the cross."}
+    qty = max(1.0, round(units, 2))
     intent = OrderIntent(symbol=r["symbol"], side=side, quantity=qty, venue="PAPER")
     allowed, why = RiskGate().check(intent, broker.account(), broker.open_positions())
     if not allowed:
         return {"ok": False, "reason": "risk_gate", "message": why}
     fill = broker.submit(intent, r["price"])
+    if fill is None:
+        return {"ok": False, "reason": "paper_no_fx",
+                "message": "The paper book refused to count this trade; nothing "
+                           "was booked."}
     return {"ok": True, "fill": _safe(fill.__dict__), "signal": _safe(s),
             "account": broker.account()}
 

@@ -13,6 +13,12 @@ Three walls, all before any `kairos` import:
    not a side effect;
 3. every `Autopilot` built by a test is stopped and joined at teardown, so no
    thread outlives the fixtures that made it safe.
+
+A fourth wall is per-test rather than per-session: the exchange-rate cache. It
+lives on the module, not the book, and holds an answer for 15 minutes, so a test
+that points `data_dir` at an empty temporary directory can leave the whole suite
+holding "there is no USD/PKR rate" — and the next test, which never touched a
+path, then refuses to trade for a reason it cannot see.
 """
 
 from __future__ import annotations
@@ -131,3 +137,17 @@ def _no_orphan_loop():
         assert not stragglers, (
             f"{len(stragglers)} autopilot thread(s) outlived the test that "
             "armed them — a loop running after teardown has no broker stub")
+
+
+# ---------------------------------------------------------------------------
+# 4. no cross survives the test that read it
+# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _no_inherited_fx_rate():
+    from kairos import data as D
+
+    D._fx_cache = None
+    try:
+        yield
+    finally:
+        D._fx_cache = None
