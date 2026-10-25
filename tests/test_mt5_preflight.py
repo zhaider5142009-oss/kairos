@@ -35,13 +35,13 @@ def _terminal(root, lines, *, login_line_encoding="utf-16", when="20261023",
     return term
 
 
-def _refusal(account: str = "90024745", server: str = "MetaQuotes-Demo",
+def _refusal(account: str = "90001", server: str = "MetaQuotes-Demo",
              why: str = "Invalid account") -> str:
     return (f"QR\t0\t16:43:09.102\tNetwork\t'{account}': authorization on "
             f"{server} failed ({why})")
 
 
-def _success(account: str = "90024745", server: str = "PMEX-Live") -> str:
+def _success(account: str = "90001", server: str = "PMEX-Live") -> str:
     return (f"QR\t0\t10:01:02.000\tNetwork\t'{account}': authorized on {server} "
             f"through Access Point EU 2 (ping: 92.00 ms, build 6201)")
 
@@ -50,7 +50,7 @@ def _success(account: str = "90024745", server: str = "PMEX-Live") -> str:
 def cfg(monkeypatch):
     """The PMEX configuration that is actually on this machine: no server."""
     def set_cfg(**kw):
-        section = {"venue": "PMEX", "server": "", "login": 90024745, "password": "x"}
+        section = {"venue": "PMEX", "server": "", "login": 90001, "password": "x"}
         section.update(kw)
         monkeypatch.setattr(CFG, "section",
                             lambda name: section if name == "mt5" else {})
@@ -76,10 +76,10 @@ def test_the_preflight_never_publishes_the_account_number(tmp_path, cfg):
     _terminal(tmp_path, [_refusal()])
     pf = Mt5Bridge.preflight(root=str(tmp_path))
     blob = json.dumps(pf)
-    assert "90024745" not in blob
-    assert pf["login_tail"] == "…745"
-    assert pf["last_attempt"]["account"] == "…745"
-    assert pf["last_attempt_for_this_account"]["account"] == "…745"
+    assert "90001" not in blob
+    assert pf["login_tail"] == "…001"
+    assert pf["last_attempt"]["account"] == "…001"
+    assert pf["last_attempt_for_this_account"]["account"] == "…001"
 
 
 def test_another_accounts_refusal_is_evidence_but_not_ours(tmp_path, cfg):
@@ -87,9 +87,9 @@ def test_another_accounts_refusal_is_evidence_but_not_ours(tmp_path, cfg):
     account being refused: a status panel that conflates the two sends the
     operator to fix a login that was never tried."""
     cfg()
-    _terminal(tmp_path, [_refusal(account="5055885470")])
+    _terminal(tmp_path, [_refusal(account="1234")])
     pf = Mt5Bridge.preflight(root=str(tmp_path))
-    assert pf["last_attempt"]["account"] == "…470", "the newest answer on this machine"
+    assert pf["last_attempt"]["account"] == "…234", "the newest answer on this machine"
     assert pf["last_attempt_for_this_account"] is None
     assert not any("refused" in b for b in pf["blockers"])
     assert "MetaQuotes-Demo" in " ".join(pf["blockers"])
@@ -113,17 +113,17 @@ def test_a_utf8_log_reads_the_same_as_a_utf16_one(tmp_path, cfg):
 
 def test_the_history_is_filtered_by_the_configured_account(tmp_path, cfg):
     cfg()
-    _terminal(tmp_path, [_refusal(account="11111777"),
-                         _refusal(account="90024745")], login_line_encoding="utf-8")
-    mine = Mt5Bridge.auth_history(root=str(tmp_path), login=90024745)
-    assert [r["account"] for r in mine] == ["…745"]
-    assert all(r["account"] != "…777" for r in mine)
+    _terminal(tmp_path, [_refusal(account="4321"),
+                         _refusal(account="90001")], login_line_encoding="utf-8")
+    mine = Mt5Bridge.auth_history(root=str(tmp_path), login=90001)
+    assert [r["account"] for r in mine] == ["…001"]
+    assert all(r["account"] != "…321" for r in mine)
 
 
 def test_a_successful_sign_in_is_quoted_as_the_state_not_a_failure(tmp_path):
     _terminal(tmp_path, [_success()])
-    clue = Mt5Bridge.signin_clue(90024745, root=str(tmp_path))
-    assert "signed …745 in on PMEX-Live" in clue
+    clue = Mt5Bridge.signin_clue(90001, root=str(tmp_path))
+    assert "signed …001 in on PMEX-Live" in clue
     assert "refused" not in clue
 
 
@@ -139,7 +139,7 @@ def test_the_hint_names_the_install_gap_instead_of_advice_that_cannot_be_followe
         monkeypatch, cfg):
     cfg()
     monkeypatch.setattr(Mt5Bridge, "_scan_auth", staticmethod(lambda root=None: [
-        {"terminal": HASH, "install": INSTALL, "login": 90024745,
+        {"terminal": HASH, "install": INSTALL, "login": 90001,
          "server": "MetaQuotes-Demo", "ok": False, "reason": "Invalid account",
          "when": "20261023"}]))
     hint = Mt5Bridge()._hint()
@@ -159,7 +159,7 @@ def test_attach_says_which_network_refused_the_account(monkeypatch, cfg):
     monkeypatch.setattr(B, "_running_terminal_path",
                         staticmethod(lambda cached_only=False: ""))
     monkeypatch.setattr(B, "_scan_auth", staticmethod(lambda root=None: [
-        {"terminal": HASH, "install": INSTALL, "login": 90024745,
+        {"terminal": HASH, "install": INSTALL, "login": 90001,
          "server": "MetaQuotes-Demo", "ok": False, "reason": "Invalid account",
          "when": "20261023"}]))
     monkeypatch.setitem(sys.modules, "MetaTrader5",
@@ -169,11 +169,11 @@ def test_attach_says_which_network_refused_the_account(monkeypatch, cfg):
                                               shutdown=lambda: None))
 
     br = B()
-    assert br.attach(login=90024745, password="x", server="") is False
+    assert br.attach(login=90001, password="x", server="") is False
     err = br.last_error
     assert "MetaQuotes-Demo" in err and "Invalid account" in err
-    assert "…745" in err, "the account is quoted masked, never in full"
-    assert "90024745" not in err
+    assert "…001" in err, "the account is quoted masked, never in full"
+    assert "90001" not in err
 
 
 def test_a_machine_with_no_terminal_data_is_not_accused_of_using_a_demo(
