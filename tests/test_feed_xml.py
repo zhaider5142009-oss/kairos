@@ -186,3 +186,54 @@ def test_the_news_route_carries_the_article_link(monkeypatch):
                              "published": "Tue, 21 Oct 2026 00:00:00",
                              "url": "https://example.test/gold"}]
     assert out["feeds"]["answered"] == 1
+
+
+# ------------------------------------------------------- ordering by recency
+def test_a_feed_date_is_kept_whole_so_it_can_be_ordered(monkeypatch):
+    # the date used to be cut at 25 characters, which drops the timezone:
+    # "Tue, 21 Oct 2026 00:00:00 GMT" became "… 00:00:0". Two timestamps in
+    # different zones then cannot be compared, and the route that orders by
+    # recency silently treats every headline as equally old.
+    monkeypatch.setattr(D, "_http_get", lambda url, **kw: DOCTYPE_FEED)
+    svc = D.NewsService()
+    svc.feeds = [{"name": "honest", "url": "https://honest.test/rss"}]
+
+    item = svc.fetch(limit_per_feed=10)[0]
+
+    assert item.published == "Tue, 21 Oct 2026 00:00:00 GMT"
+    assert D.news_timestamp(item.published) is not None
+
+
+def test_a_feed_date_reads_the_same_in_rss_and_atom_form():
+    rfc = D.news_timestamp("Tue, 21 Oct 2026 00:00:00 GMT")
+    atom = D.news_timestamp("2026-10-21T00:00:00Z")
+    assert rfc is not None and rfc == atom
+    assert D.news_timestamp("") is None
+    assert D.news_timestamp("not a date") is None, (
+        "an unreadable date must be absent, not epoch zero")
+
+
+def test_the_news_route_opens_with_the_newest_headline(monkeypatch):
+    import types
+
+    from kairos.api import server as S
+
+    older = D.NewsItem("older", "honest", "Tue, 21 Oct 2026 00:00:00 GMT",
+                       "https://example.test/old")
+    newer = D.NewsItem("newer", "honest", "Wed, 22 Oct 2026 00:00:00 GMT",
+                       "https://example.test/new")
+    undated = D.NewsItem("undated", "honest", "", "https://example.test/none")
+
+    class _News:
+        def health(self):
+            return {"checked_at": "2026-10-25T00:00:00+00:00", "feeds": 1,
+                    "answered": 1, "failed": [], "items": 3}
+
+    monkeypatch.setattr(S, "ENGINE", types.SimpleNamespace(
+        md=types.SimpleNamespace(news=_News()),
+        news_items=lambda *a, **k: [older, undated, newer]))
+
+    out = S.news(limit=3)
+
+    assert [i["title"] for i in out["items"]] == ["newer", "older", "undated"], (
+        "the feed's own order is not a time order; undated rows go last")

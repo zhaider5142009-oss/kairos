@@ -29,12 +29,12 @@ Built by one operator, running 24/7, publishing its own losses.
 
 | | |
 |---|---|
-| Code | 20,271 lines Python · 45 modules · public repo |
+| Code | 20,312 lines Python · 45 modules · public repo |
 | Strategies | 100 voting into the live consensus; the sweep fits one blended signal, not the library |
 | Council | 6 configured LLM seats across 2 providers; a dead seat shrinks the council |
 | Execution | paper + JS Global PSX bridge + MT5 |
 | Uptime | 24/7 daemon, watchdog, token-gated public API |
-| Tests | 1197 passing, money path included |
+| Tests | 1200 passing, money path included |
 
 Not a fund. No client money. No licence. No AUM.
 

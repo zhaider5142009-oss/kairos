@@ -26,6 +26,7 @@ import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
@@ -628,6 +629,31 @@ class NewsItem:
     summary: str = ""
 
 
+def news_timestamp(published: str) -> float | None:
+    """Epoch seconds for a feed timestamp, or None when it cannot be read.
+
+    RSS dates are RFC-822 ("Tue, 21 Oct 2026 00:00:00 GMT") and Atom dates are
+    ISO-8601; both arrive from the feeds this desk reads. None instead of 0.0
+    keeps "no date" distinguishable from 1970, so a recency sort can put
+    undated rows last instead of ranking them as the oldest news ever written.
+    """
+    text = (published or "").strip()
+    if not text:
+        return None
+    try:
+        when = parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        try:
+            when = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return when.timestamp()
+
+
 def _feed_xml(raw: bytes) -> ET.Element | None:
     """Parse a third-party feed, with entity declarations refused.
 
@@ -711,7 +737,10 @@ class NewsService:
                 summary = re.sub(r"\s+", " ", summary).strip()[:400]
                 items.append(NewsItem(
                     title=title, source=feed["name"],
-                    published=(el.findtext("pubDate") or "")[:25],
+                    # kept whole: cutting at 25 characters chopped the timezone
+                    # off every RFC-822 date ("… 07:00:0"), and a timestamp
+                    # missing its zone cannot be ordered against another feed's.
+                    published=(el.findtext("pubDate") or "").strip(),
                     link=(el.findtext("link") or "").strip(),
                     summary=summary,
                 ))

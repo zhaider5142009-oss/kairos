@@ -19,6 +19,7 @@ from kairos.config import CFG  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 
 from kairos.engine import ENGINE  # noqa: E402
+from kairos.data import news_timestamp  # noqa: E402
 from kairos.universe import resolve, universe  # noqa: E402
 
 # A resume that was refused, or that raised, used to leave no trace anywhere:
@@ -287,10 +288,21 @@ def portfolio_get(symbols: str, capital: float = 1_000_000.0,
 @app.get("/api/news")
 def news(limit: int = 30):
     items = ENGINE.news_items()
+    # Newest first. The fetcher keeps feed order so each headline stays
+    # attributed to the host that published it; that order is arbitrary in
+    # time, and a panel titled "latest headlines" that opens with whatever the
+    # first feed happened to send is not showing the latest anything. Undated
+    # rows go last rather than being treated as ancient news.
+    items = sorted(items, key=_news_recency)
     return {"ok": True, "feeds": ENGINE.md.news.health(), "items": [{
         "title": i.title, "source": i.source,
         "published": str(i.published), "url": i.link}
         for i in items[:limit]]}
+
+
+def _news_recency(item) -> tuple[bool, float]:
+    ts = news_timestamp(item.published)
+    return (ts is None, -(ts or 0.0))
 
 
 # ---------------------------------------------------------------- paper order

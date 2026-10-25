@@ -165,7 +165,7 @@ def test_news_fetch_keeps_feed_order_and_content(monkeypatch):
     assert [i.title for i in items] == sum(([f"s{i} {j}" for j in range(3)]
                                            for i in range(5)), [])
     assert items[0].summary == "body 0"
-    assert items[0].published == "Tue, 21 Oct 2026 00:00:00"
+    assert items[0].published == "Tue, 21 Oct 2026 00:00:00 GMT"
 
 
 def test_news_fetch_runs_the_feeds_concurrently(monkeypatch):
