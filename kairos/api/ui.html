@@ -739,7 +739,9 @@ $('#bfdbtn').onclick=()=>loadFeedback(true);
 $('#newsgo').onclick=async()=>{
   const body=$('#newsbody');body.innerHTML='<span class="spinner"></span>fetching seven feeds…';
   try{const r=await api('/api/news?limit=40');
-    body.innerHTML=r.items.map(n=>`<div class="newsitem"><div class="t">${n.url?`<a href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.title)}</a>`:esc(n.title)}</div><div class="m">${esc(n.source)} · ${esc((n.published||'').slice(0,16).replace('T',' '))}</div></div>`).join('')||'<span class="dim">no headlines right now</span>';
+    const down=(r.feeds&&r.feeds.failed)||[];
+    const note=down.length?`<div class="dim" style="margin-top:6px">${down.length} of ${r.feeds.feeds} feeds down: ${down.map(f=>`${esc(f.feed)} (${esc(f.error)})`).join(', ')}</div>`:'';
+    body.innerHTML=(r.items.map(n=>`<div class="newsitem"><div class="t">${n.url?`<a href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.title)}</a>`:esc(n.title)}</div><div class="m">${esc(n.source)} · ${esc((n.published||'').slice(0,16).replace('T',' '))}</div></div>`).join('')||'<span class="dim">no headlines right now</span>')+note;
   }catch(e){body.innerHTML=`<div class="error">${esc(e.message)}</div>`}
 };
 

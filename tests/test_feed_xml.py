@@ -117,3 +117,72 @@ def test_a_feed_under_the_cap_is_returned_whole(monkeypatch):
                       max_bytes=D.FEED_MAX_BYTES)
 
     assert out == DOCTYPE_FEED
+
+
+# --------------------------------------------------------- naming the outage
+def test_the_desk_can_name_a_feed_that_did_not_answer(monkeypatch):
+    from kairos.netio import HttpStatus
+
+    def fake(url, **kw):
+        if url == "https://dead.test/rss":
+            raise HttpStatus(404, url, "Not Found")
+        return DOCTYPE_FEED
+
+    monkeypatch.setattr(D, "_http_get", fake)
+    svc = D.NewsService()
+    svc.feeds = [{"name": "dead", "url": "https://dead.test/rss"},
+                 {"name": "honest", "url": "https://honest.test/rss"}]
+
+    items = svc.fetch()
+    report = svc.health()
+
+    assert report["feeds"] == 2 and report["answered"] == 1
+    assert report["items"] == len(items) == 1
+    assert report["failed"] == [{"feed": "dead", "error": "HTTP 404"}]
+    assert report["checked_at"], "a report with no time cannot be called stale"
+
+
+def test_a_feed_that_does_not_parse_is_named_too(monkeypatch):
+    bodies = {"https://hostile.test/rss": ENTITY_FEED,
+              "https://honest.test/rss": DOCTYPE_FEED}
+    monkeypatch.setattr(D, "_http_get", lambda url, **kw: bodies[url])
+    svc = D.NewsService()
+    svc.feeds = [{"name": "hostile", "url": "https://hostile.test/rss"},
+                 {"name": "honest", "url": "https://honest.test/rss"}]
+
+    svc.fetch()
+
+    assert svc.health()["failed"] == [
+        {"feed": "hostile", "error": "not parseable as a feed"}]
+
+
+def test_health_before_any_fetch_claims_nothing():
+    report = D.NewsService().health()
+    assert report["checked_at"] is None
+    assert report["answered"] == 0 and report["failed"] == [] and report["items"] == 0
+
+
+def test_the_news_route_carries_the_article_link(monkeypatch):
+    import types
+
+    from kairos.api import server as S
+
+    item = D.NewsItem(title="gold steadies", source="honest",
+                      published="Tue, 21 Oct 2026 00:00:00",
+                      link="https://example.test/gold")
+
+    class _News:
+        def health(self):
+            return {"checked_at": "2026-10-25T00:00:00+00:00", "feeds": 1,
+                    "answered": 1, "failed": [], "items": 1}
+
+    md = types.SimpleNamespace(news=_News())
+    monkeypatch.setattr(S, "ENGINE", types.SimpleNamespace(
+        md=md, news_items=lambda *a, **k: [item]))
+
+    out = S.news(limit=5)
+
+    assert out["items"] == [{"title": "gold steadies", "source": "honest",
+                             "published": "Tue, 21 Oct 2026 00:00:00",
+                             "url": "https://example.test/gold"}]
+    assert out["feeds"]["answered"] == 1

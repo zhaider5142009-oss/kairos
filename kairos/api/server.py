@@ -287,10 +287,9 @@ def portfolio_get(symbols: str, capital: float = 1_000_000.0,
 @app.get("/api/news")
 def news(limit: int = 30):
     items = ENGINE.news_items()
-    return {"ok": True, "items": [{
-        "title": getattr(i, "title", ""), "source": getattr(i, "source", ""),
-        "published": str(getattr(i, "published", "")),
-        "url": getattr(i, "url", ""), "score": getattr(i, "score", 0)}
+    return {"ok": True, "feeds": ENGINE.md.news.health(), "items": [{
+        "title": i.title, "source": i.source,
+        "published": str(i.published), "url": i.link}
         for i in items[:limit]]}
 
 

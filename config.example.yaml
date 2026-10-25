@@ -190,7 +190,7 @@ news:
     - name: "Business Recorder"
       url: "https://www.brecorder.com/feeds/latest-news"
     - name: "Dawn Business"
-      url: "https://www.dawn.com/feeds/home-business"
+      url: "https://www.dawn.com/feeds/business"
     - name: "FXStreet"
       url: "https://www.fxstreet.com/rss/news"
     - name: "MarketWatch Top"

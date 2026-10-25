@@ -34,7 +34,7 @@ import pandas as pd
 from defusedxml.ElementTree import fromstring as _safe_fromstring
 
 from .config import CFG
-from .netio import HttpStatus, PayloadTooLarge, close_error, retryable
+from .netio import HttpStatus, PayloadTooLarge, close_error, retryable, status_of
 from .store import atomic_write
 from .universe import Instrument, resolve
 
@@ -647,18 +647,33 @@ class NewsService:
     def __init__(self) -> None:
         self.feeds = CFG.section("news").get("feeds", [])
         self.max_per_feed = int(CFG.section("news").get("max_items_per_feed", 25))
+        self._last: dict[str, Any] = {
+            "checked_at": None, "feeds": len(self.feeds), "answered": 0,
+            "failed": [], "items": 0,
+        }
+
+    def health(self) -> dict[str, Any]:
+        """Which feeds answered the last fetch, and which did not.
+
+        An empty headline list has two very different causes — a quiet tape and
+        a dead source list — and a reader who cannot tell them apart will read
+        an outage as "nothing happened today". The last fetch is described here
+        without fetching again, so a health panel is free.
+        """
+        return dict(self._last)
 
     def fetch(self, limit_per_feed: int | None = None) -> list[NewsItem]:
         from concurrent.futures import ThreadPoolExecutor
 
         limit = limit_per_feed or self.max_per_feed
 
-        def get(feed: dict) -> bytes | None:
+        def get(feed: dict) -> tuple[bytes | None, str]:
             try:
                 return _http_get(feed["url"], timeout=12, retries=1,
-                                 max_bytes=FEED_MAX_BYTES)
-            except Exception:
-                return None
+                                 max_bytes=FEED_MAX_BYTES), ""
+            except Exception as exc:  # noqa: BLE001 — one feed's fault is one feed's
+                code = status_of(exc)
+                return None, f"HTTP {code}" if code else type(exc).__name__
 
         # every feed is a separate host waiting on a separate socket; the
         # downloads are parallel but the assembly below walks the feeds in
@@ -666,19 +681,23 @@ class NewsService:
         # `relevant`) is byte-for-byte what the sequential version produced.
         with ThreadPoolExecutor(max_workers=min(5, max(1, len(self.feeds))),
                                 thread_name_prefix="news") as ex:
-            raws = list(ex.map(get, self.feeds))
+            answers = list(ex.map(get, self.feeds))
 
         items: list[NewsItem] = []
-        # strict: `raws` is `ex.map` over `self.feeds`, so the two lists are
+        failed: list[dict[str, str]] = []
+        # strict: `answers` is `ex.map` over `self.feeds`, so the two lists are
         # the same length by construction. If that ever stops being true, a
         # silent truncation would label every later item with the wrong
         # source, and a headline attributed to the wrong feed is worse than a
         # loud failure.
-        for feed, raw in zip(self.feeds, raws, strict=True):
+        for feed, (raw, error) in zip(self.feeds, answers, strict=True):
             if raw is None:
+                failed.append({"feed": feed["name"], "error": error or "no answer"})
                 continue
             root = _feed_xml(raw)
             if root is None:
+                failed.append({"feed": feed["name"],
+                               "error": "not parseable as a feed"})
                 continue
             count = 0
             for el in root.iter("item"):
@@ -697,6 +716,13 @@ class NewsService:
                     summary=summary,
                 ))
                 count += 1
+        self._last = {
+            "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "feeds": len(self.feeds),
+            "answered": len(self.feeds) - len(failed),
+            "failed": failed,
+            "items": len(items),
+        }
         return items
 
     def relevant(self, instrument: Instrument, items: list[NewsItem],
