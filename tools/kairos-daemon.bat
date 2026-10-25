@@ -26,7 +26,11 @@ rem the tunnel probe costs a round trip, so heal every 4th lap (~2 minutes)
 set /a N+=1
 if %N% LSS 4 goto sleep
 set N=0
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\keepalive.ps1 >> data\keepalive.log 2>&1
+rem The keeper writes its own log. A `>> keepalive.log` here is opened once and
+rem never released, so every lap after the first died on a sharing violation
+rem before PowerShell even started — the tunnel was healed exactly once per
+rem daemon launch and silently never again.
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\keepalive.ps1
 call :gpu
 
 :sleep

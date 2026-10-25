@@ -13,6 +13,19 @@ $urlFile = Join-Path $repo "data\tunnel_url.txt"
 
 if (-not (Test-Path $exe)) { exit 0 }          # tunnel binary absent: nothing to keep
 
+# heartbeat: one tiny file, so "the keeper never ran" and "the keeper ran and
+# found the tunnel dead" are different observations instead of one silence.
+$beat = Join-Path $repo "data\keepalive_last.txt"
+try { [System.IO.File]::WriteAllText($beat, (Get-Date -Format s)) } catch { }
+
+# This script owns its log. A caller-side `>>` is held open for the caller's
+# lifetime, so the second invocation dies on a sharing violation before
+# PowerShell starts. Append-and-close each line instead.
+function Note($msg) {
+    $line = "$(Get-Date -Format s) $msg"
+    try { Add-Content -Path (Join-Path $repo "data\keepalive.log") -Value $line } catch { }
+}
+
 function Read-PublicUrl {
     # cloudflared's own error text mentions https://api.trycloudflare.com/tunnel:
     # the control API, not an assigned hostname. A failed launch therefore used
@@ -66,7 +79,7 @@ if ($url) {
 $found = Read-PublicUrl
 if ($found -and (Test-Public $found)) {
     Set-Content -Path $urlFile -Value $found -Encoding ascii
-    Write-Output "$(Get-Date -Format s) TUNNEL_ADOPTED $found"
+    Note "TUNNEL_ADOPTED $found"
     exit 0
 }
 
@@ -95,14 +108,14 @@ for ($i = 0; $i -lt 24; $i++) {
         for ($j = 0; $j -lt 10; $j++) {
             if (Test-Public $fresh) {
                 Set-Content -Path $urlFile -Value $fresh -Encoding ascii
-                Write-Output "$(Get-Date -Format s) TUNNEL_UP $fresh"
+                Note "TUNNEL_UP $fresh"
                 exit 0
             }
             Start-Sleep -Seconds 4
         }
-        Write-Output "$(Get-Date -Format s) TUNNEL_UNREACHABLE $fresh"
+        Note "TUNNEL_UNREACHABLE $fresh"
         exit 1
     }
 }
-Write-Output "$(Get-Date -Format s) TUNNEL_DOWN"
+Note "TUNNEL_DOWN"
 exit 1
