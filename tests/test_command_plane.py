@@ -391,6 +391,33 @@ def test_the_plane_reports_the_loop_beat_not_a_process_local_boolean():
     assert C._cycle_age(dt.datetime.now().isoformat()) < 5.0
 
 
+def test_the_posture_sentence_names_the_cross_behind_the_cash():
+    """`realized` alone does not add up to the move in equity.
+
+    A foreign leg held across a cross change revalues its own notional, and that
+    money lands in cash without ever touching the trading result. A posture line
+    that prints the trading figure beside the equity invites the reader to call the
+    difference a bug, so the translation is named whenever there is one — and a
+    rupee book, which owes none, keeps the sentence it always printed.
+    """
+    base = {"ok": True, "running": True, "cycles": 182, "interval_s": 600,
+            "armed_live": False, "kill_switch": False, "equity": 993738.0,
+            "positions": 0, "realized_pnl": -3501.69, "posture": {}}
+    flat = C._l_posture({**base, "fx_pnl": 0.0, "realized_total": -3501.69})
+    assert "realized -3,501.69." in flat
+    assert "FX translation" not in flat
+    # A book that predates the field has no translation to report.
+    assert "FX translation" not in C._l_posture(base)
+
+    moved = C._l_posture({**base, "fx_pnl": -2760.38,
+                          "realized_total": -6262.07})
+    assert "realized -3,501.69" in moved
+    assert "FX translation -2,760.38" in moved
+    assert "total -6,262.07" in moved
+    assert "realized -6,262.07" not in moved, \
+        "the trading result was overwritten by the cash move"
+
+
 # ----------------------------------------------------------- the desk surfaces
 def test_a_chained_screen_ask_reaches_the_plane_not_the_flat_scan_branch(monkeypatch):
     """The desk's keyword branches predate the plane and still answer a bare

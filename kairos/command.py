@@ -272,6 +272,7 @@ def _t_posture() -> dict:
             "interval_s": st.get("interval_s"),
             "posture": st.get("risk_posture"),
             "equity": acc.get("equity"), "realized_pnl": acc.get("realized_pnl"),
+            "fx_pnl": acc.get("fx_pnl"), "realized_total": acc.get("realized_total"),
             "day_pnl": acc.get("day_pnl"), "positions": len(PaperBroker().open_positions())}
 
 
@@ -284,12 +285,22 @@ def _l_posture(d: dict) -> str:
     else:
         beating = age <= 2.5 * interval
         loop = (f"last cycle {int(age)}s ago ({'alive' if beating else 'quiet'})")
+    # `realized` is the trading result alone. A foreign leg held across a cross
+    # change also revalues its own notional, and that figure sits nowhere else in
+    # this sentence, so equity and realized would read as a contradiction. Name it
+    # only when it happened: a rupee book owes no translation and its sentence is
+    # the one it always printed.
+    money = f"realized {_num(d.get('realized_pnl')):+,.2f}"
+    fx = _num(d.get("fx_pnl"))
+    if fx:
+        money = (f"{money} · FX translation {fx:+,.2f} · total "
+                 f"{_num(d.get('realized_total')):+,.2f}")
     return (f"Autopilot {'running' if d.get('running') else 'not in this process'}, "
             f"{loop}, {int(_num(d.get('cycles')))} cycles; live arming "
             f"{'ON' if d.get('armed_live') else 'OFF'}, kill switch "
             f"{'ENGAGED' if d.get('kill_switch') else 'clear'}, equity "
             f"{_num(d.get('equity')):,.0f} with {int(_num(d.get('positions')))} open, "
-            f"realized {_num(d.get('realized_pnl')):+,.2f}. "
+            f"{money}. "
             f"Posture: {p.get('note') or p.get('state') or 'no constraint'}")
 
 
