@@ -14,15 +14,17 @@ $urlFile = Join-Path $repo "data\tunnel_url.txt"
 if (-not (Test-Path $exe)) { exit 0 }          # tunnel binary absent: nothing to keep
 
 function Read-PublicUrl {
-    $u = $null
-    foreach ($f in @($out, $err)) {
+    # cloudflared's own error text mentions https://api.trycloudflare.com/tunnel:
+    # the control API, not an assigned hostname. A failed launch therefore used
+    # to be published as a live tunnel, so only a subdomain may match.
+    foreach ($f in @($err, $out)) {
         if (Test-Path $f) {
-            $m = Select-String -Path $f -Pattern "https://[a-z0-9-]+\.trycloudflare\.com" |
+            $m = Select-String -Path $f -Pattern "https://(?!api\.)[a-z0-9-]+\.trycloudflare\.com" |
                  Select-Object -Last 1
-            if ($m) { $u = $m.Matches[0].Value }
+            if ($m) { return $m.Matches[0].Value }
         }
     }
-    return $u
+    return $null
 }
 
 # nothing to expose until the tower itself answers locally
@@ -32,19 +34,46 @@ catch { exit 0 }
 $url = $null
 if (Test-Path $urlFile) { $url = (Get-Content $urlFile -TotalCount 1).Trim() }
 
-if ($url) {
+function Test-Public {
+    param($u)
     try {
-        $r = Invoke-WebRequest "$url/api/health" -TimeoutSec 12 -UseBasicParsing
+        $r = Invoke-WebRequest "$u/api/health" -TimeoutSec 8 -UseBasicParsing
         # A 200 is not enough: a dead quick tunnel can answer with an error page
         # from the edge. The body has to be the tower's own health JSON.
-        if ($r.StatusCode -eq 200 -and $r.Content -match '"ok"\s*:\s*true') {
+        return ($r.StatusCode -eq 200 -and $r.Content -match '"ok"\s*:\s*true')
+    } catch { return $false }
+}
+
+if ($url) {
+    # One timeout is not proof the tunnel is dead. A quick tunnel's hostname is
+    # new to DNS and the box is shared with whatever else is running, so a probe
+    # can fail while the edge link is fine. Killing on a single miss is what
+    # rotated the published hostname every couple of minutes, so each one is
+    # asked three times before it is believed.
+    for ($k = 0; $k -lt 3; $k++) {
+        if (Test-Public $url) {
             # Re-stamp the file: the desk refuses a URL whose keeper has gone
             # quiet, so "healthy" has to leave fresh evidence of the check.
             Set-Content -Path $urlFile -Value $url -Encoding ascii
             exit 0
         }
-    } catch { }
+        if ($k -lt 2) { Start-Sleep -Seconds 5 }
+    }
 }
+
+# No usable stamp, but a tunnel may already be up: adopt the hostname its log
+# carries when it answers, rather than killing a working process to relearn it.
+$found = Read-PublicUrl
+if ($found -and (Test-Public $found)) {
+    Set-Content -Path $urlFile -Value $found -Encoding ascii
+    Write-Output "$(Get-Date -Format s) TUNNEL_ADOPTED $found"
+    exit 0
+}
+
+# A second keeper launching against the same repo must not kill the tunnel the
+# first one just brought up: under 90 s old, the process is still the answer.
+$live = Get-Process cloudflared -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($live -and ((Get-Date) - $live.StartTime).TotalSeconds -lt 90) { exit 0 }
 
 # heal — kill the stuck registrar, relaunch, wait for its fresh hostname
 Get-Process cloudflared | Stop-Process -Force
@@ -60,10 +89,20 @@ for ($i = 0; $i -lt 24; $i++) {
     Start-Sleep -Seconds 3
     $fresh = Read-PublicUrl
     if ($fresh) {
-        Set-Content -Path $urlFile -Value $fresh -Encoding ascii
-        Write-Output "TUNNEL_UP $fresh"
-        exit 0
+        # An assigned hostname is not a working tunnel: a launch that timed out
+        # against the control API still prints one. It counts only once it has
+        # answered with the tower's own health JSON.
+        for ($j = 0; $j -lt 10; $j++) {
+            if (Test-Public $fresh) {
+                Set-Content -Path $urlFile -Value $fresh -Encoding ascii
+                Write-Output "$(Get-Date -Format s) TUNNEL_UP $fresh"
+                exit 0
+            }
+            Start-Sleep -Seconds 4
+        }
+        Write-Output "$(Get-Date -Format s) TUNNEL_UNREACHABLE $fresh"
+        exit 1
     }
 }
-Write-Output "TUNNEL_DOWN"
+Write-Output "$(Get-Date -Format s) TUNNEL_DOWN"
 exit 1
