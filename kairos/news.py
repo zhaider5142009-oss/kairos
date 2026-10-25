@@ -42,7 +42,6 @@ import threading
 import time
 import urllib.error
 import urllib.parse
-import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from dataclasses import dataclass
@@ -54,7 +53,7 @@ from typing import Any
 import numpy as np
 
 from .config import CFG
-from .data import _http_get
+from .data import FEED_MAX_BYTES, _feed_xml, _http_get
 from .netio import HttpStatus, close_error
 from .store import atomic_write, dumps_strict
 from .universe import Instrument, universe
@@ -853,16 +852,16 @@ class NewsDesk:
             {"q": build_query(inst, self.window_d), "hl": "en-US", "gl": "US",
              "ceid": "US:en"})
         try:
-            raw = _http_get(url, timeout=self.timeout_s, retries=0)
+            raw = _http_get(url, timeout=self.timeout_s, retries=0,
+                            max_bytes=FEED_MAX_BYTES)
         except Exception as exc:
             return [], type(exc).__name__
         return _parse_rss(raw), ""
 
 
 def _parse_rss(raw: bytes) -> list[Headline]:
-    try:
-        root = ET.fromstring(raw)
-    except Exception:
+    root = _feed_xml(raw)
+    if root is None:
         return []
     out: list[Headline] = []
     for el in root.iter("item"):

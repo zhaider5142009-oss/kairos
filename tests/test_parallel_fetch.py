@@ -140,7 +140,7 @@ def _news_service(monkeypatch, bodies: dict[str, object], overlap: Overlap):
     feeds = [{"name": f"f{i}", "url": f"https://f{i}"} for i in range(len(bodies))]
     got: list[str] = []
 
-    def fake_get(url, timeout=20, headers=None, retries=2):
+    def fake_get(url, timeout=20, headers=None, retries=2, max_bytes=None):
         got.append(url)
         with overlap:
             time.sleep(0.02)

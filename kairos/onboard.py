@@ -33,7 +33,7 @@ from .config import PLACEHOLDER_RE, is_placeholder
 
 MIN_PYTHON = (3, 10)
 REQUIRED = ["yaml", "numpy", "pandas", "scipy", "statsmodels", "sklearn",
-            "rich", "fastapi", "uvicorn", "pydantic", "requests"]
+            "rich", "fastapi", "uvicorn", "pydantic", "defusedxml", "requests"]
 OPTIONAL = {
     "torch": "neural battery (LSTM/TemporalFusion) — without it the stat+ML "
              "models still run",

@@ -39,6 +39,9 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
     "pydantic>=2.6",
+    # every RSS/Atom document is fetched from a host we do not control; the
+    # stdlib parser expands internal entities, defusedxml refuses them.
+    "defusedxml>=0.7",
     # the JS Global bridge is the PSX execution path, not an extra: without it
     # `import kairos.jsgtrade` raises, and a missing dependency has to be
     # different from a disabled feature.

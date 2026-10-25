@@ -31,18 +31,30 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from defusedxml.ElementTree import fromstring as _safe_fromstring
 
 from .config import CFG
-from .netio import HttpStatus, close_error, retryable
+from .netio import HttpStatus, PayloadTooLarge, close_error, retryable
 from .store import atomic_write
 from .universe import Instrument, resolve
 
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/130.0 Safari/537.36")
 
+# An RSS/Atom document is measured in tens of kilobytes; Google News' answer is
+# ~200 KB. Eight megabytes is far past any real feed and far below what a
+# hostile or misconfigured host can hand this box.
+FEED_MAX_BYTES = 8 * 1024 * 1024
+
 
 def _http_get(url: str, timeout: int = 20, headers: dict[str, str] | None = None,
-              retries: int = 2) -> bytes:
+              retries: int = 2, max_bytes: int | None = None) -> bytes:
+    """GET a body. `max_bytes` caps how much of it we will hold in memory.
+
+    A feed is somebody else's server answering our socket; without a cap, a
+    redirect to a multi-gigabyte file is a memory exhaustion on this box. The
+    cap is opt-in because the JSON endpoints need no such bound.
+    """
     hdrs = {"User-Agent": _UA, "Accept": "*/*"}
     if headers:
         hdrs.update(headers)
@@ -51,7 +63,10 @@ def _http_get(url: str, timeout: int = 20, headers: dict[str, str] | None = None
         try:
             req = urllib.request.Request(url, headers=hdrs)
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return resp.read()
+                body = resp.read() if max_bytes is None else resp.read(max_bytes + 1)
+            if max_bytes is not None and len(body) > max_bytes:
+                raise PayloadTooLarge(url, max_bytes)
+            return body
         except Exception as exc:  # noqa: BLE001 — network layer must never crash the engine
             # The `with` above never sees a failed request: `urlopen` raises
             # the error *as* the response, with its socket still attached.
@@ -63,6 +78,8 @@ def _http_get(url: str, timeout: int = 20, headers: dict[str, str] | None = None
                 break
             if attempt < retries:
                 time.sleep(0.8 * (attempt + 1))
+    if isinstance(last_err, PayloadTooLarge):
+        raise last_err
     if isinstance(last_err, urllib.error.HTTPError):
         # Keep the status. "GET failed" cannot be acted on: the news service
         # is built to pause half an hour when a provider answers 429, and it
@@ -611,6 +628,21 @@ class NewsItem:
     summary: str = ""
 
 
+def _feed_xml(raw: bytes) -> ET.Element | None:
+    """Parse a third-party feed, with entity declarations refused.
+
+    `xml.etree` expands internal entities, so a hundred-line document can
+    declare ten nested entities and ask the parser for a billion `&a;`. This
+    is a feed from somebody else's server, not a trusted config file, so the
+    parser is the one that refuses entities (`defusedxml`), while a plain
+    `<!DOCTYPE rss …>` — which real feeds still carry — is allowed through.
+    """
+    try:
+        return _safe_fromstring(raw)
+    except Exception:  # noqa: BLE001 — a malformed feed costs that feed, nothing else
+        return None
+
+
 class NewsService:
     def __init__(self) -> None:
         self.feeds = CFG.section("news").get("feeds", [])
@@ -623,7 +655,8 @@ class NewsService:
 
         def get(feed: dict) -> bytes | None:
             try:
-                return _http_get(feed["url"], timeout=12, retries=1)
+                return _http_get(feed["url"], timeout=12, retries=1,
+                                 max_bytes=FEED_MAX_BYTES)
             except Exception:
                 return None
 
@@ -636,12 +669,16 @@ class NewsService:
             raws = list(ex.map(get, self.feeds))
 
         items: list[NewsItem] = []
-        for feed, raw in zip(self.feeds, raws):
+        # strict: `raws` is `ex.map` over `self.feeds`, so the two lists are
+        # the same length by construction. If that ever stops being true, a
+        # silent truncation would label every later item with the wrong
+        # source, and a headline attributed to the wrong feed is worse than a
+        # loud failure.
+        for feed, raw in zip(self.feeds, raws, strict=True):
             if raw is None:
                 continue
-            try:
-                root = ET.fromstring(raw)
-            except Exception:
+            root = _feed_xml(raw)
+            if root is None:
                 continue
             count = 0
             for el in root.iter("item"):

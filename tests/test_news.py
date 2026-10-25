@@ -73,7 +73,8 @@ class _Transport:
         self.calls: dict[str, list[str]] = {k: [] for k in pages}
         self.unknown: list[str] = []
 
-    def __call__(self, url: str, timeout=None, retries=None) -> bytes:
+    def __call__(self, url: str, timeout=None, retries=None,
+                 max_bytes=None) -> bytes:
         q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query).get("q", [""])[0]
         toks = q.split()
         # build_query is always "<name> <KEY> stock …", so the key is the token

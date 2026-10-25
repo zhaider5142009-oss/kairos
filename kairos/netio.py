@@ -44,6 +44,20 @@ class HttpStatus(ConnectionError):
         self.reason = reason
 
 
+class PayloadTooLarge(ConnectionError):
+    """The host answered, but with more bytes than the caller will hold.
+
+    Distinct from a dead wire and from a provider's refusal: the host is fine
+    and will answer the same way again, so the request must not be retried —
+    retrying it downloads the same oversized body twice.
+    """
+
+    def __init__(self, url: str, limit: int) -> None:
+        super().__init__(f"body from {url} exceeds {limit} bytes")
+        self.url = url
+        self.limit = int(limit)
+
+
 def close_error(exc: BaseException) -> None:
     """Put down the response an HTTP error is still holding. Anywhere else, does nothing."""
     if not isinstance(exc, urllib.error.HTTPError):
@@ -77,6 +91,8 @@ def status_of(exc: BaseException) -> int:
 
 def retryable(exc: BaseException) -> bool:
     """Is this failure worth another request?"""
+    if isinstance(exc, PayloadTooLarge):
+        return False
     if isinstance(exc, urllib.error.HTTPError):
         return exc.code >= 500 or exc.code in ASK_AGAIN
     return True

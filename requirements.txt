@@ -9,5 +9,6 @@ rich>=13.7
 fastapi>=0.110
 uvicorn>=0.29
 pydantic>=2.6
+defusedxml>=0.7   # RSS/Atom from third-party hosts: entities refused before parsing
 requests>=2.31    # JS Global bridge (account sync + order desk)
 matplotlib>=3.8   # shareable signal cards
