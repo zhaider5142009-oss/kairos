@@ -410,6 +410,37 @@ class Autopilot:
         started = time.perf_counter()
         return self._cycle(started)
 
+    def _scan_list(self) -> list[str]:
+        """The watchlist plus every name this desk is still holding.
+
+        Stops, targets, the trailing ratchet, signal flips and maturity are all
+        evaluated inside the per-symbol loop, so a held name that leaves the
+        watchlist keeps none of them while the venue still holds the trade.
+        `_reconcile` only forgets a position the venue no longer reports, which
+        means a list edit (`configure(symbols=...)`, a rotation) can otherwise
+        strand a live position with no exit but a flip. The held key is the
+        authority here, not the list the operator last typed.
+        """
+        symbols = list(self.st.get("symbols") or [])
+        seen = {str(s).upper() for s in symbols}
+        return symbols + [k for k in (self.st.get("held") or {})
+                          if str(k).upper() not in seen]
+
+    def _unmanaged(self, sym: str) -> None:
+        """Say once that a held key has no universe row to manage it against."""
+        if sym not in (self.st.get("held") or {}):
+            return
+        seen = getattr(self, "_unresolved_held", None)
+        if seen is None:
+            seen = self._unresolved_held = set()
+        if sym in seen:
+            return
+        seen.add(sym)
+        self._act(sym, "UNMANAGED",
+                  "held position has no universe entry — no stop, target or "
+                  "maturity exit can be evaluated")
+        JOURNAL.log("AUTOPILOT_HELD_UNRESOLVED", {"symbol": sym})
+
     def _cycle(self, started: float) -> dict[str, Any]:
         from . import rules as _R
         from .engine import ENGINE
@@ -460,7 +491,8 @@ class Autopilot:
         # does not belong on a path that already costs 9.7s per instrument; here
         # the twelve fetches run in parallel and the cycle pays for one slow
         # symbol, not twelve. Measured 2026-10-23: 12 instruments in 8.7s.
-        watch = [i for i in (resolve(s) for s in st["symbols"]) if i is not None]
+        scan = self._scan_list()
+        watch = [i for i in (resolve(s) for s in scan) if i is not None]
         # Stage timings live beside `last_cycle_s`: a cycle that got slower has
         # to name the stage that got slower, or the next efficiency pass spends
         # its time on whichever one is easiest to see.
@@ -484,9 +516,10 @@ class Autopilot:
         with self._lock:
             self.st["news_desk"] = news_desk
             self._save()
-        for sym in st["symbols"]:
+        for sym in scan:
             inst = resolve(sym)
             if inst is None:
+                self._unmanaged(sym)
                 continue
             t_pred = time.perf_counter()
             try:
