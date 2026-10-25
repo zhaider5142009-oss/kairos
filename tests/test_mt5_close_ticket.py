@@ -41,8 +41,9 @@ class _Terminal:
         return [dict(r) for r in self.rows]
 
     def account(self) -> dict:
-        return {"venue": "MT5", "login": "90001", "equity": 100_000.0,
-                "balance": 100_000.0, "day_pnl": 0.0,
+        # the real bridge always reports the deposit currency off the terminal
+        return {"venue": "MT5", "login": "90001", "currency": "USD",
+                "equity": 100_000.0, "balance": 100_000.0, "day_pnl": 0.0,
                 "open_positions": len(self.rows), "leverage": 1.0}
 
     def resolve_symbol(self, key: str) -> str:

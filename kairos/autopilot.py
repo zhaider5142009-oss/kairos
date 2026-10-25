@@ -968,6 +968,10 @@ class Autopilot:
         """The PKR book in account-snapshot shape (what the gates read)."""
         return {"venue": "JS_GLOBAL", "balance": book["cash"],
                 "equity": book["equity"], "day_pnl": self._psx_day_pnl(book),
+                # the desk labels each venue's figure from this field; the portal
+                # settles in rupees, and a book imported before `real_book()` named
+                # its currency is still a rupee book
+                "currency": str(book.get("currency") or "PKR").upper(),
                 "open_positions": len(book["holdings"])}
 
     def _venue_accounts(self, mt5_up: bool, book: dict[str, Any] | None,
@@ -1436,12 +1440,18 @@ class Autopilot:
         its cash, equity and day P&L are in. A bridge that reports no money of its
         own falls back to what that venue settles in: the terminal and the
         exchange are dollar books, the PSX book a rupee one.
+
+        The whole-desk snapshot is asked *last*, not second: with one venue silent
+        the merged account is the other venue's book, and reading its label here
+        priced a dollar terminal entry in rupees off the PSX paper beside it. The
+        venue that is about to spend the money is the venue whose money applies.
         """
-        for part in (self._venue_accts.get(venue), acct):
-            ccy = str((part or {}).get("currency") or "").strip().upper()
-            if ccy:
-                return ccy
-        return _VENUE_CCY.get(venue, "")
+        part = self._venue_accts.get(venue)
+        ccy = str((part or {}).get("currency") or "").strip().upper()
+        if ccy:
+            return ccy
+        return (_VENUE_CCY.get(venue, "")
+                or str((acct or {}).get("currency") or "").strip().upper())
 
     def _venue_for(self, inst, live: bool, is_psx: bool) -> str:
         """Which book a live order for this name belongs to.
@@ -1861,9 +1871,15 @@ class Autopilot:
                 "live_account": self._live_acct,
                 # the number each venue's orders were sized against. The merged
                 # snapshot above adds currencies together, so on its own it names
-                # a total that no single account holds.
+                # a total that no single account holds. Each venue's figure goes
+                # out with the money it is counted in: a dollar terminal next to a
+                # rupee portal printed two unlabelled numbers, and the reader had
+                # no way to tell which was which. Empty means the bridge did not
+                # report one, and the desk prints the number without a label.
                 "live_equity": {v: _figure(p.get("equity"))
                                 for v, p in self._venue_accts.items()},
+                "live_equity_ccy": {v: str(p.get("currency") or "").strip().upper()
+                                    for v, p in self._venue_accts.items()},
                 "paper_account": acct,
                 "paper_positions": pos}
 

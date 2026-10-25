@@ -81,6 +81,20 @@ def test_a_single_book_needs_no_split(monkeypatch, tmp_path):
     assert ap._venue_equity("PAPER", {"equity": 1_000_000.0}) == 1_000_000.0
 
 
+def test_a_silent_venue_does_not_inherit_the_other_books_currency():
+    """With the terminal silent the merged snapshot *is* the rupee book, and the
+    currency lookup used to read that snapshot second — so a dollar CFD entry was
+    priced in PKR off the PSX part beside it, found no FX cross, and was refused
+    as NO-FX instead of the missing account it actually was."""
+    ap = AP.Autopilot()
+    ap._venue_accts = {"JS_GLOBAL": {"equity": PSX_EQUITY, "currency": "PKR"}}
+    merged = ap._merge_account(ap._venue_accts)
+    assert ap._venue_currency("MT5", merged) == "USD"
+    assert ap._venue_currency("JS_GLOBAL", merged) == "PKR"
+    # the paper book publishes its own money, and has no settlement fallback
+    assert ap._venue_currency("PAPER", {"currency": "USD"}) == "USD"
+
+
 def test_a_book_that_answered_with_no_number_is_no_equity_too():
     """An account read that came back empty is the other half of the same veto.
     `equity: None` through the figure helper is 0.0, and 0.0 sizes an order at
@@ -117,16 +131,30 @@ def test_the_cfd_is_sized_on_the_dollar_account_not_the_sum(monkeypatch, tmp_pat
 def test_the_desk_shows_which_book_each_order_was_sized_against(monkeypatch, tmp_path):
     """The operator-facing summary used to print one merged equity and call it
     rupees. Once sizes come from each venue's own book, the same disclosure has to
-    show those numbers, or the desk explains an order the total cannot fund."""
+    show those numbers, or the desk explains an order the total cannot fund.
+
+    And each number has to travel with its own money: 100,000 beside 1,000,000
+    with no labels is one dollar figure and one rupee figure that a reader cannot
+    tell apart — eleven times each other if the labels are guessed wrong."""
     res = _prediction(monkeypatch, battery=_AGREE)
     _term, ap = _both_venues(monkeypatch, tmp_path, res)
 
     ap.cycle()
 
-    shown = ap.status()["live_equity"]
-    assert shown["MT5"] == MT5_EQUITY
-    assert shown["JS_GLOBAL"] == PSX_EQUITY
-    assert ap.status()["live_account"]["equity"] == MT5_EQUITY + PSX_EQUITY
+    st = ap.status()
+    assert st["live_equity"]["MT5"] == MT5_EQUITY
+    assert st["live_equity"]["JS_GLOBAL"] == PSX_EQUITY
+    assert st["live_account"]["equity"] == MT5_EQUITY + PSX_EQUITY
+    # the terminal's deposit currency and the portal's settlement currency
+    assert st["live_equity_ccy"] == {"MT5": "USD", "JS_GLOBAL": "PKR"}
+
+
+def test_a_portal_book_answers_in_its_own_currency():
+    """`real_book()` now names the currency it settles in; the snapshot the gates
+    read must carry it rather than leave the desk to guess rupees by default."""
+    ap = AP.Autopilot()
+    assert ap._psx_part(_book())["currency"] == "PKR"
+    assert ap._psx_part({**_book(), "currency": "usd"})["currency"] == "USD"
 
 
 def test_the_psx_ticket_is_sized_on_the_rupee_book(monkeypatch, tmp_path):

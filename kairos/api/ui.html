@@ -807,11 +807,14 @@ function lbBookHtml(){
   const keys=`order keys ${psx.keys_on?'<span class="up">armed</span>':'<span class="flat">off</span>'}`;
   const la=APD&&APD.live_account;
   if(!la) return `sized on the paper book while the loop runs ${APD?esc(APD.mode):'paper'} · ${keys} · `+b;
-  const eq=(APD.live_equity)||{}; const vs=Object.keys(eq);
+  const eq=(APD.live_equity)||{}; const vs=Object.keys(eq); const ec=(APD.live_equity_ccy)||{};
   // two live books added together is not a balance in any currency, so the desk
-  // names the number each venue's orders were actually sized against.
+  // names the number each venue's orders were actually sized against — each with
+  // the money that venue keeps it in, or the figure means nothing beside its
+  // neighbour. A venue that did not report a currency prints the bare number.
+  const money=(v)=>`${num(eq[v],0)}${ec[v]?' '+esc(ccyLabel(ec[v])):''}`;
   const head=vs.length>1
-    ? `sizing book ${vs.map(v=>`<span class="mono">${esc(v)}</span> ${num(eq[v],0)}`).join(' · ')} <span class="dim">(merged ${num(la.equity,0)} mixes currencies)</span>`
+    ? `sizing book ${vs.map(v=>`<span class="mono">${esc(v)}</span> ${money(v)}`).join(' · ')} <span class="dim">(merged ${num(la.equity,0)} mixes currencies)</span>`
     : `equity ${ccyLabel(la.currency)} <b>${num(la.equity,0)}</b>`;
   return `risk book <span class="mono">${esc(la.venue||'')}</span>: ${head} · free cash ${ccyLabel(la.currency)} ${num(la.balance,0)} · day P&L <span class="${(la.day_pnl||0)>=0?'up':'down'}">${num(la.day_pnl,0)}</span> · ${keys} · `+b;
 }
