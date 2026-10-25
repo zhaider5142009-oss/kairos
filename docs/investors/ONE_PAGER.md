@@ -22,7 +22,7 @@ SECP-licensed as an investment adviser, and has never managed third-party capita
 | Signal council | 6 configured seats across 2 providers, median consensus with named-seat integrity; a blank or dead seat casts no vote |
 | Execution | paper book + JS Global PSX order bridge + MT5 (JS Markets) |
 | Uptime | 24/7 daemon with watchdog and public token-gated API |
-| Tests | 1208 passing, money-path and integrity cases included |
+| Tests | 1209 passing, money-path and integrity cases included |
 
 ## What has actually been demonstrated
 

@@ -192,14 +192,20 @@ def test_a_deck_figure_in_a_prose_sentence_is_reachable(figures):
         assert body.count(good) >= 2, f"{good!r} is quoted in one place only"
         assert _stale_figures(body.replace(good, wrong, 1), figures), \
             f"corrupting {good!r} left the deck guard green"
-    # The money figure is quoted once, and corrupting it in place has to fire the
-    # stamp guard — the sentence is reachable, not merely matched by a synthetic one.
+    # The money sentence is quoted once, and corrupting each of its three figures
+    # in place has to fire the stamp guard — the sentence is reachable, not merely
+    # matched by a synthetic one. "The money" is now a statement in three parts,
+    # because the trading result alone does not add up to the move in equity.
     want = kit_stats.stamps(kit_stats.ledger())
     money = want["realized_money"]
-    label = money.split(" ")[0].lstrip("−")
-    assert f"Paper book: {money} realized on {label}" in body, "the money sentence moved"
-    stale = body.replace(money, "−Rs 13.05", 1)
-    assert _stale_stamps(stale, want), "corrupting the deck's rupee left the guard green"
+    assert f"Paper book: {money} trading P&L" in body, "the money sentence moved"
+    assert f"FX translation {want['fx_money']}" in body, "the translation left the deck"
+    # the deck closes the sentence "…in total", the pack leads with "total …", and
+    # both shapes are stamps: the guard owns the money either way.
+    assert f"{want['total_money']} in total" in body, "the total left the deck"
+    for figure in (money, want["fx_money"], want["total_money"]):
+        assert _stale_stamps(body.replace(figure, "−Rs 13.05", 1), want), \
+            f"corrupting {figure!r} left the guard green"
 
 
 def test_the_deck_is_flattened_in_play_order_not_part_order(tmp_path):
@@ -318,6 +324,51 @@ def test_the_realized_money_is_a_figure_the_pack_can_get_wrong():
             unsigned = sentence.replace(live, live[1:], 1)
             assert _stale_stamps(unsigned, want), \
                 "a minus in front of a gain reads as a figure, not as a claim"
+
+
+def test_the_translation_and_the_total_are_figures_the_pack_can_get_wrong():
+    """The pack's paper-book sentence is three figures, and all three are checked.
+
+    `realized P&L` alone cannot be reconciled with the book's cash: a foreign leg
+    held across a cross change also revalues its own notional, and on the
+    published round trip that was −Rs 2,760.38 beside a −Rs 3,501.69 trading
+    result. Three files described the book with the trading figure alone, which
+    made a 0.63% loss read as 0.35%, and no rule could have caught it: the
+    translation had not been a figure in the ledger long enough to have a shape.
+    All three are stamps now, and the parity is the check — a pack that quotes a
+    translation and a total that do not add up to the trading result is quotable
+    arithmetic that no reader can verify.
+    """
+    want = kit_stats.stamps(kit_stats.ledger())
+    assert want["fx_money"] and want["total_money"], want
+    sentence = (f"Paper book: {want['realized_money']} trading P&L and FX "
+                f"translation {want['fx_money']} on Rs 1,000,000, "
+                f"{want['total_money']} in total, 2 fills.")
+    assert _stale_stamps(sentence, want) == [], sentence
+
+    def _amount(s: str) -> float:
+        return float(re.sub(r"[A-Za-z$€£₹¥]{1,3}", "", s)
+                     .replace("−", "-").replace(",", "").replace(" ", ""))
+
+    assert abs(_amount(want["realized_money"]) + _amount(want["fx_money"])
+               - _amount(want["total_money"])) < 0.01, \
+        "the ledger's own three figures do not add up"
+
+    for key in ("fx_money", "total_money"):
+        stale = sentence.replace(want[key], "−Rs 13.05", 1)
+        assert _stale_stamps(stale, want), f"{key} could be printed as −Rs 13.05"
+        unsigned = sentence.replace(want[key], want[key].lstrip("−"), 1)
+        if want[key].startswith("−"):
+            assert _stale_stamps(unsigned, want), \
+                f"a sign-flipped {key} reads as a figure, not as a claim"
+
+    # A rupee-only book owes no translation, and the stamp is empty rather than
+    # zero: the pack may not quote one the ledger does not print.
+    plain = {"realized_pnl": "-3501.69", "ledger_generated": "2026-10-25"}
+    bare = kit_stats.stamps(plain)
+    assert bare["fx_money"] == "" and bare["total_money"] == ""
+    assert _stale_stamps(sentence, bare), \
+        "a translation was quotable over a ledger that reports none"
 
 
 def test_a_book_in_dollars_is_not_published_in_rupees(monkeypatch, tmp_path):

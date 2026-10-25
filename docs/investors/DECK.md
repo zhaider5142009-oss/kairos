@@ -34,7 +34,7 @@ Built by one operator, running 24/7, publishing its own losses.
 | Council | 6 configured LLM seats across 2 providers; a dead seat shrinks the council |
 | Execution | paper + JS Global PSX bridge + MT5 |
 | Uptime | 24/7 daemon, watchdog, token-gated public API |
-| Tests | 1208 passing, money path included |
+| Tests | 1209 passing, money path included |
 
 Not a fund. No client money. No licence. No AUM.
 
@@ -69,7 +69,8 @@ conviction.
 
 - **No forward track record.** 5,432 predictions journaled, 779 horizons matured, all 779 were
   non-trades. A directional hit rate does not yet exist.
-- Paper book: −Rs 3,501.69 realized on Rs 1,000,000 across 560 cycles, 2 fills.
+- Paper book: −Rs 3,501.69 trading P&L and FX translation −Rs 2,760.38 on
+  Rs 1,000,000, −Rs 6,262.07 in total across 560 cycles, 2 fills.
 - Live execution path is built and gated, not exercised at scale.
 - No audit, no team, no third-party capital.
 

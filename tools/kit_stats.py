@@ -103,6 +103,15 @@ def ledger() -> dict[str, str]:
     m = re.search(rf"realized P&L {MONEY}", body)
     out["realized_pnl"] = (("-" if m.group(1) else "") + m.group(3)) if m else "MISSING"
     out["currency_label"] = m.group(2) if m else "MISSING"
+    # The two figures beside it. `realized P&L` is the trading result alone; a
+    # foreign leg held across a cross change also moved its own notional, and the
+    # ledger names that and the sum. They are absent on a rupee-only book, where
+    # the ledger prints no such segment — absent, not zero, so the pack cannot
+    # claim a translation the book never made.
+    m = re.search(rf"FX translation {MONEY}", body)
+    out["fx_pnl"] = (("-" if m.group(1) else "") + m.group(3)) if m else "MISSING"
+    m = re.search(rf"total {MONEY}", body)
+    out["realized_total"] = (("-" if m.group(1) else "") + m.group(3)) if m else "MISSING"
     m = re.search(r"^\| rebuilt from the journals on \| (.+?) \|", body, re.M)
     out["ledger_generated"] = m.group(1) if m else "not stamped"
     return out
@@ -222,6 +231,19 @@ STAMP_RULES = [
     # turned positive would otherwise stay green on its digits.
     (rf"[-−]?{CUR} [\d,]+\.\d{{2}}(?= realized on {CUR} )", "realized_money", 0),
     (rf"(?<=P&L )[-−]?{CUR} [\d,]+\.\d{{2}}(?= on {CUR} )", "realized_money", 0),
+    # The same figure in the pack's shorter shape: "Paper book: −Rs 3,501.69
+    # trading P&L, FX translation …". The number no longer ends in the word
+    # "realized", so the two rules above stop seeing it — and a figure the rules
+    # cannot see is one the rewriter cannot move.
+    (rf"(?<=[Pp]aper book: )[-−]?{CUR} [\d,]+\.\d{{2}}", "realized_money", 0),
+    (rf"(?<=P&L )[-−]?{CUR} [\d,]+\.\d{{2}}", "realized_money", 0),
+    # The translation and the total are figures like the trading result beside
+    # them. They were added to the ledger before any guard owned them: the pack
+    # could print any rupee figure after "FX translation" and no pass would move
+    # it, which is how a pack keeps a loss looking a fifth of its size.
+    (rf"(?<=FX translation )[-−]?{CUR} [\d,]+\.\d{{2}}", "fx_money", 0),
+    (rf"(?<=total )[-−]?{CUR} [\d,]+\.\d{{2}}", "total_money", 0),
+    (rf"[-−]?{CUR} [\d,]+\.\d{{2}}(?= in total)", "total_money", 0),
 ]
 
 
@@ -292,11 +314,22 @@ def _money(v: str, code: str | None = None) -> str:
 
 
 def stamps(facts: dict | None = None) -> dict[str, str]:
-    """The string figures, resolved from the ledger and the package."""
+    """The string figures, resolved from the ledger and the package.
+
+    A ledger with no `FX translation` segment is a rupee-only book, and its
+    translation stamps to the empty string: the pack's guard then rejects any
+    sentence that quotes one, because a figure the evidence does not contain is
+    no more publishable than a figure it contradicts.
+    """
     facts = ledger() if facts is None else facts
-    return {"pack_date": str(facts["ledger_generated"]).strip(),
-            "version": _package_version(),
-            "realized_money": _money(facts["realized_pnl"], _book_currency())}
+    ccy = _book_currency()
+    out = {"pack_date": str(facts["ledger_generated"]).strip(),
+           "version": _package_version(),
+           "realized_money": _money(facts["realized_pnl"], ccy)}
+    for key, fact in (("fx_money", "fx_pnl"), ("total_money", "realized_total")):
+        v = str(facts.get(fact, "MISSING")).strip()
+        out[key] = _money(v, ccy) if re.fullmatch(r"-?[\d,]+(?:\.\d+)?", v) else ""
+    return out
 
 
 
@@ -972,6 +1005,14 @@ def _rewrite(facts: dict) -> dict[str, int]:
             continue
         body = original = path.read_text(encoding="utf-8", errors="replace")
         for pattern, key, keep in (*RULES, *STAMP_RULES):
+            if not vals[key]:
+                # A stamp the ledger does not carry (a rupee-only book has no FX
+                # translation) cannot be written. Rewriting to nothing would
+                # leave "FX translation" dangling in front of a comma and the
+                # guard would call it consistent; the file is left alone and the
+                # pack test is the thing that has to be answered.
+                continue
+
             def sub(m, v=vals[key], k=keep):
                 return "".join(m.group(i) or "" for i in range(1, k + 1)) + v
 
