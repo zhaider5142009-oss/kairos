@@ -67,10 +67,12 @@ def _two_books(mt5_rows=None, psx_book=None, mt5_eq=MT5_EQ,
         "equity": round(book["equity"] - psx_day_pnl, 2)}
     # The terminal reports floating profit, not a day figure: a fixture that says
     # the day is down stamps the equity that day opened on, and the guard
-    # measures the current read against it.
+    # measures the current read against it. The baseline only counts for the
+    # account that stamped it, so it carries the stub terminal's login.
     ap.st["venue_day_start"] = {"MT5": {
         "date": datetime.now().strftime("%Y-%m-%d"),
-        "equity": round(mt5_eq - mt5_day_pnl, 2)}}
+        "equity": round(mt5_eq - mt5_day_pnl, 2),
+        "ident": AP._book_ident(term.account())}}
     ap._venue_accts = ap._venue_accounts(True, book, False)
     return ap, ap._merge_account(ap._venue_accts), ap._venue_positions(True, book)
 
@@ -282,7 +284,7 @@ def test_a_dark_venue_is_not_a_drawdown_of_the_book_still_answering(monkeypatch)
         str(posture["blockers"])
     # and the blended scalar was not inherited: a live cluster's old peak may
     # have counted a venue that is not in this snapshot
-    assert ap.st["equity_peak_by_book"] == {"MT5|": MT5_EQ}
+    assert ap.st["equity_peak_by_book"] == {"MT5|…001": MT5_EQ}
 
 
 def test_a_dollar_book_halving_is_not_a_four_percent_day(monkeypatch):
@@ -299,7 +301,7 @@ def test_a_dollar_book_halving_is_not_a_four_percent_day(monkeypatch):
     ap, acct, pos = _two_books(psx_book=book)
     ap.st["mode"] = "live"
     ap._risk_posture(acct, pos)                 # each book sets its own peak
-    assert ap.st["equity_peak_by_book"]["MT5|"] == MT5_EQ
+    assert ap.st["equity_peak_by_book"]["MT5|…001"] == MT5_EQ
 
     ap._venue_accts = {"MT5": {**ap._venue_accts["MT5"], "equity": MT5_EQ / 2}}
     acct = ap._merge_account(ap._venue_accts)
@@ -332,7 +334,7 @@ def test_a_book_restated_in_another_currency_starts_a_fresh_peak(monkeypatch):
 
     assert posture["dd_from_peak_pct"] == 0.0
     assert set(ap.st["equity_peak_by_book"]) == {
-        "MT5|", "JS_GLOBAL|PKR", "JS_GLOBAL|USD"}
+        "MT5|…001", "JS_GLOBAL|PKR", "JS_GLOBAL|USD"}
     # back to one book, and the file's scalar follows that book rather than
     # staying frozen at the value it held before the split
     assert ap.st["equity_peak"] == 100_000.0

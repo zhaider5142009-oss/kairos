@@ -143,6 +143,26 @@ def _reading(raw: Any) -> float | None:
     return v if math.isfinite(v) else None
 
 
+def _book_ident(part: dict | None) -> str:
+    """Which account a book's figures belong to, masked to its last three digits.
+
+    A high-water mark and a day's opening equity are facts about one account, not
+    about a venue. Pointing the terminal at a different login — a demo swapped for
+    the funded account, which is the whole point of wiring one — otherwise reads
+    the new balance against the old account's baseline: a loss no trade produced,
+    or a larger new account reading as a gain that hides the real one, and a peak
+    the new book has to outgrow before any entry is allowed again. Non-numeric
+    logins (`paper`) name no traded account and get no suffix.
+    """
+    login = str((part or {}).get("login") or "").strip()
+    return f"…{login[-3:]}" if login.isdigit() else ""
+
+
+def _book_key(venue: str, ccy: str, ident: str) -> str:
+    """The name a book's persisted figures are filed under."""
+    return "|".join(x for x in (venue, ccy, ident) if x)
+
+
 # What each venue's book is counted in. Only consulted for a row whose name the
 # registry does not know, where the settlement currency of the book it sits on is
 # the one fact still available about it.
@@ -966,7 +986,8 @@ class Autopilot:
             return 0.0
         return round(eq - float(snap["equity"]), 2)
 
-    def _venue_day_pnl(self, key: str, equity: Any) -> float:
+    def _venue_day_pnl(self, key: str, equity: Any,
+                       ident: str = "") -> float:
         """Today's move on a book whose venue reports no day P&L.
 
         The spot exchange reports balances, not a day figure, and `None` there
@@ -976,6 +997,11 @@ class Autopilot:
         rupee book is, and for the same reason a zero read stamps nothing: a
         baseline of zero pins the day's loss at nothing for the rest of the
         session. The loop never funds this account, so a deposit is not a profit.
+
+        The baseline belongs to one account: `ident` names it, and a terminal
+        pointed at another login takes a fresh one instead of measuring the new
+        balance against the old account's opening — a fabricated loss is a brake
+        that never lifts, and a fabricated gain is a loss that never trips it.
         """
         eq = round(_figure(equity), 2)
         if eq <= 0:
@@ -983,8 +1009,10 @@ class Autopilot:
         today = datetime.now().strftime("%Y-%m-%d")
         starts = self.st.setdefault("venue_day_start", {})
         snap = starts.get(key) or {}
-        if snap.get("date") != today or _figure(snap.get("equity")) <= 0:
-            starts[key] = {"date": today, "equity": eq}
+        if (snap.get("date") != today
+                or str(snap.get("ident") or "") != ident
+                or _figure(snap.get("equity")) <= 0):
+            starts[key] = {"date": today, "equity": eq, "ident": ident}
             return 0.0
         return round(eq - _figure(snap["equity"]), 2)
 
@@ -1020,7 +1048,8 @@ class Autopilot:
                 # what it is measured from, with the broker's number kept beside
                 # it rather than in its place.
                 a["floating_pnl"] = a.get("day_pnl")
-                a["day_pnl"] = (self._venue_day_pnl("MT5", a.get("equity"))
+                a["day_pnl"] = (self._venue_day_pnl("MT5", a.get("equity"),
+                                                   _book_ident(a))
                                 if _figure(a.get("equity")) > 0 else None)
                 out["MT5"] = a
         if book:
@@ -1034,7 +1063,9 @@ class Autopilot:
                 # with nothing to compare, so a crypto drawdown inside a trading
                 # day reaches neither cover. Measured from the first read instead.
                 if a.get("day_pnl") is None and _figure(a.get("equity")) > 0:
-                    a["day_pnl"] = self._venue_day_pnl("BINANCE", a.get("equity"))
+                    a["day_pnl"] = self._venue_day_pnl("BINANCE",
+                                                       a.get("equity"),
+                                                       _book_ident(a))
                     a["day_pnl_from"] = ("spot equity since the first read of "
                                          "the day")
                 out["BINANCE"] = a
@@ -1146,10 +1177,14 @@ class Autopilot:
     def _book_equities(self, acct: dict | None) -> list[tuple[str, str, float]]:
         """Each readable book as (peak key, label, equity in its own money).
 
-        The key carries the book's currency: a book restated in another money is
-        a different book, and a peak recorded in the old one is not a high-water
-        mark it ever held. One snapshot with no venue parts (paper, or a single
-        live terminal) is the whole account, so it keeps one key and one peak.
+        The key carries the book's currency and the account the figures came
+        from: a book restated in another money is a different book, and a peak
+        recorded in the old one is not a high-water mark it ever held. Neither is
+        a demo account's peak a mark for the funded account the terminal is
+        pointed at next — measured against it, the new book reads as a drawdown
+        from the first cycle and stays there until it outgrows a peak it never
+        set. One snapshot with no venue parts (paper, or a single live terminal)
+        is the whole account, so it keeps one key and one peak.
         """
         if not self._venue_accts:
             eq = _figure((acct or {}).get("equity"))
@@ -1157,14 +1192,14 @@ class Autopilot:
                 return []
             venue = str((acct or {}).get("venue") or "PAPER").upper()
             ccy = str((acct or {}).get("currency") or "").upper()
-            return [(f"{venue}|{ccy}", venue, eq)]
+            return [(_book_key(venue, ccy, _book_ident(acct)), venue, eq)]
         out: list[tuple[str, str, float]] = []
         for venue, part in self._venue_accts.items():
             veq = _figure(part.get("equity"))
             if veq <= 0:
                 continue
             ccy = str(part.get("currency") or "").upper()
-            out.append((f"{venue}|{ccy}", venue, veq))
+            out.append((_book_key(venue, ccy, _book_ident(part)), venue, veq))
         return out
 
     def _risk_posture(self, acct: dict | None,

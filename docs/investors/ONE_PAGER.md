@@ -16,13 +16,13 @@ SECP-licensed as an investment adviser, and has never managed third-party capita
 
 | | |
 |---|---|
-| Codebase | 20,466 lines of Python across 45 modules, public repo |
+| Codebase | 20,501 lines of Python across 45 modules, public repo |
 | Strategy library | 100 strategies in 10 families, voting into the live consensus |
 | Attribution | each vote weighted by its own realized excess over the base rate of its bucket — per instrument, horizon and regime, measured out-of-sample; the engine runs a named flat poll rather than trust stale weights |
 | Signal council | 6 configured seats across 2 providers, median consensus with named-seat integrity; a blank or dead seat casts no vote |
 | Execution | paper book + JS Global PSX order bridge + MT5 (JS Markets) |
 | Uptime | 24/7 daemon with watchdog and public token-gated API |
-| Tests | 1222 passing, money-path and integrity cases included |
+| Tests | 1224 passing, money-path and integrity cases included |
 
 ## What has actually been demonstrated
 

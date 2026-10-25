@@ -113,11 +113,11 @@ def test_a_loss_the_terminal_already_banked_is_still_todays_loss(monkeypatch):
     assert first["floating_pnl"] == 0.0
 
     ap.mt5.account = lambda: {                      # the losing trade is closed
-        "venue": "MT5", "currency": "USD", "equity": 95_000.0,
-        "balance": 95_000.0, "day_pnl": 0.0, "open_positions": 0}
+        "venue": "MT5", "login": "90001", "currency": "USD",
+        "equity": 95_000.0, "balance": 95_000.0, "day_pnl": 0.0,
+        "open_positions": 0}
     second = ap._venue_accounts(True, None, False)["MT5"]
     assert second["day_pnl"] == -5_000.0
-    assert ap._venue_day_pnl("MT5", 95_000.0) == -5_000.0
 
 
 def test_a_banked_loss_opens_the_brake_the_cycle_actually_reads(monkeypatch):
@@ -126,8 +126,9 @@ def test_a_banked_loss_opens_the_brake_the_cycle_actually_reads(monkeypatch):
     ap.mt5 = _Terminal([])
     ap._venue_accounts(True, None, False)           # 100,000 stamped as the open
     ap.mt5.account = lambda: {
-        "venue": "MT5", "currency": "USD", "equity": 95_000.0,
-        "balance": 95_000.0, "day_pnl": 0.0, "open_positions": 0}
+        "venue": "MT5", "login": "90001", "currency": "USD",
+        "equity": 95_000.0, "balance": 95_000.0, "day_pnl": 0.0,
+        "open_positions": 0}
     ap._venue_accts = ap._venue_accounts(True, None, False)
     posture = ap._risk_posture(ap._merge_account(ap._venue_accts), [])
 
@@ -135,6 +136,76 @@ def test_a_banked_loss_opens_the_brake_the_cycle_actually_reads(monkeypatch):
     assert posture["block_entries"] is True
     assert any("daily loss" in b for b in posture["blockers"]), \
         str(posture["blockers"])
+
+
+def _terminal(login: str, equity: float) -> _Terminal:
+    term = _Terminal([])
+    term.account = lambda: {                        # type: ignore[method-assign]
+        "venue": "MT5", "login": login, "currency": "USD",
+        "equity": equity, "balance": equity, "day_pnl": 0.0,
+        "open_positions": 0}
+    return term
+
+
+def test_swapping_the_login_does_not_make_the_new_accounts_open_a_loss(
+        monkeypatch):
+    """The day's baseline is one account's, not one venue's.
+
+    Pointing the terminal at the funded account — which is what wiring the PMEX
+    login is — measured the new balance against the demo's opening. A 10,000
+    account next to a 100,000 demo reads as a 90,000 loss no trade produced, and
+    the brake refuses every entry for the rest of the day; a new account larger
+    than the old reads the same swap as a gain, which is a real loss the brake
+    never sees. The new account starts its own day.
+    """
+    _limits(monkeypatch, brake=0.02)
+    ap = _ap()
+    ap.mt5 = _terminal("90001", 100_000.0)          # the demo, at the open
+    first = ap._venue_accounts(True, None, False)["MT5"]
+    assert first["day_pnl"] == 0.0
+    assert ap.st["venue_day_start"]["MT5"]["ident"] == "…001"
+
+    ap.mt5 = _terminal("70002", 10_000.0)           # the funded account
+    ap._venue_accts = ap._venue_accounts(True, None, False)
+    swollen = ap._venue_accts["MT5"]
+    assert swollen["day_pnl"] == 0.0                # nothing measured yet
+    posture = ap._risk_posture(ap._merge_account(ap._venue_accts), [])
+    assert not any("daily loss" in b for b in posture["blockers"]), \
+        str(posture["blockers"])
+
+    ap.mt5 = _terminal("70002", 8_000.0)            # and the baseline is the new one
+    ap._venue_accts = ap._venue_accounts(True, None, False)
+    posture = ap._risk_posture(ap._merge_account(ap._venue_accts), [])
+    assert posture["day_pnl"] == -2_000.0
+    assert any("daily loss" in b for b in posture["blockers"]), \
+        str(posture["blockers"])
+
+
+def test_swapping_the_login_does_not_inherit_the_demos_high_water_mark(
+        monkeypatch):
+    """A peak belongs to the account that set it.
+
+    The demo's 100,000 is not a mark the funded 10,000 ever held. Inherited, the
+    drawdown guard reads 90% under a peak from the first cycle and — because a
+    peak only ratchets up — refuses every entry until the new account grows
+    tenfold, on a book that has lost nothing.
+    """
+    _limits(monkeypatch, dd=8.0)
+    ap = _ap()
+    ap.st["mode"] = "live"
+    ap.mt5 = _terminal("90001", 100_000.0)
+    ap._venue_accts = ap._venue_accounts(True, None, False)
+    ap._risk_posture(ap._merge_account(ap._venue_accts), [])
+    assert ap.st["equity_peak_by_book"] == {"MT5|USD|…001": 100_000.0}
+
+    ap.mt5 = _terminal("70002", 10_000.0)
+    ap._venue_accts = ap._venue_accounts(True, None, False)
+    posture = ap._risk_posture(ap._merge_account(ap._venue_accts), [])
+
+    assert posture["dd_from_peak_pct"] == 0.0
+    assert not any("drawdown" in b for b in posture["blockers"]), \
+        str(posture["blockers"])
+    assert ap.st["equity_peak_by_book"]["MT5|USD|…002"] == 10_000.0
 
 
 # ------------------------------------------------------------------- merging
