@@ -79,6 +79,11 @@ def main(argv: list[str] | None = None) -> int:
     attach_s = time.perf_counter() - t0
     if not ok:
         print(f"\nATTACH REFUSED in {attach_s * 1000:.1f} ms: {br.last_error}")
+        pf = br.preflight()
+        for b in pf.get("blockers") or []:
+            print(f"  • {b}")
+        for t in pf.get("terminals") or []:
+            print(f"  install: {t['id'][:8]} → {t['install'] or '?'}")
         print("nothing was measured. Open the terminal this bridge is configured for, "
               "sign the account in, enable Algo Trading, and run this again.")
         return 2
