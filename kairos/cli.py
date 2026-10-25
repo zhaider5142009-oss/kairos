@@ -505,8 +505,16 @@ def cmd_mt5(args) -> int:
     console = _console()
     br = get_mt5()
     if not br.ensure():
-        console.print(Panel("[red]MT5 terminal unreachable — is MetaTrader 5 running "
-                            "with algo trading enabled?[/]", title="KAIROS MT5"))
+        pf = br.preflight()
+        lines = [f"[red]{br.last_error}[/]"]
+        if pf.get("blockers"):
+            lines.append("\n[bold]why a link is not possible yet[/]")
+            lines += [f"  • {b}" for b in pf["blockers"]]
+        if pf.get("terminals"):
+            lines.append("\n[dim]terminals on this machine: "
+                         + "; ".join(f"{t['id'][:8]} → {t['install'] or '?'}"
+                                     for t in pf["terminals"]) + "[/]")
+        console.print(Panel("\n".join(lines), title="KAIROS MT5"))
         return 1
     console.print(Panel("[green]connected to MT5 terminal[/]", title="KAIROS MT5"))
     tbl = Table(box=box.ROUNDED)

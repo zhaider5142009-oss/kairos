@@ -365,7 +365,8 @@ def mt5(symbols: str = "XAUUSD,XAGUSD,EURUSD", benchmark: bool = False):
     out = {"ok": connected, "connected": connected, "ticks": [],
            "error": "" if connected else br.last_error,
            "attach_only": True,
-           "terminal_running": br._terminal_running()}
+           "terminal_running": br._terminal_running(),
+           "preflight": br.preflight()}
     if connected:
         for sym in [s.strip() for s in symbols.split(",") if s.strip()]:
             t = br.tick(sym)

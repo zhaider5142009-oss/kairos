@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import sys
 import threading
 import time
@@ -727,17 +728,196 @@ class Mt5Bridge:
         Mt5Bridge._terminal_path_cache = (found, now)
         return found
 
+    _AUTH_RE = re.compile(
+        r"'(\d+)':\s*(?:authori[sz]ed on (?P<server>\S+)"
+        r"|authori[sz]ation on (?P<refused>\S+) failed \((?P<why>[^)]*)\))")
+    _AUTH_CACHE: tuple[float, list[dict[str, Any]]] = (0.0, [])
+
+    @staticmethod
+    def terminal_dirs(root: str | None = None) -> list[dict[str, str]]:
+        """Every MT5 install with a data directory on this machine.
+
+        `Terminal/<hash>/origin.txt` records the install a directory belongs to,
+        so "the demo terminal" and "the broker terminal" can be told apart
+        without starting either one.
+        """
+        base = root or os.path.join(os.environ.get("APPDATA") or "", "MetaQuotes",
+                                    "Terminal")
+        out: list[dict[str, str]] = []
+        try:
+            names = sorted(os.listdir(base))
+        except OSError:
+            return out
+        for name in names:
+            d = os.path.join(base, name)
+            logs = os.path.join(d, "logs")
+            if not os.path.isdir(logs):
+                continue
+            install = ""
+            try:
+                raw = Path(os.path.join(d, "origin.txt")).read_bytes()
+                text = (raw.decode("utf-16")
+                        if raw[:2] in (b"\xff\xfe", b"\xfe\xff")
+                        else raw.decode("utf-8", "replace"))
+                install = text.strip("\x00\r\n ")
+            except OSError:
+                pass
+            out.append({"id": name, "install": install, "logs": logs})
+        return out
+
+    @staticmethod
+    def _read_auth(root: str | None = None, files: int = 8) -> list[dict[str, Any]]:
+        """The terminal's own record of every sign-in it attempted.
+
+        `initialize()` answers a refused sign-in with one integer, and that
+        integer names neither the broker nor the reason. The log MetaTrader 5
+        writes does: `'<account>': authorization on <network> failed (<why>)`.
+        The account number is carried ONLY internally, to match a configured
+        login; every caller-facing shape masks it to its last three digits.
+        """
+        out: list[dict[str, Any]] = []
+        for term in Mt5Bridge.terminal_dirs(root):
+            try:
+                names = [n for n in os.listdir(term["logs"])
+                         if n[:1].isdigit() and n.endswith(".log")]
+            except OSError:
+                continue
+            found = False
+            for name in sorted(names, reverse=True)[:files]:
+                try:
+                    raw = Path(os.path.join(term["logs"], name)).read_bytes()
+                except OSError:
+                    continue
+                text = (raw.decode("utf-16")
+                        if raw[:2] in (b"\xff\xfe", b"\xfe\xff")
+                        else raw.decode("utf-8", "replace"))
+                for line in reversed(text.splitlines()):
+                    m = Mt5Bridge._AUTH_RE.search(line)
+                    if not m:
+                        continue
+                    out.append({"terminal": term["id"], "install": term["install"],
+                                "login": int(m.group(1)),
+                                "server": m.group("server") or m.group("refused"),
+                                "ok": bool(m.group("server")),
+                                "reason": (m.group("why") or "").strip(),
+                                "when": name[:-4]})
+                    found = True
+                if found:
+                    break       # the newest day with a sign-in is the answer
+        out.sort(key=lambda r: r["when"], reverse=True)
+        return out
+
+    @staticmethod
+    def auth_history(root: str | None = None,
+                     login: int | None = None) -> list[dict[str, Any]]:
+        """Sign-in attempts across every terminal here, newest first, masked."""
+        rows = Mt5Bridge._scan_auth(root)
+        if login:
+            rows = [r for r in rows if r["login"] == int(login)]
+        return [{k: v for k, v in r.items() if k != "login"} | {
+            "account": f"…{str(r['login'])[-3:]}"} for r in rows]
+
+    @staticmethod
+    def _scan_auth(root: str | None = None) -> list[dict[str, Any]]:
+        now = time.time()
+        if not root:
+            stamp, rows = Mt5Bridge._AUTH_CACHE
+            if now - stamp < 60.0:
+                return rows
+        rows = Mt5Bridge._read_auth(root)
+        if not root:
+            Mt5Bridge._AUTH_CACHE = (now, rows)
+        return rows
+
+    @staticmethod
+    def signin_clue(login: int | None, root: str | None = None) -> str:
+        """One sentence about the last broker answer for this account, or ""."""
+        if not login:
+            return ""
+        rows = [r for r in Mt5Bridge._scan_auth(root) if r["login"] == int(login)]
+        if not rows:
+            return ""
+        last = rows[0]
+        tail = f"…{str(int(login))[-3:]}"
+        if last["ok"]:
+            return f"the terminal last signed {tail} in on {last['server']}"
+        why = f" ({last['reason']})" if last["reason"] else ""
+        return (f"the terminal last tried {tail} on {last['server']} and was "
+                f"refused{why}")
+
+    @staticmethod
+    def preflight(root: str | None = None) -> dict[str, Any]:
+        """The facts outside the IPC link that decide whether a link is possible.
+
+        Three of the failures that actually block a live PMEX link never reach
+        `initialize()`: the configured trade server is blank, the only installed
+        terminal belongs to another broker, and the last sign-in for the account
+        was already refused by that broker's network. Reporting them before an
+        attach is the difference between "not connected" and one instruction the
+        operator can follow.
+        """
+        m = CFG.section("mt5") or {}
+        venue = str(m.get("venue") or "").strip()
+        server = str(m.get("server") or "").strip()
+        login = int(m.get("login") or 0) or None
+        rows = Mt5Bridge._scan_auth(root)
+        mine = [r for r in rows if login and r["login"] == login]
+        networks = sorted({r["server"] for r in rows if r.get("server")})
+        on_venue = [s for s in networks if venue and venue.lower() in s.lower()]
+        blockers: list[str] = []
+        if login and not server:
+            blockers.append(
+                "mt5.server is blank — a sign-in cannot be aimed at a named network, "
+                "so the terminal is left to reuse whichever account it already saved")
+        if venue and networks and not on_venue:
+            blockers.append(
+                f"no terminal here has ever reached a {venue} network; it has used "
+                + ", ".join(networks))
+        last = mine[0] if mine else None
+        newest = rows[0] if rows else None
+        if last and not last["ok"]:
+            blockers.append(
+                f"the last sign-in for this account was refused by {last['server']}"
+                + (f" ({last['reason']})" if last["reason"] else ""))
+
+        def _attempt(row: dict[str, Any] | None) -> dict[str, Any] | None:
+            if not row:
+                return None
+            return {"account": f"…{str(row['login'])[-3:]}", "server": row["server"],
+                    "ok": row["ok"], "reason": row["reason"], "when": row["when"]}
+        return {"venue": venue, "server": server,
+                "login_tail": f"…{str(login)[-3:]}" if login else "",
+                "terminal_running": Mt5Bridge._running_terminal_path(cached_only=True),
+                "terminals": [{"id": t["id"], "install": t["install"]}
+                              for t in Mt5Bridge.terminal_dirs(root)],
+                "networks": networks,
+                # The newest broker answer on this machine is evidence even when
+                # it belongs to another saved account — it is how "the only
+                # terminal here is a demo one" becomes checkable rather than
+                # inferred.
+                "last_attempt": _attempt(newest),
+                "last_attempt_for_this_account": _attempt(last),
+                "blockers": blockers}
+
     def _hint(self) -> str:
         m = CFG.section("mt5") or {}
         venue = str(m.get("venue") or "your MT5 broker").strip()
         server = str(m.get("server") or "").strip()
         where = f" on {server}" if server else ""
+        networks = sorted({r["server"] for r in self._scan_auth() if r.get("server")})
+        gap = ""
+        if venue and networks and not any(venue.lower() in s.lower() for s in networks):
+            # Telling an operator to sign in to PMEX from a terminal that has
+            # only ever reached a demo network is advice they cannot follow.
+            gap = (f" No terminal on this machine has ever reached a {venue} network "
+                   f"(it has used {', '.join(networks)}), so the {venue} terminal "
+                   f"may not be installed here at all.")
         how = ("mt5.spawn is armed, so KAIROS may start it again on its own"
                if m.get("spawn") else
                "KAIROS attaches automatically once it is open; it does not launch "
                "the terminal unless mt5.spawn is armed")
         return (f"open MetaTrader 5, sign in to {venue}{where} and enable Algo "
-                f"Trading. {how}.")
+                f"Trading. {how}.{gap}")
 
     @staticmethod
     def _spawn_armed() -> bool:
@@ -795,6 +975,18 @@ class Mt5Bridge:
             self.connected = False
             return False
         self._mt5 = mt5
+
+        def fail(msg: str) -> bool:
+            """Fail closed, and add the terminal's own account of the last sign-in.
+
+            "not signed in" is the state; "the network refused this account" is
+            the cause, and only the terminal's log knows it.
+            """
+            clue = self.signin_clue(login)
+            self.last_error = f"{msg} — {clue}" if clue else msg
+            self.connected = False
+            return False
+
         want_path = str(terminal_path or "").strip().rstrip('"')
         running = self._running_terminal_path()
         spawn_tried = False
@@ -811,6 +1003,9 @@ class Mt5Bridge:
                 # open an app that is already trying to open.
                 return False
             self.last_error = f"MT5 terminal is not running — {self._hint()}"
+            clue = self.signin_clue(login)
+            if clue:
+                self.last_error = f"{self.last_error} Last sign-in: {clue}."
             return False
         kwargs: dict[str, Any] = {}
         if want_path:
@@ -821,26 +1016,20 @@ class Mt5Bridge:
             seen = [p.strip() for p in running.split("|")]
             norm = os.path.normcase(os.path.abspath(want_path))
             if not any(os.path.normcase(os.path.abspath(p)) == norm for p in seen if p):
-                self.connected = False
-                self.last_error = (
+                return fail(
                     f"the running MT5 terminal is {seen[0] if seen else 'unknown'}, not the "
                     f"configured {want_path} — attach refused rather than sign in to a "
                     "second terminal behind the operator's back")
-                return False
             kwargs["path"] = want_path
         if login and password and server:
             kwargs.update({"login": int(login), "password": password, "server": server})
         try:
             if not mt5.initialize(**kwargs):
-                self.last_error = f"MT5 attach failed: {mt5.last_error()}"
-                self.connected = False
-                return False
+                return fail(f"MT5 attach failed: {mt5.last_error()}")
             info = mt5.account_info()
             if info is None:
-                self.last_error = ("MT5 terminal is running but NOT signed in — "
-                                   + self._hint())
-                self.connected = False
-                return False
+                return fail("MT5 terminal is running but NOT signed in — "
+                            + self._hint())
             self.attached_account = {"login": int(getattr(info, "login", 0) or 0),
                                      "server": str(getattr(info, "server", "") or "")}
             if login:
@@ -850,18 +1039,16 @@ class Mt5Bridge:
                 # of an answer: sizing, positions and the kill switch all divide
                 # by the equity of whatever `account_info()` returns.
                 if self.attached_account["login"] != int(login):
-                    self.last_error = (
+                    try:
+                        mt5.shutdown()   # closes our IPC link only, never the app
+                    except Exception:
+                        pass
+                    return fail(
                         f"terminal is signed into account "
                         f"{self.attached_account['login'] or '?'} on "
                         f"{self.attached_account['server'] or '?'}, not the configured "
                         f"account {int(login)} — attach refused rather than trade the "
                         "wrong account")
-                    self.connected = False
-                    try:
-                        mt5.shutdown()   # closes our IPC link only, never the app
-                    except Exception:
-                        pass
-                    return False
             first = not self.connected
             self.connected = True
             if first:
