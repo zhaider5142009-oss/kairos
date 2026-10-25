@@ -22,6 +22,7 @@ from kairos import binance as BN
 
 from test_breakers_read_their_own_book import _limits, _two_books
 from test_live_arming import _book
+from test_mt5_close_ticket import _Terminal
 
 PSX_EQ = 1_000_000.0
 SPOT_EQ = 20_000.0
@@ -93,6 +94,47 @@ def test_a_new_day_takes_a_new_baseline(monkeypatch):
     ap.st["venue_day_start"]["BINANCE"]["date"] = "2000-01-01"
     spot.equity = SPOT_EQ - 900.0
     assert ap._venue_accounts(False, None, True)["BINANCE"]["day_pnl"] == 0.0
+
+
+# --------------------------------------------------------------- terminal day
+def test_a_loss_the_terminal_already_banked_is_still_todays_loss(monkeypatch):
+    """`profit` is floating P&L, not the day.
+
+    A terminal that closes -5,000 USD reports position profit back at zero and a
+    balance and equity of 95,000. Reading that `profit` as the day's loss says
+    the account is flat on a day it paid a loss out of, and the daily brake stays
+    shut for the rest of the session. The change in equity is the day; the
+    broker's figure is kept beside it as `floating_pnl`.
+    """
+    ap = _ap()
+    ap.mt5 = _Terminal([])                          # 100,000 USD at the open
+    first = ap._venue_accounts(True, None, False)["MT5"]
+    assert first["day_pnl"] == 0.0
+    assert first["floating_pnl"] == 0.0
+
+    ap.mt5.account = lambda: {                      # the losing trade is closed
+        "venue": "MT5", "currency": "USD", "equity": 95_000.0,
+        "balance": 95_000.0, "day_pnl": 0.0, "open_positions": 0}
+    second = ap._venue_accounts(True, None, False)["MT5"]
+    assert second["day_pnl"] == -5_000.0
+    assert ap._venue_day_pnl("MT5", 95_000.0) == -5_000.0
+
+
+def test_a_banked_loss_opens_the_brake_the_cycle_actually_reads(monkeypatch):
+    _limits(monkeypatch, brake=0.02)
+    ap = _ap()
+    ap.mt5 = _Terminal([])
+    ap._venue_accounts(True, None, False)           # 100,000 stamped as the open
+    ap.mt5.account = lambda: {
+        "venue": "MT5", "currency": "USD", "equity": 95_000.0,
+        "balance": 95_000.0, "day_pnl": 0.0, "open_positions": 0}
+    ap._venue_accts = ap._venue_accounts(True, None, False)
+    posture = ap._risk_posture(ap._merge_account(ap._venue_accts), [])
+
+    assert posture["day_pnl"] == -5_000.0
+    assert posture["block_entries"] is True
+    assert any("daily loss" in b for b in posture["blockers"]), \
+        str(posture["blockers"])
 
 
 # ------------------------------------------------------------------- merging

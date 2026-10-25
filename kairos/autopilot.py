@@ -1012,6 +1012,16 @@ class Autopilot:
         if mt5_up:
             a = self.mt5.account()
             if a:
+                # `profit` on a terminal is floating P&L on open positions, so a
+                # loss taken by closing one clears it: a broker-reported figure
+                # reads a clean day on an account that has already paid a loss
+                # out. The brake is defined on the change in equity — realized
+                # and floating together, as on the other two books — so that is
+                # what it is measured from, with the broker's number kept beside
+                # it rather than in its place.
+                a["floating_pnl"] = a.get("day_pnl")
+                a["day_pnl"] = (self._venue_day_pnl("MT5", a.get("equity"))
+                                if _figure(a.get("equity")) > 0 else None)
                 out["MT5"] = a
         if book:
             out["JS_GLOBAL"] = self._psx_part(book)

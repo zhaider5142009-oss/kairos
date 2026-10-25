@@ -65,6 +65,12 @@ def _two_books(mt5_rows=None, psx_book=None, mt5_eq=MT5_EQ,
     ap.st["psx_day_start"] = {
         "date": datetime.now().strftime("%Y-%m-%d"),
         "equity": round(book["equity"] - psx_day_pnl, 2)}
+    # The terminal reports floating profit, not a day figure: a fixture that says
+    # the day is down stamps the equity that day opened on, and the guard
+    # measures the current read against it.
+    ap.st["venue_day_start"] = {"MT5": {
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "equity": round(mt5_eq - mt5_day_pnl, 2)}}
     ap._venue_accts = ap._venue_accounts(True, book, False)
     return ap, ap._merge_account(ap._venue_accts), ap._venue_positions(True, book)
 
