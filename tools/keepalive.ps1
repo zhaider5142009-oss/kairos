@@ -35,7 +35,14 @@ if (Test-Path $urlFile) { $url = (Get-Content $urlFile -TotalCount 1).Trim() }
 if ($url) {
     try {
         $r = Invoke-WebRequest "$url/api/health" -TimeoutSec 12 -UseBasicParsing
-        if ($r.StatusCode -eq 200) { exit 0 }   # healthy: leave it alone
+        # A 200 is not enough: a dead quick tunnel can answer with an error page
+        # from the edge. The body has to be the tower's own health JSON.
+        if ($r.StatusCode -eq 200 -and $r.Content -match '"ok"\s*:\s*true') {
+            # Re-stamp the file: the desk refuses a URL whose keeper has gone
+            # quiet, so "healthy" has to leave fresh evidence of the check.
+            Set-Content -Path $urlFile -Value $url -Encoding ascii
+            exit 0
+        }
     } catch { }
 }
 

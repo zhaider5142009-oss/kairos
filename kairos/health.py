@@ -13,6 +13,7 @@ Design notes:
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from .config import CFG
@@ -20,15 +21,29 @@ from .universe import universe
 from .wsl_bridge import WSL
 
 _STATE_OK = ("ok", "up", "degraded")
+# `tools/keepalive.ps1` re-stamps `tunnel_url.txt` every successful public
+# probe (it heals on a ~2-minute lap). A file older than this is a keeper that
+# stopped, so the hostname is a claim nobody is checking any more.
+_TUNNEL_TTL_S = 600
 
 
 def _public_url() -> str:
-    """Written by tools/keepalive.ps1 — the empty string means the tunnel is
-    down or still registering, which is exactly what the desk should show."""
+    """The tunnel's public address, or "" when the keeper has gone quiet.
+
+    The empty string means the tunnel is down or still registering, which is
+    exactly what the desk should show. It also covers the case this check was
+    added for: the keeper died overnight, Cloudflare forgot the quick tunnel,
+    and every surface kept offering a hostname that no longer resolved —
+    `tunnel down` was the true answer and the file was a day old saying
+    otherwise.
+    """
+    path = CFG.data_dir / "tunnel_url.txt"
     try:
-        return (CFG.data_dir / "tunnel_url.txt").read_text(encoding="utf-8").strip()
+        age = time.time() - path.stat().st_mtime
+        url = path.read_text(encoding="utf-8").strip()
     except OSError:
         return ""
+    return url if url and age <= _TUNNEL_TTL_S else ""
 
 
 def gpu_state() -> dict[str, Any]:
