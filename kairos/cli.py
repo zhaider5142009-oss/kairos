@@ -606,8 +606,15 @@ def cmd_autopilot(args) -> int:
             console.print(cons)
         acct = st.get("paper_account") or {}
         rp = st.get("risk_posture") or {}
-        console.print(f"paper equity: {acct.get('equity', 0):,.0f} · "
-                      f"day P&L: {acct.get('day_pnl', 0):+,.0f} · "
+        # `.get(k, 0)` hands back a stored None, not the default, and the format
+        # spec then raises in the middle of `status` — the command an operator
+        # runs at the moment a holding could not be marked. The API already
+        # prints "unreadable" for this book; say the same thing here.
+        eq = acct.get("equity")
+        day = acct.get("day_pnl")
+        eq_txt = "unreadable" if eq is None else f"{eq:,.0f}"
+        day_txt = "unreadable" if day is None else f"{day:+,.0f}"
+        console.print(f"paper equity: {eq_txt} · day P&L: {day_txt} · "
                       f"positions: {len(st.get('paper_positions') or [])}")
         expo = rp.get("exposure_pct")
         expo_txt = "unknown" if expo is None else f"{expo:.1f}%"
