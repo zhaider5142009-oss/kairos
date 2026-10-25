@@ -29,12 +29,12 @@ Built by one operator, running 24/7, publishing its own losses.
 
 | | |
 |---|---|
-| Code | 20,626 lines Python · 45 modules · public repo |
+| Code | 20,646 lines Python · 45 modules · public repo |
 | Strategies | 100 voting into the live consensus; the sweep fits one blended signal, not the library |
 | Council | 6 configured LLM seats across 2 providers; a dead seat shrinks the council |
 | Execution | paper + JS Global PSX bridge + MT5 |
 | Uptime | 24/7 daemon, watchdog, token-gated public API |
-| Tests | 1245 passing, money path included |
+| Tests | 1247 passing, money path included |
 
 Not a fund. No client money. No licence. No AUM.
 
@@ -269,24 +269,31 @@ above graded the answer and none graded the voter. `tools/strategy_attribution.p
 the features at every fifth bar from only the bars that existed *then*, takes each strategy's
 vote, and grades it once that horizon's bars print. `kairos/attribution.py` turns the resulting
 counts into weights, bounded to 0.5–1.5 and shrunk toward 1.0 by sample size, measured against
-the up-rate of its own bucket — same instrument, same horizon, same regime — because a strategy
-that was right 70% of the time on a tape that rose 70% of the time has proved nothing. The
-artifact in this build carries 1,029 graded slices and 31,188 directional votes over 14
-instruments; the weights actually applied span 0.79 to 1.18, 24 of the 100 strategies still have
-too little evidence to be weighed at all and stay at 1.0, and 15 never cast a directional vote
-in the walk. **The engine refuses the artifact** — and says so, on the desk, in the prediction
+the up-rate of the tape **over exactly the slices that strategy voted on** — same instrument,
+same horizon, same condition — because a strategy that was right 70% of the time on a tape that
+rose 70% of the time has proved nothing. The artifact in this build carries 1,028 graded slices
+and 32,349 directional votes over 14 instruments; the weights actually applied span 0.71 to
+1.26, 63 of the 100 strategies earn at least one condition-specific weight, 17 are weighed on
+their pooled evidence alone, and 20 still have too little evidence to be weighed at all and stay
+at 1.0 — 13 of them never cast a directional vote in the walk. **The engine refuses the artifact** — and says so, on the desk, in the prediction
 and in the CLI dossier, running a flat poll instead — if it is stale, incomplete, or measured
 against a library of a different size. A weight you cannot switch off is a weight you cannot
 audit.
 
-Two defects came out of *using* it rather than writing it. The first walk printed a raw hit rate
+Three defects came out of *using* it rather than writing it. The first walk printed a raw hit rate
 over 100% and raised nothing: a counter was adding a long vote into the **hits** column and a
 short vote into the **longs** column, so the arithmetic was impossible and every number built on
 it still looked plausible. The second run died on its very first slice, inside a helper that had
 quietly pre-created an empty bucket, and the exit code reported success. Both shapes are gated
 now: the tool refuses to publish an artifact in which hits outnumber votes, names the bucket, and
 writes nothing, so whatever weights were in force stay in force; and a test asserts the column
-layout itself rather than trusting the totals.
+layout itself rather than trusting the totals. The third was methodological and invisible in
+every number it produced: the denominator was the up-rate of the whole condition, so a member
+that abstained whenever the tape was falling was scored against a market it never sat through and
+paid for the abstention as though it were a forecast — while a caller that was right *against*
+its own tape looked no better than drift. The denominator is now paired to the votes, the up-rate
+of exactly the slices that strategy spoke on, and the walk refuses to publish any bucket that
+cannot supply its own paired base rate instead of borrowing the pooled one.
 
 The desk was the quieter find. Clicking any tab did nothing, because a `)` was missing from the
 JS Global order panel's ternary and the entire inline `<script>` failed to parse — so nav,
@@ -315,18 +322,20 @@ chart.
    provider's opinion into a "median".
 3. Self-calibration from realized outcomes, with a leash that refuses to trust thin evidence.
 4. Attribution that can be switched off, inside a condition with two named axes: each
-   strategy's vote is weighted by its own realized excess over the base rate of its bucket,
-   measured out-of-sample — and the bucket is `Range :: Risk-Off`, the instrument's own
-   regime joined with a cross-asset reading of seven weighted prints scored point-in-time,
-   because skill earned while credit is tightening does not transfer into a melt-up. An
-   absent print is not a neutral one: below 55% of the panel's weight the macro axis abstains
-   and skill pools across the whole condition rather than crediting a regime nobody
-   measured. The same reading sizes the position (risk-off ×0.75, risk-on ×1.10), is carried
-   in every journal row, and is checked against the record: of the 21 joint conditions in the
-   1,029 graded slices, 14 carry enough votes to move a weight. The engine still refuses the
-   weights and runs a flat poll if the evidence is stale, incomplete, measured against a
-   library of a different size, or classified from a panel too thin to read. The divisors are
-   declared judgment constants, deliberately not fitted to the sample.
+   strategy's vote is weighted by its realized excess over the up-rate of the tape on the
+   slices that strategy actually voted on — never the condition-wide rate, which would pay an
+   abstainer for sitting out the falling tape — measured out-of-sample, inside a bucket that is
+   `Range :: Risk-Off`: the instrument's own regime joined with a cross-asset reading of seven
+   weighted prints scored point-in-time, because skill earned while credit is tightening does
+   not transfer into a melt-up. An absent print is not a neutral one: below 55% of the panel's
+   weight the macro axis abstains and the vote falls back to the strategy's own pooled paired
+   evidence rather than crediting a regime nobody measured. The same reading sizes the position
+   (risk-off ×0.75, risk-on ×1.10), is carried in every journal row, and is checked against the
+   record: of the 21 joint conditions in the 1,028 graded slices, 14 carry enough votes to move
+   a weight. The engine still refuses the weights and runs a flat poll if the evidence is stale,
+   incomplete, measured against a library of a different size, or classified from a panel too
+   thin to read. The divisors are declared judgment constants, deliberately not fitted to the
+   sample.
 5. Venue-agnostic risk layer — PSX cash, MT5 commodities and FX, PMEX futures. The
    bridge attaches only to the account it was configured for, and its link cost is a
    measured number (`tools/mt5_probe.py`), not an adjective.

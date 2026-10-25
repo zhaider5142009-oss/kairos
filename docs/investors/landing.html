@@ -68,10 +68,10 @@
 <section>
   <h2>What is actually built</h2>
   <div class="stat">
-    <div><b>20,626</b><small>lines of Python, 45 modules, public</small></div>
+    <div><b>20,646</b><small>lines of Python, 45 modules, public</small></div>
     <div><b>100</b><small>strategies selected per instrument, walk-forward</small></div>
     <div><b>6</b><small>configured council seats; a dead one shrinks the vote</small></div>
-    <div><b>1245</b><small>passing tests, money path included</small></div>
+    <div><b>1247</b><small>passing tests, money path included</small></div>
     <div><b>24/7</b><small>supervised daemon, watchdog, token-gated API</small></div>
   </div>
 </section>
@@ -190,12 +190,14 @@
   stored only the fused answer, so nothing in the system could be credited or demoted from
   evidence — the calibrations above graded the answer and none graded the voter. Now, every
   fifth bar, the walk re-derives features from only the history that existed <i>then</i>, takes
-  each vote, and grades it once that horizon's bars print — against the up-rate of its own
-  bucket, same instrument, same horizon, same regime, because being right 70% of the time on a
-  tape that rose 70% of the time proves nothing. Weights are bounded to 0.5–1.5, shrunk toward
-  1.0 by sample size, and <b>the engine refuses them outright</b> — falling back to a flat poll
-  it names on the page — if the evidence is stale, incomplete, or measured against a library of
-  a different size. A weight you cannot switch off is a weight you cannot audit.</p>
+  each vote, and grades it once that horizon's bars print — against the up-rate of the tape over
+  exactly the slices that vote was cast on, same instrument, same horizon, same condition,
+  because being right 70% of the time on a tape that rose 70% of the time proves nothing, and
+  because a member that abstains whenever the tape falls must not be paid for the abstention.
+  Weights are bounded to 0.5–1.5, shrunk toward 1.0 by sample size, and <b>the engine refuses
+  them outright</b> — falling back to a flat poll it names on the page — if the evidence is
+  stale, incomplete, or measured against a library of a different size. A weight you cannot
+  switch off is a weight you cannot audit.</p>
   <p class="lede">Two defects came out of using it rather than writing it. The first walk
   printed a raw hit rate above 100% and raised nothing: a counter was adding long votes into the
   <i>hits</i> column, so the arithmetic was impossible and every number built on it still looked
@@ -242,7 +244,7 @@
   numbers and the code agree.</p>
   <pre>git clone https://github.com/zhaider5142009-oss/kairos &amp;&amp; cd kairos
 pip install -r requirements.txt
-python -m pytest tests -q                     # 1245 tests
+python -m pytest tests -q                     # 1247 tests
 python -m kairos.cli backtest GOLD WTI HBL    # reproduce a sweep, costs modelled
 python -m kairos.cli feedback                 # realized record, live from the journal
 python tools/make_track_record.py             # rebuild the published ledger</pre>

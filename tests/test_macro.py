@@ -519,6 +519,9 @@ def _counts_with(cond: str, *, votes: int, hits: int, longs: int,
     st = A.ensure_strategy(counts, "Vol Rider", "Trend", (5,))
     st["by_bucket"][f"5|{cond}"] = [votes, hits, longs, votes - longs]
     counts["base"]["5"][cond] = list(base)
+    # the weight's denominator is the tape over the slices this strategy voted
+    # on, at the condition's rate here because it voted on every shown slice
+    st["base_by_bucket"][f"5|{cond}"] = [votes, int(round(base[1] / base[0] * votes))]
     return counts
 
 

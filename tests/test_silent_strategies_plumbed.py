@@ -2,8 +2,8 @@
 
 `tools/strategy_attribution.py` grades whatever a strategy *claims*, so a
 strategy that returns None on every slice is indistinguishable from one that
-looked at the data and stayed quiet. Fourteen of the hundred recorded exactly
-zero votes across all 1,029 slices. These tests hold up the three that were
+looked at the data and stayed quiet. Around a dozen of the hundred recorded
+exactly zero votes across the walk. These tests hold up the three that were
 defects rather than deliberate silences, plus the one that was reading a hole
 in the data as its loudest signal.
 """

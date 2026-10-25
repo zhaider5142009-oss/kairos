@@ -223,6 +223,26 @@ def _bad_buckets(counts: dict) -> list[str]:
                 bad.append(f"{name} @ {where}: {hits} hits on {votes} votes")
             if longs + shorts != votes:
                 bad.append(f"{name} @ {where}: split {longs}/{shorts} != {votes} votes")
+        # Every bucket a weight can be read from needs its paired denominator.
+        # Without this, a regression in `grade` publishes an artifact whose
+        # loader answers "no base rate" for the whole library, which reads like
+        # "nothing has an edge" when the real event is a missing column. A
+        # bucket with no votes has no denominator to need; `ensure_strategy`
+        # pre-creates one per horizon so an abstention is still visible as a row.
+        bases = [(f"horizon {h}", st.get("base_by_horizon", {}).get(h))
+                 for h, b in (st.get("by_horizon") or {}).items() if int(b[0])]
+        bases += [(f"bucket {k}", st.get("base_by_bucket", {}).get(k))
+                  for k, b in (st.get("by_bucket") or {}).items() if int(b[0])]
+        for where, b in bases:
+            if b is None:
+                bad.append(f"{name} @ {where}: no paired base rate")
+                continue
+            if len(b) != 2:
+                bad.append(f"{name} @ {where}: base is not (slices, up) ({b})")
+                continue
+            slices, up = (int(x) for x in b)
+            if up > slices:
+                bad.append(f"{name} @ {where}: {up} up-slices on {slices} slices")
     return bad
 
 
@@ -233,20 +253,31 @@ def _report(counts: dict, out_path: Path) -> tuple[A.Attribution | None, str]:
     in a bull sample every long-biased strategy reads 60-75% correct, so the
     leaderboard became a census of who was pointed up. Each row is therefore
     stated as votes minus the hits the strategy's own long/short mix would have
-    collected against that horizon's up-frequency — the same subtraction the
-    weights use, printed next to the base rate that makes it interpretable.
+    collected against the up-frequency of the slices it was graded on — the same
+    paired subtraction the weights use, printed next to the base rate that makes
+    it interpretable.
     """
     base = counts.get("base") or {}
     rows = []
+    unranked = 0
     for name, st in counts["strategies"].items():
         for h, bucket in (st.get("by_horizon") or {}).items():
             n = int(bucket[0])
             if not n:
                 continue
-            p_up = A._p_up((base.get(str(h)) or {}).get("_all"))
-            exp = A._expected(bucket, p_up) if p_up is not None else n * 0.5
+            p_up = A._p_up((st.get("base_by_horizon") or {}).get(str(h)))
+            if p_up is None:
+                # Below MIN_BASE_SLICES the paired tape is a handful of slices:
+                # there is no reference to call a hit rate ahead or behind. The
+                # bucket still counts in the horizon's vote totals; it is only
+                # the ranking that refuses to invent a 50% reference for it.
+                unranked += 1
+                rows.append((0.0, n, int(h), name, st["category"],
+                             int(bucket[1]), None))
+                continue
+            exp = A._expected(bucket, p_up)
             rows.append(((int(bucket[1]) - exp) / (n + 1.0), n, int(h), name,
-                         st["category"], int(bucket[1]), p_up))
+                         st["category"], int(bucket[1]), exp / n))
     # discount by evidence: a thin bucket's excess is mostly noise, so cap how
     # much a handful of votes can buy it on the leaderboard
     rows.sort(key=lambda r: -r[0] * min(r[1], 300))
@@ -294,11 +325,18 @@ def _report(counts: dict, out_path: Path) -> tuple[A.Attribution | None, str]:
             print("  nothing graded at this horizon")
             continue
         print("  ahead of the tape: " + ", ".join(
-            f"{n} ({int(nn)} votes {hr / nn:.0%} vs {pr:.0%}, {exc:+.1%}/vote)"
-            for exc, nn, _h, n, _c, hr, pr in sel[:5] if exc > 0))
+            f"{n} ({int(nn)} votes {hr / nn:.0%} vs {pr:.0%} from its own mix, "
+            f"{exc:+.1%}/vote)"
+            for exc, nn, _h, n, _c, hr, pr in sel[:5] if exc > 0 and pr is not None))
         print("  behind the tape:  " + ", ".join(
-            f"{n} ({int(nn)} votes {hr / nn:.0%} vs {pr:.0%}, {exc:+.1%}/vote)"
-            for exc, nn, _h, n, _c, hr, pr in sel[-5:][::-1] if exc < 0))
+            f"{n} ({int(nn)} votes {hr / nn:.0%} vs {pr:.0%} from its own mix, "
+            f"{exc:+.1%}/vote)"
+            for exc, nn, _h, n, _c, hr, pr in sel[-5:][::-1]
+            if exc < 0 and pr is not None))
+    if unranked:
+        print(f"\n{unranked} strategy-horizons are counted above but cannot be "
+              f"ranked: the tape on their own slices has under "
+              f"{A.MIN_BASE_SLICES} observations")
     attr, reason = A.load(out_path, library_size=int(counts["library_size"]))
     if attr is None:
         print(f"\nTHE ENGINE WILL NOT USE THIS ARTIFACT: {reason}")

@@ -56,8 +56,17 @@ ARTIFACT_PATH = CFG.data_dir / "strategy_attribution.json"
 # counts, but their keys were spelled without the macro half, so every live
 # lookup would miss and report "no coverage" while looking like a finding. A
 # refusal that names the schema is honest; a flat poll that looks measured is
-# not. Re-measure with tools/strategy_attribution.py to produce schema 2.
-SCHEMA = 2
+# not. Re-measure with tools/strategy_attribution.py to produce schema 3.
+#
+# Bumped to 3 when the denominator became *paired*: schema 2 compared a
+# strategy's hits with the condition's up-frequency over every slice of every
+# instrument, including the slices that strategy abstained on. A member that
+# only speaks in rising tapes therefore collected the promotion its abstentions
+# spared it, and a member that spoke in falling tapes was paid for the drift it
+# stood against. Each row now carries `base_by_horizon`/`base_by_bucket`, the
+# tape over exactly the slices it graded, so schema-2 counts are not silently
+# re-read under the new rule.
+SCHEMA = 3
 
 # The horizons a thesis is graded at. 5 is what the desk trades; 21 is what an
 # investment committee claims to believe. Measuring both is the only way to
@@ -106,6 +115,7 @@ def ensure_strategy(counts: dict[str, Any], name: str, category: str = "",
     if st is None:
         st = {"category": category, "slices_seen": 0, "errors": 0, "votes": 0,
               "strength_sum": 0.0, "by_horizon": {}, "by_bucket": {},
+              "base_by_horizon": {}, "base_by_bucket": {},
               "last_error": None}
         counts["strategies"][name] = st
     elif category and not st["category"]:
@@ -136,12 +146,14 @@ def note_outcome(counts: dict[str, Any], regime: str, outcomes: dict[int, float]
                  horizons: tuple[int, ...] = HORIZONS) -> None:
     """Record what the tape did on this slice, whoever voted.
 
-    This is the denominator that makes the rest honest. A strategy right 65% of
-    the time in a market that rose 70% of the time is not skilled, it is
-    riding; and a strategy wrong 40% of the time in the same tape is holding a
-    direction the library as a whole was not allowed to see. Skill is measured
-    against the base rate of the bucket it was earned in, so the base rate has
-    to be recorded on every slice — including the ones nobody voted on.
+    This is the condition's own up-frequency — what the report prints beside a
+    strategy's hit rate so the number can be read as a difference. It is
+    deliberately recorded on every slice, including the ones nobody voted on:
+    a condition's drift is a property of the condition, and a table that only
+    counted slices with a vote in them could not say how much of the tape was
+    skipped. The denominator a *weight* is measured against is the paired one
+    on each strategy row (`base_by_horizon`/`base_by_bucket`), because a hit
+    rate covers only the slices that strategy chose to speak on.
     """
     base = counts.setdefault("base", {})
     for h, realized in outcomes.items():
@@ -183,6 +195,17 @@ def grade(counts: dict[str, Any], name: str, category: str, direction: int,
         _accumulate(bucket, correct, side)
         key = f"{int(h)}|{regime}"
         _accumulate(st["by_bucket"].setdefault(key, [0, 0, 0, 0]), correct, side)
+        # The denominator is paired to the votes: how often this horizon rose on
+        # the slices *this* strategy spoke on. A member that abstains whenever
+        # the tape is falling would otherwise be compared with a market it never
+        # sat through and paid for the abstention as though it were a forecast.
+        _note_base(st["base_by_horizon"].setdefault(str(int(h)), [0, 0]), realized)
+        _note_base(st["base_by_bucket"].setdefault(key, [0, 0]), realized)
+
+
+def _note_base(pair: list[int], realized: float) -> None:
+    pair[0] += 1
+    pair[1] += 1 if float(realized) > 0 else 0
 
 
 def _accumulate(bucket: list[int], correct: int, side: int) -> None:
@@ -283,26 +306,22 @@ class Attribution:
             return 1.0, "no coverage"
         if st.get("errors", 0) > BROKEN_ERROR_RATE * max(st["slices_seen"], 1):
             return 1.0, "broken"
-        base_h = (self.counts.get("base") or {}).get(str(horizon)) or {}
-        bucket = (st.get("by_bucket") or {}).get(f"{horizon}|{regime}")
+        key = f"{horizon}|{regime}"
+        bucket = (st.get("by_bucket") or {}).get(key)
         if bucket and int(bucket[0]) >= MIN_REGIME_CALLS:
-            # `or`, not a None check: a regime in which nothing rose has a base
-            # rate of exactly 0.0, and 0.0 is falsy, so the chain silently swapped
-            # in the pooled rate. That is the one regime where the correction
-            # matters most — measured against a 70%-up `_all` instead of its own
-            # 0.0, a short-only strategy that was right purely because the tape
-            # never rose collects the full MAX_WEIGHT promotion for zero skill,
-            # while a long-only strategy that was right *against* that tape is
-            # scored as barely better than its bias and stays near 1.0.
-            p_up = _p_up(base_h.get(regime))
-            if p_up is None:
-                p_up = _p_up(base_h.get("_all"))
+            # The paired denominator, not the condition's overall up-frequency:
+            # a bucket's hits are compared with how often this horizon rose on
+            # the slices this strategy was graded on. `is None`, not `or` — a
+            # regime in which nothing rose has a base rate of exactly 0.0, and
+            # treating that as missing is what once inverted the drifter and the
+            # counter-trend caller in a crash tape.
+            p_up = _p_up((st.get("base_by_bucket") or {}).get(key))
             if p_up is None:
                 return 1.0, "no base rate"
             return _weight_from(bucket, _expected(bucket, p_up)), "regime"
         pooled = (st.get("by_horizon") or {}).get(str(horizon))
         if pooled and int(pooled[0]) >= MIN_CALLS:
-            p_up = _p_up(base_h.get("_all"))
+            p_up = _p_up((st.get("base_by_horizon") or {}).get(str(horizon)))
             if p_up is None:
                 return 1.0, "no base rate"
             return _weight_from(pooled, _expected(pooled, p_up)), "pooled"
@@ -315,6 +334,7 @@ class Attribution:
                 "votes": st.get("votes", 0), "errors": st.get("errors", 0),
                 "slices_seen": st.get("slices_seen", 0),
                 "by_horizon": st.get("by_horizon", {}),
+                "base_by_horizon": st.get("base_by_horizon", {}),
                 "regime_buckets": {k: v for k, v in st.get("by_bucket", {}).items()
                                    if k.startswith(f"{int(horizon)}|")}}
 

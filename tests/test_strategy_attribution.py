@@ -52,7 +52,8 @@ def _counts(*, graded: int = A.MIN_VOTES) -> dict:
 
 
 def _strategy(counts, name, *, category="Trend", horizon=5, pooled=None,
-              in_regime=None, errors=0, slices=100) -> dict:
+              in_regime=None, errors=0, slices=100, tape_up=None,
+              regime_up=None) -> dict:
     """Fill one strategy row from stated buckets.
 
     `pooled` is `(votes, hits, longs)` for the whole horizon; `in_regime` adds
@@ -60,6 +61,12 @@ def _strategy(counts, name, *, category="Trend", horizon=5, pooled=None,
     buckets every vote is directional — which is exactly the split the weight
     needs, since a long in a bull tape and a short in a bear one both look
     right before the tape is subtracted.
+
+    `tape_up` / `regime_up` are how often the tape rose on the slices *this
+    strategy voted on* — the paired denominator its hit rate is measured
+    against. They are separate from `_base`, which is the whole-condition
+    frequency the desk prints. A strategy that abstains in half the slices has
+    two different references, and confusing them is the defect this pins.
     """
     st = A.ensure_strategy(counts, name, category, tuple(counts["horizons"]))
     st["errors"] = errors
@@ -67,9 +74,13 @@ def _strategy(counts, name, *, category="Trend", horizon=5, pooled=None,
     if pooled is not None:
         n, hits, longs = pooled
         st["by_horizon"][str(horizon)] = [n, hits, longs, n - longs]
+        if tape_up is not None:
+            st["base_by_horizon"][str(horizon)] = [n, int(round(tape_up * n))]
     if in_regime is not None:
         regime, n, hits, longs = in_regime
         st["by_bucket"][f"{horizon}|{regime}"] = [n, hits, longs, n - longs]
+        if regime_up is not None:
+            st["base_by_bucket"][f"{horizon}|{regime}"] = [n, int(round(regime_up * n))]
     return st
 
 
@@ -95,7 +106,7 @@ def test_skill_is_a_difference_from_the_tape_not_a_ratio():
     """Long-only and right 70% in a tape that rose 70% of the time has
     demonstrated nothing, and must not be promoted."""
     counts = _counts()
-    _strategy(counts, "Drift Rider", pooled=(400, 280, 400))
+    _strategy(counts, "Drift Rider", pooled=(400, 280, 400), tape_up=0.70)
     _base(counts, 5, 0.70)
     attr = A.Attribution(counts)
     w, tag = attr.weight_tag("Drift Rider", 5, "Range")
@@ -103,12 +114,33 @@ def test_skill_is_a_difference_from_the_tape_not_a_ratio():
     assert w == pytest.approx(1.0, abs=0.001), f"drift was read as skill: {w}"
 
 
+def test_skill_is_measured_on_the_slices_the_strategy_spoke_on():
+    """A hit rate must be compared with the tape over the same slices.
+
+    `_derive` used the condition-wide up-frequency — every slice of every
+    instrument in that condition — while the hit rate came only from the slices
+    the strategy actually voted on. A member that abstains in down tapes then
+    reads as skilled for having skipped them: below, 360 hits on 400 long votes
+    (90%) against a pooled tape that rose 50% of the time is the maximum
+    promotion, while the 400 slices it sat on rose 95% of the time, on which
+    the same record is ten points *behind* always-long. Paid either way, the
+    weight is a payment for when the member chose to speak, not for what it
+    said.
+    """
+    counts = _counts()
+    _strategy(counts, "Fair Weather", pooled=(400, 360, 400), tape_up=0.95)
+    _base(counts, 5, 0.50, slices=800)
+    w, tag = A.Attribution(counts).weight_tag("Fair Weather", 5, "Range")
+    assert tag == "pooled"
+    assert w < 0.95, f"the call was paid for the tape it only spoke on: {w}"
+
+
 def test_a_real_edge_moves_the_weight_both_ways():
     counts = _counts()
     # 60% of 400 long votes in a tape that rose 45% of the time: genuinely ahead.
-    _strategy(counts, "Good", pooled=(400, 240, 400))
+    _strategy(counts, "Good", pooled=(400, 240, 400), tape_up=0.45)
     # 30% of 400 in the same tape: genuinely behind.
-    _strategy(counts, "Bad", pooled=(400, 120, 400))
+    _strategy(counts, "Bad", pooled=(400, 120, 400), tape_up=0.45)
     _base(counts, 5, 0.45)
     attr = A.Attribution(counts)
     good = attr.weight("Good", 5, "Range")
@@ -118,7 +150,7 @@ def test_a_real_edge_moves_the_weight_both_ways():
     # a short seller is judged against the same tape from the other side: 60%
     # of 400 in a tape that fell 55% of the time is only just ahead
     counts2 = _counts()
-    _strategy(counts2, "Shorty", pooled=(400, 240, 0))
+    _strategy(counts2, "Shorty", pooled=(400, 240, 0), tape_up=0.45)
     _base(counts2, 5, 0.45)
     assert A.Attribution(counts2).weight("Shorty", 5, "Range") > 1.05
 
@@ -128,8 +160,8 @@ def test_a_thin_bucket_cannot_move_a_weight_at_all():
     separated skill from a coin flip, so it must not touch an order."""
     counts = _counts()
     _base(counts, 5, 0.5)
-    _strategy(counts, "Twelve", pooled=(12, 9, 12))          # 75% on a dozen
-    _strategy(counts, "FourHundred", pooled=(400, 300, 400))  # 75% on four hundred
+    _strategy(counts, "Twelve", pooled=(12, 9, 12), tape_up=0.5)          # 75% on a dozen
+    _strategy(counts, "FourHundred", pooled=(400, 300, 400), tape_up=0.5)  # 75% on four hundred
     attr = A.Attribution(counts)
     thin, thin_tag = attr.weight_tag("Twelve", 5, "Range")
     thick, thick_tag = attr.weight_tag("FourHundred", 5, "Range")
@@ -145,8 +177,8 @@ def test_regime_evidence_is_used_when_there_is_enough_of_it():
     _base(counts, 5, 0.55)                                  # pooled: tape up 55%
     _base(counts, 5, 0.60, regime="Range")
     _base(counts, 5, 0.35, regime="Bull-Volatile")
-    _strategy(counts, "Split", pooled=(400, 200, 400),
-              in_regime=("Range", 120, 100, 120))
+    _strategy(counts, "Split", pooled=(400, 200, 400), tape_up=0.55,
+              in_regime=("Range", 120, 100, 120), regime_up=0.60)
     attr = A.Attribution(counts)
     # in Range: 100/120 = 83% long against a tape up 60% → ahead
     # pooled:   200/400 = 50% long against a tape up 55% → behind
@@ -178,8 +210,8 @@ def test_a_regime_where_nothing_rose_still_has_a_base_rate():
     counts = _counts()
     _base(counts, 5, 0.70)                                  # pooled: tape up 70%
     _base(counts, 5, 0.00, regime="Crash")                  # in Crash: never rose
-    _strategy(counts, "Down Rider", in_regime=("Crash", 40, 40, 0))       # 40 shorts, all hit
-    _strategy(counts, "Against The Tape", in_regime=("Crash", 40, 32, 40))  # 40 longs, 32 hit
+    _strategy(counts, "Down Rider", in_regime=("Crash", 40, 40, 0), regime_up=0.0)       # 40 shorts, all hit
+    _strategy(counts, "Against The Tape", in_regime=("Crash", 40, 32, 40), regime_up=0.0)  # 40 longs, 32 hit
     attr = A.Attribution(counts)
     assert A._p_up([400, 0]) == 0.0, "the fixture no longer is the case under test"
     assert attr.weight("Down Rider", 5, "Crash") == pytest.approx(1.0, abs=1e-9), \
@@ -191,8 +223,8 @@ def test_a_regime_where_nothing_rose_still_has_a_base_rate():
 def test_no_coverage_and_broken_and_no_base_are_all_said_loudly():
     counts = _counts()
     _strategy(counts, "Silent")                             # never voted
-    _strategy(counts, "Thrower", pooled=(400, 100, 400),
-              errors=50, slices=100)                        # raised on half
+    _strategy(counts, "Thrower", pooled=(400, 100, 400),   # raised on half
+              errors=50, slices=100, tape_up=0.5)
     _strategy(counts, "Orphan", pooled=(400, 300, 400))     # but no base rate
     attr = A.Attribution(counts)
     assert attr.weight("Silent", 5, "Range") == 1.0
@@ -278,8 +310,8 @@ def test_fuse_without_attribution_is_the_old_flat_poll():
 def test_a_demoted_strategy_still_speaks_at_half_voice():
     counts = _counts()
     _base(counts, 5, 0.5)
-    _strategy(counts, "Bull", pooled=(400, 40, 400))      # badly wrong, long
-    _strategy(counts, "Bear", pooled=(400, 360, 0))       # badly right, short
+    _strategy(counts, "Bull", pooled=(400, 40, 400), tape_up=0.5)      # badly wrong, long
+    _strategy(counts, "Bear", pooled=(400, 360, 0), tape_up=0.5)       # badly right, short
     attr = A.Attribution(counts).view()
     votes = [StrategyVote("Bull", "Trend", 1, 0.9),
              StrategyVote("Bear", "Reversion", -1, 0.9)]
@@ -304,7 +336,7 @@ def test_attribution_status_does_not_accumulate_across_a_watchlist():
     report the process's history inside tonight's signal."""
     counts = _counts()
     _base(counts, 5, 0.5)
-    _strategy(counts, "Ok", pooled=(400, 300, 400))
+    _strategy(counts, "Ok", pooled=(400, 300, 400), tape_up=0.5)
     attr = A.Attribution(counts)
     votes = [StrategyVote("Ok", "Trend", 1, 0.5)]
     first = fuse("A", [], votes, "Range", 5, attribution=attr.view()).details
@@ -354,6 +386,11 @@ def test_slice_counts_and_base_rates_reach_strategies_that_never_vote():
     # the pooled base counts every slice, including the ones nobody voted on
     assert counts["base"]["5"]["_all"] == [2, 1]
     assert counts["base"]["5"]["Range"] == [2, 1]
+    # the denominator a weight is measured against counts only the slices that
+    # strategy voted on — here one, on which the tape rose
+    assert counts["strategies"]["Voter"]["base_by_horizon"]["5"] == [1, 1]
+    assert counts["strategies"]["Voter"]["base_by_bucket"]["5|Range"] == [1, 1]
+    assert counts["strategies"]["Quiet"]["base_by_horizon"] == {}
     assert counts["graded"] == 1
     # a vote that is not a claim is not graded
     A.grade(counts, "Voter", "Trend", 0, 0.5, "Range", {5: 0.02})
@@ -373,10 +410,45 @@ def test_a_graded_vote_lands_in_its_own_column_and_nowhere_else():
     assert counts["strategies"]["Long"]["by_horizon"]["5"] == [2, 1, 2, 0]
     assert counts["strategies"]["Short"]["by_horizon"]["5"] == [1, 1, 0, 1]
     assert counts["strategies"]["Long"]["by_bucket"]["5|Range"] == [2, 1, 2, 0]
+    # one paired base observation per graded vote, and it records the tape, not
+    # the call: Long saw one up and one down slice; Short saw one down slice
+    assert counts["strategies"]["Long"]["base_by_horizon"]["5"] == [2, 1]
+    assert counts["strategies"]["Short"]["base_by_horizon"]["5"] == [1, 0]
+    assert counts["strategies"]["Long"]["base_by_bucket"]["5|Range"] == [2, 1]
     for st in counts["strategies"].values():
         for bucket in list(st["by_horizon"].values()) + list(st["by_bucket"].values()):
             assert bucket[1] <= bucket[0], f"hits exceed votes: {bucket}"
             assert bucket[2] + bucket[3] == bucket[0], f"votes lost in the split: {bucket}"
+
+
+def test_a_bucket_without_its_paired_denominator_is_not_published():
+    """The sweep's own gate on the column `_derive` now reads.
+
+    A run where `grade` forgot the paired base would still produce a
+    well-shaped artifact; every strategy would load as *no base rate* and the
+    poll would stay flat, which is indistinguishable at the desk from "nothing
+    has an edge". The tool therefore refuses to publish it. An abstaining
+    member — a row whose pre-created horizon bucket is still all zeros — is not
+    a missing denominator and must not block the run.
+    """
+    import sys
+    from pathlib import Path as _Path
+    tools = _Path(__file__).resolve().parent.parent / "tools"
+    if str(tools) not in sys.path:
+        sys.path.insert(0, str(tools))
+    from strategy_attribution import _bad_buckets
+
+    counts = _counts()
+    _strategy(counts, "Voter", pooled=(40, 30, 40), tape_up=0.5)
+    _strategy(counts, "Quiet")
+    assert _bad_buckets(counts) == []
+
+    del counts["strategies"]["Voter"]["base_by_horizon"]["5"]
+    bad = _bad_buckets(counts)
+    assert any("Voter" in b and "no paired base rate" in b for b in bad), bad
+
+    counts["strategies"]["Voter"]["base_by_horizon"]["5"] = [40, 41]
+    assert any("41 up-slices on 40 slices" in b for b in _bad_buckets(counts))
 
 
 # ------------------------------------------------------------------ journal
