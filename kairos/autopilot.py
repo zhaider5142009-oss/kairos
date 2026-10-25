@@ -245,6 +245,7 @@ class Autopilot:
                 "equity_peak": 0.0, "peak_since": None,
                 "equity_peak_by_book": {},
                 "last_rotation": None, "rotated": [], "psx_day_start": None,
+                "venue_day_start": {},
                 "macro": None, "news_desk": None}
 
     def _load(self) -> dict[str, Any]:
@@ -965,6 +966,28 @@ class Autopilot:
             return 0.0
         return round(eq - float(snap["equity"]), 2)
 
+    def _venue_day_pnl(self, key: str, equity: Any) -> float:
+        """Today's move on a book whose venue reports no day P&L.
+
+        The spot exchange reports balances, not a day figure, and `None` there
+        is not a small loss — it is a loss nobody measured, which `_merge_account`
+        used to sum as zero and the per-book brake skipped entirely. Measured
+        against the first usable equity of the calendar day, the same way the
+        rupee book is, and for the same reason a zero read stamps nothing: a
+        baseline of zero pins the day's loss at nothing for the rest of the
+        session. The loop never funds this account, so a deposit is not a profit.
+        """
+        eq = round(_figure(equity), 2)
+        if eq <= 0:
+            return 0.0
+        today = datetime.now().strftime("%Y-%m-%d")
+        starts = self.st.setdefault("venue_day_start", {})
+        snap = starts.get(key) or {}
+        if snap.get("date") != today or _figure(snap.get("equity")) <= 0:
+            starts[key] = {"date": today, "equity": eq}
+            return 0.0
+        return round(eq - _figure(snap["equity"]), 2)
+
     def _psx_part(self, book: dict[str, Any]) -> dict[str, Any]:
         """The PKR book in account-snapshot shape (what the gates read)."""
         return {"venue": "JS_GLOBAL", "balance": book["cash"],
@@ -996,6 +1019,14 @@ class Autopilot:
             from . import binance as _BN
             a = _BN.BINANCE.account()
             if a:
+                # spot answers balances, not a day figure. Left as None it makes
+                # the merged day unknown and leaves this book's own daily brake
+                # with nothing to compare, so a crypto drawdown inside a trading
+                # day reaches neither cover. Measured from the first read instead.
+                if a.get("day_pnl") is None and _figure(a.get("equity")) > 0:
+                    a["day_pnl"] = self._venue_day_pnl("BINANCE", a.get("equity"))
+                    a["day_pnl_from"] = ("spot equity since the first read of "
+                                         "the day")
                 out["BINANCE"] = a
         return out
 
@@ -1030,10 +1061,18 @@ class Autopilot:
         if len(rows) == 1:
             return rows[0]
         counts = [p.get("open_positions") for p in rows]
+        days = [(p.get("day_pnl"), _figure(p.get("equity"))) for p in rows]
         return {"venue": "+".join(str(p.get("venue")) for p in rows),
                 "balance": round(sum(float(p.get("balance") or 0) for p in rows), 2),
                 "equity": round(sum(float(p.get("equity") or 0) for p in rows), 2),
-                "day_pnl": round(sum(float(p.get("day_pnl") or 0) for p in rows), 2),
+                # A funded venue that cannot say what it lost today makes the
+                # total unknown; summing it as zero is how a crypto book's loss
+                # disappears into a dollar book's figure and the merged brake
+                # reads a smaller number than any account is actually carrying.
+                # An empty book has no day to report, so it adds nothing and
+                # does not blind the venues that did answer.
+                "day_pnl": (None if any(d is None and eq > 0 for d, eq in days)
+                            else round(sum(float(d or 0) for d, _ in days), 2)),
                 # one venue that could not count its positions makes the total
                 # unknown; summing it as zero would print a flat account
                 "open_positions": (None if any(c is None for c in counts)
@@ -1913,8 +1952,8 @@ class Autopilot:
                  "last_error",
                  "feedback_error", "state_saved", "state_error",
                  "signals", "actions",
-                 "held", "consec_losses", "psx_day_start", "macro",
-                 "news_desk")},
+                 "held", "consec_losses", "psx_day_start", "venue_day_start",
+                 "macro", "news_desk")},
                 "risk_posture": posture,
                 "kill_switch": KILL.engaged(),
                 "mt5": {"connected": self.mt5.connected,
