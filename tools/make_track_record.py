@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from kairos.feedback import track_record  # noqa: E402
+from kairos.execution import money_label  # noqa: E402
 
 OUT = ROOT / "docs" / "investors" / "TRACK_RECORD.md"
 LINE = re.compile(r"^(\w+): (\w+) ret=([+-][\d.]+)% bench=([+-][\d.]+)% "
@@ -105,6 +106,27 @@ def _autopilot() -> dict:
 def _live_book() -> dict:
     p = ROOT / "data" / "livebook.json"
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+
+
+def _money(amount: float, code: str | None, dp: int = 2) -> str:
+    """An amount as a statement prints it: `−Rs 3,501.69`, `$ 1,000,000`.
+
+    The sign leads and the label comes from the book, not from this file. The
+    line used to read `realized P&L Rs -3,501.69` over whatever currency the book
+    happened to be counting in, which is two defects in one phrase: a minus stuck
+    on the end of a rupee amount, and a rupee label over a book opened in dollars.
+    """
+    sign = "−" if amount < 0 else ""
+    return f"{sign}{money_label(code)} {abs(amount):,.{dp}f}"
+
+
+def _book_line(pa: dict, ap: dict) -> str:
+    """Section 3's money line, labelled in the money the paper book holds."""
+    ccy = pa.get("currency")
+    return (f"- Capital {_money(pa.get('capital', 0), ccy, 0)} · "
+            f"cash {_money(pa.get('cash', 0), ccy, 0)} · "
+            f"realized P&L {_money(pa.get('realized_pnl', 0), ccy)} "
+            f"since {ap.get('last_rotation', 'start')}")
 
 
 _SEVEN_DAY: dict[str, bool] = {}
@@ -364,8 +386,7 @@ def main() -> int:
     w("")
     w("## 3. Live paper book")
     w("")
-    w(f"- Capital Rs {pa.get('capital', 0):,.0f} · equity Rs {pa.get('cash', 0):,.0f} · "
-      f"realized P&L Rs {pa.get('realized_pnl', 0):,.2f} since {ap.get('last_rotation', 'start')}")
+    w(_book_line(pa, ap))
     w(f"- Autopilot cycles run: **{ap.get('cycles', 0)}** · mode `{ap.get('mode')}` · "
       f"live-armed: {ap.get('armed_live')}")
     w(f"- Open paper positions: {len(pa.get('positions') or {})} · fills: {len(pa.get('fills') or [])}")
@@ -374,7 +395,8 @@ def main() -> int:
     w("")
     eq = lb.get("equity")
     w(f"- Holdings tracked: {len(lb.get('holdings') or [])}"
-      + (f" · broker equity Rs {eq:,.2f}" if isinstance(eq, (int, float)) else
+      + (f" · broker equity {_money(eq, lb.get('currency'))}"
+         if isinstance(eq, (int, float)) else
          " · equity not fetched in this snapshot"))
     w("- KAIROS observes this book; real orders require three independent keys "
       "(`autopilot.auto_place`, `js_global.allow_orders`, the broker PIN) and the "

@@ -421,6 +421,10 @@ const $=s=>document.querySelector(s);
 const $$=s=>[...document.querySelectorAll(s)];
 const pct=(v,d=2)=>v==null?'—':(v*100).toFixed(d)+'%';
 const num=(v,d=2)=>v==null?'—':Number(v).toLocaleString(undefined,{maximumFractionDigits:d,minimumFractionDigits:d});
+// The risk book can be MT5 (USD) or JS Global (PKR), and it used to be labelled
+// "Rs" whichever one was up. The label travels with the account.
+const CCY={PKR:'Rs',USD:'$',EUR:'€',GBP:'£',INR:'₹',JPY:'¥'};
+const ccyLabel=c=>CCY[String(c||'PKR').toUpperCase()]||String(c||'PKR').toUpperCase();
 // direction arrives as "STRONG BUY"/"BUY"/"HOLD"/"SELL"/"STRONG SELL" or ±1 — normalize
 const dirCode=v=>{if(typeof v==='string'){if(v.includes('BUY'))return 1;if(v.includes('SELL'))return -1;return 0;}
   return v>0?1:v<0?-1:0;};
@@ -808,15 +812,15 @@ function lbBookHtml(){
   // names the number each venue's orders were actually sized against.
   const head=vs.length>1
     ? `sizing book ${vs.map(v=>`<span class="mono">${esc(v)}</span> ${num(eq[v],0)}`).join(' · ')} <span class="dim">(merged ${num(la.equity,0)} mixes currencies)</span>`
-    : `equity Rs <b>${num(la.equity,0)}</b>`;
-  return `risk book <span class="mono">${esc(la.venue||'')}</span>: ${head} · free cash Rs ${num(la.balance,0)} · day P&L <span class="${(la.day_pnl||0)>=0?'up':'down'}">${num(la.day_pnl,0)}</span> · ${keys} · `+b;
+    : `equity ${ccyLabel(la.currency)} <b>${num(la.equity,0)}</b>`;
+  return `risk book <span class="mono">${esc(la.venue||'')}</span>: ${head} · free cash ${ccyLabel(la.currency)} ${num(la.balance,0)} · day P&L <span class="${(la.day_pnl||0)>=0?'up':'down'}">${num(la.day_pnl,0)}</span> · ${keys} · `+b;
 }
 async function lbReal(){
   const el=$('#lbbook');el.innerHTML='reading Web Trade Cast (read-only)…';
   el.dataset.manual='1';
   try{
     const r=await api('/api/jsg/book?force=1');
-    el.innerHTML=`real account: equity Rs <b>${num(r.equity,0)}</b> = free cash Rs ${num(r.cash,0)} + holdings Rs ${num(r.holdings_value,0)} · ${(r.holdings||[]).map(h=>`${esc(h.symbol)} ${num(h.qty,0)}@${num(h.mtm)}`).join(' ')||'no holdings'} · <span class="dim">${esc(r.ts||'')}</span>`;
+    el.innerHTML=`real account: equity ${ccyLabel(r.currency)} <b>${num(r.equity,0)}</b> = free cash ${ccyLabel(r.currency)} ${num(r.cash,0)} + holdings ${ccyLabel(r.currency)} ${num(r.holdings_value,0)} · ${(r.holdings||[]).map(h=>`${esc(h.symbol)} ${num(h.qty,0)}@${num(h.mtm)}`).join(' ')||'no holdings'} · <span class="dim">${esc(r.ts||'')}</span>`;
     loadLivebook();
   }catch(e){el.innerHTML=`<span class="down">real account unread: ${esc(e.message)}</span> — the loop fails closed on this, it never guesses`;}
 }

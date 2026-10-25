@@ -195,8 +195,9 @@ def test_a_deck_figure_in_a_prose_sentence_is_reachable(figures):
     # The money figure is quoted once, and corrupting it in place has to fire the
     # stamp guard — the sentence is reachable, not merely matched by a synthetic one.
     want = kit_stats.stamps(kit_stats.ledger())
-    money = want["realized_pkr"]
-    assert f"Paper book: {money} realized on Rs" in body, "the money sentence moved"
+    money = want["realized_money"]
+    label = money.split(" ")[0].lstrip("−")
+    assert f"Paper book: {money} realized on {label}" in body, "the money sentence moved"
     stale = body.replace(money, "−Rs 13.05", 1)
     assert _stale_stamps(stale, want), "corrupting the deck's rupee left the guard green"
 
@@ -283,7 +284,7 @@ def test_the_stamped_date_version_and_rupee_are_not_typed(path):
     assert not bad, f"{path.relative_to(ROOT)} carries a stale stamp: {bad}"
 
 
-def test_the_realized_rupee_is_a_figure_the_pack_can_get_wrong():
+def test_the_realized_money_is_a_figure_the_pack_can_get_wrong():
     """The money figure, and the parse it comes from, both shown to be reachable.
 
     Three ways this goes wrong, all of them live before this test existed: the pack
@@ -294,16 +295,19 @@ def test_the_realized_rupee_is_a_figure_the_pack_can_get_wrong():
     three thousand four hundred and ninety-eight rupees too small.
     """
     want = kit_stats.stamps(kit_stats.ledger())
-    live = want["realized_pkr"]
-    assert re.fullmatch(r"−?Rs [\d,]+\.\d{2}", live), live
+    live = want["realized_money"]
+    assert re.fullmatch(r"−?[A-Za-z$€£₹¥]{1,3} [\d,]+\.\d{2}", live), live
+    label = live.split(" ")[0].lstrip("−")
+
     # the figure the pack prints and the figure the ledger holds are the same money
-    def _money(s: str) -> float:
-        return float(s.replace("−", "-").replace("Rs", "").replace(",", "").replace(" ", ""))
+    def _amount(s: str) -> float:
+        return float(re.sub(r"[A-Za-z$€£₹¥]{1,3}", "", s)
+                     .replace("−", "-").replace(",", "").replace(" ", ""))
 
-    assert _money(live) == _money(kit_stats.ledger()["realized_pnl"]), live
+    assert _amount(live) == _amount(kit_stats.ledger()["realized_pnl"]), live
 
-    for sentence in (f"Paper book: {live} realized on Rs 1,000,000 across 545 cycles",
-                     f"The book is flat (realized P&L {live} on Rs 1,000,000 over 545)"):
+    for sentence in (f"Paper book: {live} realized on {label} 1,000,000 across 545 cycles",
+                     f"The book is flat (realized P&L {live} on {label} 1,000,000 over 545)"):
         assert _stale_stamps(sentence, want) == [], sentence
         wrong = sentence.replace(live, "−Rs 13.05", 1)
         assert wrong != sentence, "the stale example is already the live figure"
@@ -314,6 +318,49 @@ def test_the_realized_rupee_is_a_figure_the_pack_can_get_wrong():
             unsigned = sentence.replace(live, live[1:], 1)
             assert _stale_stamps(unsigned, want), \
                 "a minus in front of a gain reads as a figure, not as a claim"
+
+
+def test_a_book_in_dollars_is_not_published_in_rupees(monkeypatch, tmp_path):
+    """The label is the book's, and the guard reads it from the book.
+
+    `make_track_record` printed "Rs" as a literal over whatever the paper account
+    held, and this guard had "Rs" baked into both its pattern and its value — so
+    a book funded in dollars (`paper.currency: USD`) would have gone out with a
+    rupee label that the one checker pointed at the money figure agreed with. The
+    currency comes from the account state, and it travels inside the stamp.
+    """
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "paper_account.json").write_text(
+        '{"currency": "USD", "capital": 100000.0, "cash": 99349.4, '
+        '"realized_pnl": -650.25}', encoding="utf-8")
+    monkeypatch.setattr(kit_stats, "ROOT", tmp_path)
+    want = kit_stats.stamps({"realized_pnl": "-650.25",
+                             "ledger_generated": "2026-10-25"})
+    assert want["realized_money"] == "−$ 650.25", want
+    good = "Paper book: −$ 650.25 realized on $ 100,000 across 12 cycles"
+    assert _stale_stamps(good, want) == [], good
+    assert _stale_stamps(good.replace("$", "Rs"), want), \
+        "a rupee label over a dollar book passed the money guard"
+
+
+def test_the_ledger_prints_the_currency_the_book_holds(monkeypatch, tmp_path):
+    """A label the generator got wrong is a defect, not the standard.
+
+    The guard's expected label comes from `data/paper_account.json`, the file the
+    ledger is built from, so a ledger restamped in another currency is reported
+    instead of being adopted as the truth.
+    """
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "paper_account.json").write_text(
+        '{"currency": "PKR"}', encoding="utf-8")
+    monkeypatch.setattr(kit_stats, "ROOT", tmp_path)
+    monkeypatch.setattr(kit_stats, "LEDGER", tmp_path / "TRACK_RECORD.md")
+    (tmp_path / "TRACK_RECORD.md").write_text(
+        "- Capital $ 100,000 · cash $ 99,349 · realized P&L −$ 650.25 since now\n",
+        encoding="utf-8")
+    assert kit_stats.ledger()["currency_label"] == "$", "the label was not read"
+    assert kit_stats._book_currency() == "PKR"
+    assert kit_stats.stamps()["realized_money"] == "−Rs 650.25"
 
 
 def test_a_non_trade_count_is_a_figure_that_can_go_stale(figures):

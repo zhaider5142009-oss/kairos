@@ -340,6 +340,9 @@ def real_book(force: bool = False) -> dict[str, Any]:
                              "account": no})
     book_value = round(sum(h["value"] for h in holdings), 2)
     out = {"ok": True, "venue": "JS_GLOBAL", "accounts": names,
+           # a PSX brokerage settles in rupees; the desk labels the figures from
+           # this field rather than writing "Rs" over whatever it was handed
+           "currency": "PKR",
            "cash": round(cash_total, 2), "holdings_value": book_value,
            "equity": round(cash_total + book_value, 2),
            "equity_basis": "free cash + mark-to-market holdings",

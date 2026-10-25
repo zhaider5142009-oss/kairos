@@ -150,3 +150,35 @@ def test_a_weekend_date_is_never_published_as_a_maturity():
     for day in range(19, 26):
         got = gen._maturity_day(_dt.date(2026, 10, day), 5, seven_day=False)
         assert got.weekday() < 5, f"{got} came out of a snapshot on the {day}th"
+
+
+# ------------------------------------------------------------------ the book's money
+def test_the_book_line_is_labelled_in_the_books_own_money():
+    """The line printed "Rs" over whatever currency the account actually held.
+
+    `paper.currency` funds a book in dollars and the state file records the
+    currency it was opened with, so a dollar book would have published
+    "$ 99,349" as "Rs 99,349" — a rupee label over a dollar figure, in the one
+    document an investor can check. The label and the sign both come from the
+    book now.
+    """
+    usd = {"currency": "USD", "capital": 100_000.0, "cash": 99_349.4,
+           "realized_pnl": -650.25}
+    line = gen._book_line(usd, {"last_rotation": "2026-10-01"})
+    assert line == ("- Capital $ 100,000 · cash $ 99,349 · "
+                    "realized P&L −$ 650.25 since 2026-10-01"), line
+    assert "Rs" not in line, line
+    pkr = dict(usd, currency="PKR")
+    assert "realized P&L −Rs 650.25" in gen._book_line(pkr, {}), \
+        "a rupee book stopped printing rupees"
+
+
+def test_a_book_that_turns_positive_does_not_keep_its_minus():
+    """The sign is part of the amount: `Rs -3,501.69` reads as a loss forever.
+
+    The line used to print `realized P&L Rs {value:,.2f}`, so a gain and a loss
+    differed only by a hyphen between the label and the digits.
+    """
+    assert gen._money(12.5, "PKR") == "Rs 12.50"
+    assert gen._money(-12.5, "PKR") == "−Rs 12.50"
+    assert gen._money(0, "PKR") == "Rs 0.00"

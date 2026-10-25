@@ -20,6 +20,7 @@ from the live journals, with:
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -28,7 +29,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from kairos.execution import PAPER_CURRENCY, money_label  # noqa: E402
+
 LEDGER = ROOT / "docs" / "investors" / "TRACK_RECORD.md"
+# The label in front of an amount is part of the value, not a word in the
+# sentence: `−Rs 3,501.69` and `−$ 3,501.69` are the same figure in two books,
+# and a guard that hardcodes one of them certifies the other. A code it cannot
+# map reads as the code, which `money_label()` prints and this accepts.
+CUR = r"[A-Za-z$€£₹¥]{1,3}"
+MONEY = rf"([−-]?)\s*({CUR}) ([\d,]+\.\d{{2}})"
 
 
 def codebase() -> dict[str, int]:
@@ -88,13 +97,31 @@ def ledger() -> dict[str, str]:
     # stopped at the first thousand-group and reported the sign and the leading
     # digit of a figure three thousand four hundred and ninety-eight rupees bigger.
     for pattern, key in ((r"cycles run: \*\*([\d,]+)\*\*", "cycles"),
-                         (r"fills: (\d+)", "fills"),
-                         (r"realized P&L Rs (-?[\d,.]+)", "realized_pnl")):
+                         (r"fills: (\d+)", "fills")):
         m = re.search(pattern, body)
         out[key] = m.group(1) if m else "MISSING"
+    m = re.search(rf"realized P&L {MONEY}", body)
+    out["realized_pnl"] = (("-" if m.group(1) else "") + m.group(3)) if m else "MISSING"
+    out["currency_label"] = m.group(2) if m else "MISSING"
     m = re.search(r"^\| rebuilt from the journals on \| (.+?) \|", body, re.M)
     out["ledger_generated"] = m.group(1) if m else "not stamped"
     return out
+
+
+def _book_currency() -> str:
+    """The money the paper book was opened with, read from its own state file.
+
+    Not read back out of the ledger: a label the generator got wrong would then
+    be exactly the label the guard demanded, and the guard would certify the
+    defect it exists to catch. No state file is a fresh checkout, where the
+    book has never been opened and rupees are the default.
+    """
+    try:
+        state = json.loads((ROOT / "data" / "paper_account.json")
+                           .read_text(encoding="utf-8"))
+        return str(state.get("currency") or PAPER_CURRENCY).strip().upper()
+    except (OSError, ValueError):
+        return PAPER_CURRENCY
 
 
 # The pack quotes the same facts in four different layouts. Each rule replaces
@@ -193,8 +220,8 @@ STAMP_RULES = [
     # see either number because no guard had ever been pointed at the phrase. The
     # sign travels inside the value: a pack reading "−Rs" over a book that had
     # turned positive would otherwise stay green on its digits.
-    (r"[-−]?Rs [\d,.]+(?= realized on Rs )", "realized_pkr", 0),
-    (r"(?<=P&L )[-−]?Rs [\d,.]+(?= on Rs )", "realized_pkr", 0),
+    (rf"[-−]?{CUR} [\d,]+\.\d{{2}}(?= realized on {CUR} )", "realized_money", 0),
+    (rf"(?<=P&L )[-−]?{CUR} [\d,]+\.\d{{2}}(?= on {CUR} )", "realized_money", 0),
 ]
 
 
@@ -252,15 +279,16 @@ def pptx_text(path: Path) -> str:
     return re.sub(r"\s+", " ", unescape(" ".join(runs)))
 
 
-def _rs(v: str) -> str:
+def _money(v: str, code: str | None = None) -> str:
     """The realized P&L in the shape the pack prints it: `−Rs 3,501.69`.
 
     The sign is part of the value, not part of the sentence around it, so a book
     that turns positive restates the word too instead of leaving a minus in front
-    of a gain.
+    of a gain. The label is the book's, so a dollar book stamps `−$ 3,501.69`
+    and the guard reads the shape the ledger beside it actually prints.
     """
     n = float(str(v).replace(",", ""))
-    return f"{'−' if n < 0 else ''}Rs {abs(n):,.2f}"
+    return f"{'−' if n < 0 else ''}{money_label(code)} {abs(n):,.2f}"
 
 
 def stamps(facts: dict | None = None) -> dict[str, str]:
@@ -268,7 +296,7 @@ def stamps(facts: dict | None = None) -> dict[str, str]:
     facts = ledger() if facts is None else facts
     return {"pack_date": str(facts["ledger_generated"]).strip(),
             "version": _package_version(),
-            "realized_pkr": _rs(facts["realized_pnl"])}
+            "realized_money": _money(facts["realized_pnl"], _book_currency())}
 
 
 

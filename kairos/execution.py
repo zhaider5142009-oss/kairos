@@ -284,11 +284,12 @@ class RiskGate:
 # Paper broker
 # ---------------------------------------------------------------------------
 
-# The money a paper book is counted in. Every surface that reads the figure calls
-# it rupees — the desk prints `free cash Rs`, the track record prints
-# `Capital Rs` — so the book is rupee-funded unless `paper.currency` funds it in
-# dollars. One book, one money: a holding this book cannot count in its own
-# currency is a hole in the ledger, and the old ledger did not have it. GOLD is
+# The money a paper book is counted in. The desk and the track record used to
+# print a literal `Rs` over whatever number they were handed, so a book funded
+# in dollars would have published dollars under a rupee label; every one of them
+# now takes its label from this code. One book, one money: a holding this book
+# cannot count in its own currency is a hole in the ledger, and the old ledger
+# did not have it. GOLD is
 # quoted in dollars and PSX scrips in rupees, and `submit` used to deduct
 # `price * qty` from the cash whichever price the tape printed, so 1.2 oz of
 # gold at $4,183 charged a Rs 1,000,000 book Rs 5,020 — 0.5% of capital for a
@@ -296,6 +297,23 @@ class RiskGate:
 # `day_pnl`, which is the number the daily-loss brake divides by equity, and in
 # the `realized P&L Rs` line the track record publishes.
 PAPER_CURRENCY = "PKR"
+
+CURRENCY_SYMBOLS = {"PKR": "Rs", "USD": "$", "EUR": "€", "GBP": "£",
+                    "INR": "₹", "JPY": "¥"}
+
+
+def money_label(code: str | None) -> str:
+    """The label a statement prints in front of an amount of `code`.
+
+    The label is part of the money, not part of the sentence around it. The track
+    record, the pack it feeds and the desk all wrote "Rs" as a literal, so a book
+    opened in dollars — a supported `paper.currency` — would have published
+    dollars under a rupee label, in the one document whose job is to be
+    checkable. An unknown code prints as the code itself: a guessed symbol is a
+    worse label than none.
+    """
+    ccy = str(code or PAPER_CURRENCY).strip().upper()
+    return CURRENCY_SYMBOLS.get(ccy, ccy)
 
 
 def _paper_currency() -> str:
