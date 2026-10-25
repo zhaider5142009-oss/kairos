@@ -711,11 +711,19 @@ def cmd_livebook(args) -> int:
     for col in ("symbol", "qty", "entry", "last", "P&L", "call", "stop", "status"):
         tbl.add_column(col)
     for r in rows:
-        col = "green" if (r.get("pnl") or 0) >= 0 else "red"
+        # A holding the engine could not price has no last and no P&L. It used
+        # to print 0.00 and a green +0 — a flat day invented for a position
+        # nobody could value, on the screen an operator reads before deciding
+        # whether the book is fine.
+        priced = r.get("last") is not None
+        pnl = r.get("pnl")
+        col = "green" if priced and (pnl or 0) >= 0 else "red"
+        stop = r.get("stop") or r.get("rec_stop")
         tbl.add_row(r["symbol"], f"{r['qty']:,}", f"{r['entry']:,.2f}",
-                    f"{r.get('last', 0):,.2f}", f"[{col}]{r.get('pnl', 0):+,.0f}[/]",
+                    f"{r['last']:,.2f}" if priced else "[dim]unreadable[/]",
+                    f"[{col}]{pnl:+,.0f}[/]" if priced else "[dim]—[/]",
                     r.get("direction", "—"),
-                    f"{(r.get('stop') or r.get('rec_stop') or 0):,.2f}",
+                    f"{stop:,.2f}" if stop else "[dim]—[/]",
                     r.get("status", "—"))
     console.print(tbl)
     if args.ticket:

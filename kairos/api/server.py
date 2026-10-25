@@ -823,10 +823,22 @@ def chat(req: ChatReq):
                              "add each holding (symbol, quantity, average price) — "
                              "I'll watch them with stops, targets and exit tickets.",
                     "card": None}
-        tot = sum(r.get("pnl") or 0 for r in rows)
-        lines = [f"YOUR JS GLOBAL BOOK — {len(rows)} position(s), "
-                 f"unrealised P&L {tot:+,.0f}:"]
+        priced = [r for r in rows if r.get("last") is not None]
+        tot = sum(r.get("pnl") or 0 for r in priced)
+        # One unpriced holding makes the book total a partial number, and a
+        # partial number printed as the book's is the lie. Say what it covers.
+        if priced:
+            head = (f"unrealised P&L {tot:+,.0f}"
+                    + ("" if len(priced) == len(rows)
+                       else f" on {len(priced)} of {len(rows)} priced"))
+        else:
+            head = f"unrealised P&L unknown (0 of {len(rows)} priced)"
+        lines = [f"YOUR JS GLOBAL BOOK — {len(rows)} position(s), {head}:"]
         for r in rows:
+            if r.get("last") is None:
+                lines.append(f"• {r['symbol']}: {r.get('status', 'NO DATA')} — "
+                             f"price unreadable ({r.get('error') or 'no data'})")
+                continue
             lines.append(
                 f"• {r['symbol']}: {r.get('status', '—')} · last "
                 f"{r.get('last', 0):,.2f} ({r.get('pnl_pct', 0):+.1f}%) · "

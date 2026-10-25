@@ -350,10 +350,21 @@ def _l_livebook(d: dict) -> str:
     if not rows:
         return ("No JS Global book is on file — add holdings under Trade Like a "
                 "Pro and the engine will watch them with stops and targets.")
-    tot = sum(_num(r.get("pnl")) for r in rows)
-    lines = "; ".join(f"{r['symbol']} {r.get('status', '—')} "
-                      f"{_num(r.get('pnl_pct')):+.1f}%" for r in rows[:3])
-    return f"Live book: {d.get('count')} position(s), unrealised {tot:+,.0f} — {lines}"
+    priced = [r for r in rows if r.get("last") is not None]
+    tot = sum(_num(r.get("pnl")) for r in priced)
+    blind = len(rows) - len(priced)
+    # A total over the priced rows only, and it says so: adding zero for a
+    # holding nobody could value printed a smaller book as the whole one.
+    money = (f"{tot:+,.0f}"
+             + ("" if not blind else f" on {len(priced)} of {len(rows)} priced")
+             if priced else f"unknown (0 of {len(rows)} priced)")
+    lines = "; ".join(
+        (f"{r['symbol']} {r.get('status', '—')} {_num(r.get('pnl_pct')):+.1f}%"
+         if r.get("last") is not None else
+         f"{r['symbol']} {r.get('status', 'NO DATA')} (price unreadable)")
+        for r in rows[:3])
+    return (f"Live book: {d.get('count')} position(s), unrealised "
+            f"{money} — {lines}")
 
 
 def _t_news(limit: int = 4) -> dict:

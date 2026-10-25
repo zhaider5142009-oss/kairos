@@ -118,7 +118,12 @@ def review(force: bool = False) -> list[dict[str, Any]]:
                 "status": _status(price, float(p["entry"]), stop, s["score"]),
             })
         except Exception as exc:
-            row.update({"status": "NO DATA", "error": str(exc)[:120]})
+            # An unpriced holding has no last price and no P&L — it is not a
+            # flat one. Leaving the keys out let every reader's `.get(k, 0)`
+            # print 0.00 and +0, and the chat's total claim a book-wide number
+            # that silently skipped it. The None is the answer: unknown.
+            row.update({"status": "NO DATA", "error": str(exc)[:120],
+                        "last": None, "pnl": None, "pnl_pct": None})
         rows.append(row)
     rows.sort(key=lambda r: r.get("pnl_pct") or 0)
     _cache = (time.time(), rows)
