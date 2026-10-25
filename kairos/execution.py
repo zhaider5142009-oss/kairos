@@ -359,6 +359,13 @@ class PaperBroker:
         self.positions: dict[str, dict[str, float]] = state.get("positions", {})
         self.fills: list[dict[str, Any]] = state.get("fills", [])
         self.realized_pnl: float = state.get("realized_pnl", 0.0)
+        # Trading P&L converted at the cross of each closing leg. It is not the
+        # whole move in cash: a foreign leg held across a cross change also
+        # revalues its own notional, and this book's two published trades lost
+        # Rs 3,501.69 on the trade plus Rs 2,760.38 on the rupee between the
+        # entry and exit. Only cash showed both, so equity fell Rs 6,262.07
+        # while `realized P&L Rs` said 3,501.69 and nothing named the rest.
+        self.fx_pnl: float = state.get("fx_pnl", 0.0)
         self.day_pnl: float = state.get("day_pnl", 0.0)
         self._day_stamp = state.get("day_stamp", "")
 
@@ -401,6 +408,7 @@ class PaperBroker:
             "currency": self.currency,
             "capital": self.capital, "cash": self.cash, "positions": self.positions,
             "fills": self.fills[-500:], "realized_pnl": self.realized_pnl,
+            "fx_pnl": self.fx_pnl,
             "day_pnl": self.day_pnl, "day_stamp": self._day_stamp,
         }, indent=1))
 
@@ -488,6 +496,13 @@ class PaperBroker:
         return {"venue": "PAPER", "login": "paper", "currency": self.currency,
                 "equity": equity, "unmarked": unmarked,
                 "balance": self.cash, "day_pnl": self.day_pnl,
+                # Both realised lines, because either one alone disagrees with
+                # the cash it just moved: trading P&L and the translation of the
+                # foreign notional between its entry and exit crosses. Their sum
+                # is the realised part of the move in equity, and on a closed
+                # book it is exactly equity − capital.
+                "realized_pnl": self.realized_pnl, "fx_pnl": self.fx_pnl,
+                "realized_total": self.realized_pnl + self.fx_pnl,
                 "open_positions": len(self.positions), "leverage": 1.0}
 
     def open_positions(self) -> list[dict[str, Any]]:
@@ -541,6 +556,7 @@ class PaperBroker:
         commission = price * intent.quantity * commission_bps / 10_000
         qty = intent.quantity if intent.side == "BUY" else -intent.quantity
         pos = self.positions.get(intent.symbol)
+        basis_fx = float((pos or {}).get("fx_entry") or fx)
         realized = 0.0
         # A cash book cannot buy what it cannot fund. Nothing else on this path
         # checks it: the gate's order-value bound only reads LIMIT orders, and the
@@ -562,16 +578,36 @@ class PaperBroker:
         if pos is None:
             self.positions[intent.symbol] = {"qty": qty, "entry": price,
                                               "last": price, "commission": commission,
-                                              "ccy": ccy}
+                                              "ccy": ccy, "fx_entry": fx}
         elif pos["qty"] * qty >= 0:                       # adding
             new_qty = pos["qty"] + qty
             pos["entry"] = (pos["entry"] * pos["qty"] + price * qty) / new_qty if new_qty else price
+            # the cross the open lot was converted at, weighted the same way as
+            # the price: that basis is what a close has to be measured against.
+            pos["fx_entry"] = ((pos.get("fx_entry") or fx) * abs(pos["qty"])
+                               + fx * abs(qty)) / abs(new_qty) if new_qty else fx
             pos["qty"] = new_qty
             pos["commission"] = pos.get("commission", 0) + commission
         else:                                             # reducing / closing
             close_qty = min(abs(qty), abs(pos["qty"]))
-            realized = (price - pos["entry"]) * np.sign(pos["qty"]) * close_qty
+            side_before = np.sign(pos["qty"])
+            realized = (price - pos["entry"]) * side_before * close_qty
+            # A leg opened at one cross and closed at another moved money that
+            # the price P&L never sees: the notional itself was converted twice.
+            # Book it as its own realised line (sign follows the side: a short
+            # sold the foreign notional at entry and bought it back at exit).
+            entry_fx = pos.get("fx_entry")
+            if entry_fx:
+                moved = close_qty * pos["entry"] * side_before * (fx - entry_fx)
+                self.fx_pnl += moved
+                self.day_pnl += moved
             pos["qty"] += qty
+            if pos["qty"] * side_before < 0:
+                # the ticket crossed zero: the remainder is a new lot on the
+                # other side, and carrying the old basis into it books the new
+                # position against a price it was never filled at.
+                pos["entry"], pos["fx_entry"] = price, fx
+                pos["commission"] = commission
             if abs(pos["qty"]) < 1e-9:
                 del self.positions[intent.symbol]
         # proper cash ledger: buys consume notional, sells return it, so
@@ -592,7 +628,11 @@ class PaperBroker:
                                    "side": fill.side, "qty": fill.quantity,
                                    "price": fill.price, "commission": commission,
                                    "realized": realized, "currency": ccy,
-                                   "book": self.currency, "fx": fx})
+                                   "book": self.currency, "fx": fx,
+                                   # the cross the closed lot was carried at,
+                                   # so the line explains the translation booked
+                                   # beside it; the leg's own cross when new
+                                   "fx_entry": basis_fx})
         return fill
 
     def equity_curve(self) -> pd.Series:

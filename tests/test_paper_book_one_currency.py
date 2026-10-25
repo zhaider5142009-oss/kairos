@@ -416,6 +416,105 @@ def test_a_marked_up_dollar_leg_realises_the_rupee_gain(monkeypatch, dirpath, ra
     assert "GOLD" not in book.positions
 
 
+# ------------------------------------------------------- the cross at both ends
+def test_a_leg_closed_at_another_cross_books_the_translation(monkeypatch, dirpath):
+    """The published cash moved by more than the trade did, and nothing said so.
+
+    A dollar leg is converted twice — in on the entry's cross, out on the exit's —
+    and only `cash` carried the difference between the two. The live ledger showed
+    it as a Rs 6,262.07 fall in equity beside a Rs 3,501.69 `realized P&L`: two
+    numbers a reader cannot reconcile and no third line to explain them. The
+    translation is now its own realised figure.
+    """
+    seen = {"rate": RATE}
+    monkeypatch.setattr(D, "usd_pkr", lambda: seen["rate"])
+    book = _paper(monkeypatch, dirpath)
+    buy = _trade(book, "GOLD", 0.1, GOLD)
+    seen["rate"] = RATE + 2.0
+    sell = _trade(book, "GOLD", 0.1, GOLD, side="SELL")
+    assert sell is not None
+
+    # the price P&L is measured at the exit cross, the entry fee at the entry's
+    trading = -buy.commission * RATE + (sell.price - buy.price) * 0.1 * (RATE + 2.0) \
+        - sell.commission * (RATE + 2.0)
+    assert book.realized_pnl == pytest.approx(trading, rel=1e-9)
+    # ... and the notional that crossed twice is its own line
+    assert book.fx_pnl == pytest.approx(0.1 * buy.price * 2.0, rel=1e-9)
+    # together they are the cash the round trip moved, to the rupee
+    assert book.realized_pnl + book.fx_pnl == pytest.approx(
+        book.cash - book.capital, rel=1e-9)
+    acct = book.account()
+    assert acct["realized_total"] == pytest.approx(acct["equity"] - book.capital,
+                                                  rel=1e-9)
+    assert acct["fx_pnl"] == pytest.approx(book.fx_pnl)
+
+
+def test_the_translation_is_the_day_s_pnl_too(monkeypatch, dirpath):
+    """It is money that moved today, and the daily-loss brake divides today."""
+    seen = {"rate": RATE}
+    monkeypatch.setattr(D, "usd_pkr", lambda: seen["rate"])
+    book = _paper(monkeypatch, dirpath)
+    _trade(book, "GOLD", 0.1, GOLD)
+    seen["rate"] = RATE + 2.0
+    _trade(book, "GOLD", 0.1, GOLD, side="SELL")
+    assert book.day_pnl == pytest.approx(book.realized_pnl + book.fx_pnl, rel=1e-9)
+
+
+def test_a_translation_survives_a_restart(monkeypatch, dirpath):
+    seen = {"rate": RATE}
+    monkeypatch.setattr(D, "usd_pkr", lambda: seen["rate"])
+    book = _paper(monkeypatch, dirpath)
+    _trade(book, "GOLD", 0.1, GOLD)
+    seen["rate"] = RATE + 2.0
+    _trade(book, "GOLD", 0.1, GOLD, side="SELL")
+    again = _paper(monkeypatch, dirpath)
+    assert again.fx_pnl == pytest.approx(book.fx_pnl, rel=1e-12)
+
+
+def test_a_rupee_leg_has_no_translation(monkeypatch, dirpath):
+    monkeypatch.setattr(D, "usd_pkr", lambda: RATE)
+    book = _paper(monkeypatch, dirpath)
+    _trade(book, "OGDC", 100.0, 150.0)
+    _trade(book, "OGDC", 100.0, 160.0, side="SELL")
+    assert book.fx_pnl == 0.0
+
+
+def test_a_ticket_that_crosses_zero_opens_at_its_own_price(monkeypatch, dirpath):
+    """A buy larger than the short it closes is a new long, not the old one carried.
+
+    The old branch kept the short's entry for the remainder, so every later P&L
+    on that position was measured against a price it was never filled at.
+    """
+    monkeypatch.setattr(D, "usd_pkr", lambda: RATE)
+    book = _paper(monkeypatch, dirpath)
+    short = _trade(book, "OGDC", 100.0, 150.0, side="SELL")
+    flip = _trade(book, "OGDC", 300.0, 160.0)
+    assert short is not None and flip is not None
+    pos = book.positions["OGDC"]
+    assert pos["qty"] == pytest.approx(200.0)
+    assert pos["entry"] == pytest.approx(flip.price, rel=1e-12)
+    # the short leg realised against the short's own entry, at the flip's price
+    fees = short.commission + flip.commission
+    assert book.realized_pnl == pytest.approx(
+        (flip.price - short.price) * -100.0 - fees, rel=1e-9)
+
+
+def test_a_legacy_row_closes_without_inventing_a_translation(monkeypatch, dirpath):
+    """A row written before the entry cross existed has none to measure against.
+
+    Zero is the only supportable claim for it; guessing today's cross would book a
+    translation the book never actually paid.
+    """
+    monkeypatch.setattr(D, "usd_pkr", lambda: RATE)
+    _write_state(dirpath, positions={"GOLD": {"qty": 0.2, "entry": 4000.0,
+                                               "last": 4000.0, "commission": 1.0,
+                                               "ccy": "USD"}})
+    book = _paper(monkeypatch, dirpath)
+    assert _trade(book, "GOLD", 0.2, 4000.0, side="SELL") is not None
+    assert book.fx_pnl == 0.0
+    assert "GOLD" not in book.positions
+
+
 # ------------------------------------------------------------------- the curve
 def test_the_curve_counts_a_dollar_leg_as_a_dollar_leg(monkeypatch, dirpath, rate):
     book = _paper(monkeypatch, dirpath)

@@ -207,9 +207,20 @@ def _restate(state: dict, path: Path, bars, scratch: Path, apply: bool) -> int:
 
     day_stamp = str(state.get("day_stamp") or "")
     day_pnl = sum(delta for (d, delta) in stamps if str(d) == day_stamp)
+    # A closed book has nowhere to hide a rupee: the two realised lines must add
+    # up to the move in cash. If they do not, the replay disagrees with the very
+    # arithmetic that wrote the ledger, and writing it would publish the gap.
+    if not book.positions and abs((book.realized_pnl + book.fx_pnl)
+                                 - (book.cash - book.capital)) > 0.01:
+        print("restatement refused: realised P&L and the cash move do not agree "
+              f"({book.realized_pnl + book.fx_pnl:.2f} vs "
+              f"{book.cash - book.capital:.2f})")
+        return 1
     rows = [("currency", str(state.get("currency") or "PKR"), book.currency),
             ("cash", state.get("cash"), book.cash),
             ("realized_pnl", state.get("realized_pnl"), book.realized_pnl),
+            ("fx_pnl", state.get("fx_pnl"), book.fx_pnl),
+            ("realized_total", None, book.realized_pnl + book.fx_pnl),
             ("day_pnl", state.get("day_pnl"), day_pnl),
             ("open positions", len(state.get("positions") or {}), len(book.positions))]
     print(f"{'figure':<14} {'on disk':>18} {'restated':>18}")
@@ -236,13 +247,14 @@ def _restate(state: dict, path: Path, bars, scratch: Path, apply: bool) -> int:
     atomic_write(path, dumps_strict({
         "currency": book.currency, "capital": book.capital, "cash": book.cash,
         "positions": book.positions, "fills": _legs(state)[-FILLS_KEPT:],
-        "realized_pnl": book.realized_pnl, "day_pnl": day_pnl,
-        "day_stamp": day_stamp}, indent=1))
+        "realized_pnl": book.realized_pnl, "fx_pnl": book.fx_pnl,
+        "day_pnl": day_pnl, "day_stamp": day_stamp}, indent=1))
     JOURNAL.log("PAPER_LEDGER_RESTATED", {
         "path": str(path), "kept_as": backup.name,
         "cash_before": state.get("cash"), "cash_after": book.cash,
         "realized_before": state.get("realized_pnl"),
-        "realized_after": book.realized_pnl, "legs": len(stamps)})
+        "realized_after": book.realized_pnl, "fx_after": book.fx_pnl,
+        "legs": len(stamps)})
     print(f"restated — previous ledger kept as {backup.name}")
     if KILL.engaged():
         print("note: the kill switch is engaged; release it before the next cycle")

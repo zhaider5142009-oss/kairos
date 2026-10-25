@@ -121,12 +121,25 @@ def _money(amount: float, code: str | None, dp: int = 2) -> str:
 
 
 def _book_line(pa: dict, ap: dict) -> str:
-    """Section 3's money line, labelled in the money the paper book holds."""
+    """Section 3's money line, labelled in the money the paper book holds.
+
+    A book that trades another currency moves in two ways at once: the trades,
+    and the cross under them. Printing only the first beside a cash figure that
+    fell by both is a statement an investor cannot add up — the live book's cash
+    is down Rs 6,262.07 while its `realized P&L` alone reads Rs 3,501.69. When
+    the ledger records a translation it is named here, with the total the cash
+    actually moved by.
+    """
     ccy = pa.get("currency")
-    return (f"- Capital {_money(pa.get('capital', 0), ccy, 0)} · "
-            f"cash {_money(pa.get('cash', 0), ccy, 0)} · "
-            f"realized P&L {_money(pa.get('realized_pnl', 0), ccy)} "
-            f"since {ap.get('last_rotation', 'start')}")
+    parts = [f"- Capital {_money(pa.get('capital', 0), ccy, 0)}",
+             f"cash {_money(pa.get('cash', 0), ccy, 0)}",
+             f"realized P&L {_money(pa.get('realized_pnl', 0), ccy)}"]
+    fx = pa.get("fx_pnl")
+    if isinstance(fx, (int, float)) and not isinstance(fx, bool) and abs(fx) >= 0.005:
+        parts.append(f"FX translation {_money(fx, ccy)}")
+        parts.append(f"total {_money(pa.get('realized_pnl', 0) + fx, ccy)}")
+    parts[-1] += f" since {ap.get('last_rotation', 'start')}"
+    return " · ".join(parts)
 
 
 _SEVEN_DAY: dict[str, bool] = {}

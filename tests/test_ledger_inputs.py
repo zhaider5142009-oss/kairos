@@ -173,6 +173,30 @@ def test_the_book_line_is_labelled_in_the_books_own_money():
         "a rupee book stopped printing rupees"
 
 
+def test_the_book_line_names_the_cross_behind_the_cash():
+    """A book that trades another currency moves twice, and the line said once.
+
+    The live ledger's cash is down Rs 6,262.07 while `realized P&L` reads
+    Rs 3,501.69: the rest is the rupee moving under a dollar leg between its
+    entry and its exit. A statement that prints one and not the other cannot be
+    added up, which is the one thing this document is for. A book with no
+    translation prints exactly the line it printed before.
+    """
+    state = {"currency": "PKR", "capital": 1_000_000.0, "cash": 993_737.93,
+             "realized_pnl": -3501.69, "fx_pnl": -2760.38}
+    line = gen._book_line(state, {"last_rotation": "2026-10-24T20:50:01"})
+    assert line == ("- Capital Rs 1,000,000 · cash Rs 993,738 · "
+                    "realized P&L −Rs 3,501.69 · FX translation −Rs 2,760.38 · "
+                    "total −Rs 6,262.07 since 2026-10-24T20:50:01"), line
+    # and the total is the cash the account is holding, not a second opinion
+    assert state["capital"] + state["realized_pnl"] + state["fx_pnl"] == \
+        pytest.approx(state["cash"], abs=0.005)
+    flat = {"currency": "PKR", "capital": 1_000_000.0, "cash": 999_000.0,
+            "realized_pnl": -1000.0, "fx_pnl": 0.0}
+    assert "FX translation" not in gen._book_line(flat, {}), \
+        "a zero translation is not a fact worth a column"
+
+
 def test_a_book_that_turns_positive_does_not_keep_its_minus():
     """The sign is part of the amount: `Rs -3,501.69` reads as a loss forever.
 

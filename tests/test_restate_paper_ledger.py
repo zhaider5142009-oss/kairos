@@ -110,6 +110,12 @@ def test_the_dollar_round_trip_comes_back_in_rupees(tmp_path):
     # the rupee side of it.
     assert book.realized_pnl == pytest.approx(-3501.7, abs=1.0)
     assert book.realized_pnl < -100.0
+    # ... and the principal's own move is the second realised line. It used to be
+    # in `cash` and nowhere else, so the file's cash fell Rs 6,262.07 while its
+    # realised line said 3,501.69 and no figure named the other 2,760.38.
+    assert book.fx_pnl == pytest.approx(-2760.4, abs=1.0)
+    assert book.realized_pnl + book.fx_pnl == pytest.approx(
+        book.cash - 1_000_000.0, rel=1e-9)
     # Cash is the truth of the two prints: the short is opened at Friday's rate and
     # bought back at Saturday's, so the principal crosses twice and the rate drift
     # between them lands on the ledger, not in `realized`.
@@ -320,6 +326,9 @@ def test_apply_restates_the_money_and_keeps_the_history(tmp_path, monkeypatch):
     assert code == 0
     out = json.loads(path.read_text(encoding="utf-8"))
     assert out["realized_pnl"] == pytest.approx(-3501.7, abs=1.0)
+    assert out["fx_pnl"] == pytest.approx(-2760.4, abs=1.0)
+    assert out["realized_pnl"] + out["fx_pnl"] == pytest.approx(
+        out["cash"] - out["capital"], rel=1e-9)
     assert out["currency"] == "PKR"
     assert out["cash"] == pytest.approx(
         1_000_000.0 + (SELL_PX * 1.2 - SELL_FEE) * RATE_17
