@@ -1016,6 +1016,32 @@ class Autopilot:
             return 0.0
         return round(eq - _figure(snap["equity"]), 2)
 
+    def _venue_day_row(self, venue: str, a: dict[str, Any] | None
+                       ) -> dict[str, Any] | None:
+        """An account read whose day figure is measured, not taken on trust.
+
+        The last brake before money leaves reads exactly one field — `day_pnl`.
+        Two of the three venues put something else there: a terminal puts
+        floating P&L (a loss taken by closing a position clears it), and the
+        spot exchange puts nothing at all. Either way the gate used to read a
+        clean day. The desk's own figure is the change in this account's equity
+        since its first usable read of the day; the venue's number is kept
+        beside it as `floating_pnl`, and an unreadable equity leaves the day
+        None so the gate refuses an entry rather than sizing one blind.
+        """
+        if not a:
+            return None
+        a["floating_pnl"] = a.get("day_pnl")
+        eq = _figure(a.get("equity"))
+        a["day_pnl"] = (self._venue_day_pnl(venue, eq, _book_ident(a))
+                        if eq > 0 else None)
+        if a["day_pnl"] is not None:
+            a["day_pnl_from"] = ("spot equity since the first read of the day"
+                                 if venue == "BINANCE"
+                                 else "terminal equity since the first read of "
+                                      "the day")
+        return a
+
     def _psx_part(self, book: dict[str, Any]) -> dict[str, Any]:
         """The PKR book in account-snapshot shape (what the gates read)."""
         return {"venue": "JS_GLOBAL", "balance": book["cash"],
@@ -1038,36 +1064,19 @@ class Autopilot:
         """
         out: dict[str, dict[str, Any]] = {}
         if mt5_up:
-            a = self.mt5.account()
+            a = self._venue_day_row("MT5", self.mt5.account())
             if a:
-                # `profit` on a terminal is floating P&L on open positions, so a
-                # loss taken by closing one clears it: a broker-reported figure
-                # reads a clean day on an account that has already paid a loss
-                # out. The brake is defined on the change in equity — realized
-                # and floating together, as on the other two books — so that is
-                # what it is measured from, with the broker's number kept beside
-                # it rather than in its place.
-                a["floating_pnl"] = a.get("day_pnl")
-                a["day_pnl"] = (self._venue_day_pnl("MT5", a.get("equity"),
-                                                   _book_ident(a))
-                                if _figure(a.get("equity")) > 0 else None)
                 out["MT5"] = a
         if book:
             out["JS_GLOBAL"] = self._psx_part(book)
         if bn_up:
             from . import binance as _BN
-            a = _BN.BINANCE.account()
+            a = self._venue_day_row("BINANCE", _BN.BINANCE.account())
             if a:
                 # spot answers balances, not a day figure. Left as None it makes
                 # the merged day unknown and leaves this book's own daily brake
                 # with nothing to compare, so a crypto drawdown inside a trading
                 # day reaches neither cover. Measured from the first read instead.
-                if a.get("day_pnl") is None and _figure(a.get("equity")) > 0:
-                    a["day_pnl"] = self._venue_day_pnl("BINANCE",
-                                                       a.get("equity"),
-                                                       _book_ident(a))
-                    a["day_pnl_from"] = ("spot equity since the first read of "
-                                         "the day")
                 out["BINANCE"] = a
         return out
 
@@ -1662,12 +1671,18 @@ class Autopilot:
 
         venue = self._venue_for(inst, live, is_psx)
         if venue == "MT5":
-            acc, pos = self.mt5.account(), self.mt5.positions()
+            # The gate is the last brake before money leaves and it reads
+            # `day_pnl`; the terminal's value there is floating P&L, so the
+            # order is checked against the desk's measured day, the same one
+            # the desk's own brake reads.
+            acc, pos = (self._venue_day_row("MT5", self.mt5.account()),
+                        self.mt5.positions())
         elif venue == "BINANCE":
             # USD sizing against the USD book. A PKR figure from the PSX book (or
             # the paper Rs 1,000,000) would misprice every guard on this order for
             # the same reason it misprices a PSX one, in the other direction.
-            acc, pos = _BN.BINANCE.account(), _BN.BINANCE.positions()
+            acc, pos = (self._venue_day_row("BINANCE", _BN.BINANCE.account()),
+                        _BN.BINANCE.positions())
         elif venue == "JS_GLOBAL":
             # PKR sizing against the PKR book only. A USD MT5 equity figure
             # (or the paper Rs 1,000,000) would misprice every risk check on
@@ -1730,6 +1745,7 @@ class Autopilot:
                              # rounding it at 4 lifts it back above the cap.
                              quantity=round(qty, 8), venue=venue,
                              stop_loss=sl, take_profit=tp,
+                             reduce_only=close,
                              comment="autopilot-close" if close else "autopilot")
         allowed, why = self.gate.check(intent, acc, pos)
         if not allowed:

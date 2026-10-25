@@ -48,6 +48,10 @@ class OrderIntent:
     take_profit: float | None = None
     venue: str = "PAPER"            # PAPER | MT5 | PSX_JSGLOBAL
     comment: str = "KAIROS"
+    # An order that only reduces the book. Entry brakes — the position count and
+    # the daily loss limit — do not apply to it: refusing a close is how a brake
+    # that exists to stop new risk ends up holding the risk it was meant to stop.
+    reduce_only: bool = False
     client_order_id: str = field(default_factory=lambda: uuid.uuid4().hex[:16])
 
     def to_json(self) -> str:
@@ -236,7 +240,11 @@ class RiskGate:
         if not math.isfinite(qty) or (lp is not None and not math.isfinite(lp)):
             return False, (f"unusable order numbers (qty {qty!r}, "
                            f"price {lp!r})")
-        if qty <= 0 or qty > lim["max_qty"]:
+        # A qty cap is a bound on how much risk one order may ADD. The same cap
+        # on an exit refuses to let go of a position larger than the cap — it
+        # holds the risk it was written to bound. So does every check below it
+        # that asks what the book already carries.
+        if qty <= 0 or (not intent.reduce_only and qty > lim["max_qty"]):
             return False, f"quantity out of bounds: {intent.quantity}"
         if intent.side not in ("BUY", "SELL"):
             return False, f"invalid side {intent.side}"
@@ -253,26 +261,36 @@ class RiskGate:
             equity = float(0.0 if raw_eq is None else raw_eq)
         except (TypeError, ValueError):
             return False, f"unreadable equity {raw_eq!r}"
-        if equity <= 0:
+        if equity <= 0 and not intent.reduce_only:
             return False, f"no usable equity ({equity:,.2f})"
-        if len(open_positions) >= lim["max_positions"] and intent.order_type == "MARKET":
-            return False, f"max positions reached ({lim['max_positions']})"
-        raw_day = account.get("day_pnl")
-        try:
-            day_pnl = float(raw_day or 0.0)
-        except (TypeError, ValueError):
-            return False, f"unreadable day P&L {raw_day!r}"
-        if not math.isfinite(day_pnl):
-            return False, f"unusable day P&L ({raw_day!r})"
-        if day_pnl < -lim["daily_loss_limit"] * equity:
-            return False, (f"daily loss limit hit: {day_pnl:,.0f} "
-                           f"< -{lim['daily_loss_limit']:.2%} x {equity:,.0f} "
-                           f"({lim['daily_loss_source']})")
-        order_value = qty * (lp or 0.0)
-        if intent.order_type == "MARKET":
-            order_value = None                       # market: rely on qty checks
-        elif order_value and order_value > lim["max_order_value_pct"] * 10 * equity:
-            return False, "limit order value absurdly large vs equity"
+        if not intent.reduce_only:
+            if (len(open_positions) >= lim["max_positions"]
+                    and intent.order_type == "MARKET"):
+                return False, f"max positions reached ({lim['max_positions']})"
+            raw_day = account.get("day_pnl")
+            # Absence is not a flat day. A spot account answers no day figure at
+            # all and a merged desk with one blind funded book answers None, so
+            # `float(raw_day or 0.0)` read the one number this brake divides by
+            # as zero on exactly the books whose loss nobody had measured.
+            if raw_day is None:
+                return False, ("day P&L unreadable — daily loss brake blind "
+                               "(fail-closed)")
+            try:
+                day_pnl = float(raw_day)
+            except (TypeError, ValueError):
+                return False, f"unreadable day P&L {raw_day!r}"
+            if not math.isfinite(day_pnl):
+                return False, f"unusable day P&L ({raw_day!r})"
+            if day_pnl < -lim["daily_loss_limit"] * equity:
+                return False, (f"daily loss limit hit: {day_pnl:,.0f} "
+                               f"< -{lim['daily_loss_limit']:.2%} x {equity:,.0f} "
+                               f"({lim['daily_loss_source']})")
+            order_value = qty * (lp or 0.0)
+            if intent.order_type == "MARKET":
+                order_value = None                   # market: rely on qty checks
+            elif (order_value
+                  and order_value > lim["max_order_value_pct"] * 10 * equity):
+                return False, "limit order value absurdly large vs equity"
         # an idempotency window, not a lifetime ledger: a 24/7 process would
         # otherwise accumulate every coid it ever saw.
         self._seen_coids[intent.client_order_id] = None

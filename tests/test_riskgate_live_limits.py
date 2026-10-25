@@ -158,21 +158,23 @@ def test_an_unusable_number_stops_at_the_gate(gate):
                {"quantity": float("inf")},
                {"order_type": "LIMIT", "limit_price": float("nan")},
                {"order_type": "LIMIT", "limit_price": float("inf")}):
-        ok, why = gate.check(_intent(**kw), {"equity": 100_000.0}, [])
+        ok, why = gate.check(_intent(**kw), {"equity": 100_000.0, "day_pnl": 0.0},
+                             [])
         assert not ok, f"{kw} must not be allowed to trade"
-    assert gate.check(_intent(), {"equity": 100_000.0}, [])[0]
+    assert gate.check(_intent(), {"equity": 100_000.0, "day_pnl": 0.0}, [])[0]
 
 
 def test_same_client_order_id_is_rejected_once(gate):
     intent = _intent()
-    assert gate.check(intent, {"equity": 100_000.0}, [])[0]
-    ok, why = gate.check(intent, {"equity": 100_000.0}, [])
+    acct = {"equity": 100_000.0, "day_pnl": 0.0}
+    assert gate.check(intent, acct, [])[0]
+    ok, why = gate.check(intent, acct, [])
     assert not ok and "duplicate" in why
 
 
 def test_idempotency_window_is_bounded(gate, monkeypatch):
     monkeypatch.setattr(E, "MAX_SEEN_CIDS", 50)
-    acct, pos = {"equity": 100_000.0}, []
+    acct, pos = {"equity": 100_000.0, "day_pnl": 0.0}, []
     for _ in range(400):
         gate.check(_intent(), acct, pos)
     assert len(gate._seen_coids) == 50
@@ -284,10 +286,57 @@ def test_garbage_in_the_risk_block_refuses_instead_of_clearing(gate):
 def test_day_pnl_that_is_not_a_number_refuses_the_order(gate):
     """A hole in the account feed used to read as a day with nothing lost.
 
-    `float(raw or 0)` swallows None, but NaN and a string passed straight
+    `float(raw or 0)` swallowed None, and NaN and a string passed straight
     through the one comparison that decides whether we are past the brake.
     """
-    for raw in (float("nan"), float("inf"), "n/a", object()):
+    for raw in (None, float("nan"), float("inf"), "n/a", object()):
         ok, why = gate.check(_intent(), {"equity": 100_000.0, "day_pnl": raw}, [])
         assert not ok, f"day_pnl={raw!r} must not be tradable"
-    assert gate.check(_intent(), {"equity": 100_000.0, "day_pnl": None}, [])[0]
+    ok, why = gate.check(_intent(), {"equity": 100_000.0, "day_pnl": None}, [])
+    assert "blind" in why, why
+
+
+# ------------------------------------------------- an exit is not an entry
+def test_an_unmeasured_day_stops_entries_not_exits(gate):
+    """A spot account always answers `day_pnl: None`, and the merged desk
+    answers None while one funded book cannot be measured. Reading either as a
+    flat day let the next entry through on the one account whose loss nobody
+    knew — but refusing the exit too would hold the very risk the brake exists
+    to bound."""
+    acct = {"equity": 100_000.0, "day_pnl": None}
+    ok, why = gate.check(_intent(), acct, [])
+    assert not ok and "blind" in why
+    ok, why = gate.check(_intent(side="SELL", reduce_only=True), acct, [])
+    assert ok, why
+
+
+def test_a_breached_brake_does_not_hold_a_position_hostage(gate):
+    """The daily-loss brake and the position cap are bounds on NEW risk. Once
+    the day is past its limit, the one order the tower must still be able to
+    send is the one that takes risk off."""
+    acct = {"equity": 100_000.0, "day_pnl": -90_000.0}
+    pos = [{"symbol": f"S{i}"} for i in range(5)]
+    ok, why = gate.check(_intent(), acct, pos)
+    assert not ok
+    ok, why = gate.check(_intent(side="SELL", reduce_only=True), acct, pos)
+    assert ok, why
+
+
+def test_a_position_larger_than_the_entry_cap_can_still_be_closed(gate):
+    """`max_order_qty` bounds the size one order may add. Applied to a close it
+    refuses to let go of a position bigger than the cap."""
+    acct = {"equity": 100_000.0, "day_pnl": 0.0}
+    ok, why = gate.check(_intent(quantity=250_000), acct, [])
+    assert not ok and "bounds" in why
+    ok, why = gate.check(_intent(quantity=250_000, side="SELL", reduce_only=True),
+                         acct, [])
+    assert ok, why
+
+
+def test_a_margin_call_account_can_be_closed(gate):
+    """Negative equity is the state that most deserves a stop on entries, and
+    the one an exit has to be able to answer."""
+    acct = {"equity": -250.0, "day_pnl": -90_000.0}
+    assert not gate.check(_intent(), acct, [])[0]
+    ok, why = gate.check(_intent(side="SELL", reduce_only=True), acct, [])
+    assert ok, why

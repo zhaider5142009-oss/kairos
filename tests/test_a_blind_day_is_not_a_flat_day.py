@@ -17,6 +17,8 @@ letting an empty book contribute its honest nothing.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import kairos.autopilot as AP
 from kairos import binance as BN
 
@@ -281,3 +283,38 @@ def test_the_posture_does_not_name_a_breach_on_a_flat_spot_day(monkeypatch):
                                ap._venue_positions(True, book))
 
     assert posture["block_entries"] is False, str(posture["blockers"])
+
+
+# ------------------------------------------------------------ the last brake
+def test_the_gate_is_handed_the_measured_day_not_the_terminals_profit():
+    """The desk's brake was fixed first; the order path read its own account.
+
+    `_execute` handed `RiskGate` the raw `mt5.account()`, whose `day_pnl` is the
+    terminal's floating `profit` — a closed loss clears it. So a day that paid
+    5,000 out reached the very last brake before money leaves as a clean one.
+    Both readers now build their row the same way.
+    """
+    ap = _ap()
+    ap.mt5 = _terminal("90001", 100_000.0)
+    ap._venue_accounts(True, None, False)          # the day opens here
+
+    ap.mt5 = _terminal("90001", 95_000.0)          # loss banked, floating back at 0
+    captured = {}
+
+    class _Gate:
+        def check(self, intent, acct, pos):
+            captured.update(intent=intent, acct=acct, pos=pos)
+            return False, "captured by the test"
+
+    ap.gate = _Gate()
+    inst = SimpleNamespace(key="GOLD", market="PMEX", currency="USD")
+    res = {"signal": {"horizon_days": 5}, "confidence_band": {}, "targets": {}}
+
+    act, why, _s = ap._execute(inst, "SELL", 0.05, 100.0, res, None,
+                               live=True, close=True, ticket=1)
+
+    assert (act, why) == ("GATED", "captured by the test")
+    assert captured["intent"].reduce_only is True
+    assert captured["acct"]["day_pnl"] == -5_000.0  # not the terminal's 0.0
+    assert captured["acct"]["floating_pnl"] == 0.0  # kept beside it
+    assert captured["acct"]["day_pnl_from"].startswith("terminal equity")
